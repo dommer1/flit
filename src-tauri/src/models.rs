@@ -32,6 +32,15 @@ pub struct NewAccount {
     pub username: String,
 }
 
+/// Body payload for the message viewer. `html`, when present, is already a
+/// full sanitized srcdoc document (mail::sanitize) — never raw mail HTML.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageBody {
+    pub html: Option<String>,
+    pub text: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageHeader {

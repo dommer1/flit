@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
-use crate::models::{Account, MessageHeader, NewAccount};
+use crate::models::{Account, MessageBody, MessageHeader, NewAccount};
 use crate::state::AppState;
 use crate::{auth, mail, storage};
 
@@ -69,6 +69,43 @@ pub async fn list_messages(
     account_id: Option<i64>,
 ) -> Result<Vec<MessageHeader>, AppError> {
     storage::messages::list(&state.pool, account_id).await
+}
+
+/// Body for the viewer — served from cache, lazily fetched on first open.
+#[tauri::command]
+pub async fn get_message_body(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<MessageBody, AppError> {
+    let row = storage::messages::get_body(&state.pool, message_id).await?;
+    if row.body_text.is_some() || row.body_html.is_some() {
+        return Ok(sanitized_body(row.body_html, row.body_text));
+    }
+
+    let account = storage::accounts::get(&state.pool, row.account_id).await?;
+    let password = auth::get_password(account.id).await?;
+    let parsed = mail::sync::fetch_body_into_cache(
+        &state.pool,
+        &account,
+        &password,
+        message_id,
+        &row.mailbox,
+        row.uid,
+    )
+    .await?;
+    // why: the snippet just became real — lists should refresh.
+    app.emit("messages-changed", row.account_id)?;
+    Ok(sanitized_body(parsed.html, parsed.text))
+}
+
+// SECURITY: the single place message HTML is prepared for the frontend —
+// everything goes through mail::sanitize::build_srcdoc, cached or fresh.
+fn sanitized_body(html: Option<String>, text: Option<String>) -> MessageBody {
+    MessageBody {
+        html: html.as_deref().map(mail::sanitize::build_srcdoc),
+        text,
+    }
 }
 
 // why: async on purpose — Tauri docs warn that creating windows from a sync

@@ -22,6 +22,12 @@ export interface NewAccount {
   username: string;
 }
 
+/** `html`, when present, is a full sanitized srcdoc document from the backend. */
+export interface MessageBody {
+  html: string | null;
+  text: string | null;
+}
+
 export interface MessageHeader {
   id: number;
   accountId: number;

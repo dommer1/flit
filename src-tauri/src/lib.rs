@@ -65,6 +65,7 @@ pub fn run() {
             commands::delete_account,
             commands::list_messages,
             commands::sync_inbox,
+            commands::get_message_body,
             commands::open_settings,
             commands::close_settings
         ])

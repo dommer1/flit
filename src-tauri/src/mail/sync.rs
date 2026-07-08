@@ -71,6 +71,42 @@ pub async fn sync_inbox(
     messages::upsert_headers(pool, account.id, MAILBOX, &headers).await
 }
 
+/// Download, parse and cache one message body; returns the parsed body.
+pub async fn fetch_body_into_cache(
+    pool: &SqlitePool,
+    account: &Account,
+    password: &str,
+    message_id: i64,
+    mailbox: &str,
+    uid: i64,
+) -> Result<parse::ParsedBody, AppError> {
+    let mut session = imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        password,
+    )
+    .await?;
+    session
+        .select(mailbox)
+        .await
+        .map_err(|e| AppError::Imap(format!("select {mailbox}: {e}")))?;
+    let raw = imap::fetch_body(&mut session, uid).await?;
+    let _ = session.logout().await;
+
+    let raw = raw.ok_or_else(|| AppError::Imap("message no longer on the server".to_string()))?;
+    let parsed = parse::parse_body(&raw);
+    messages::set_body(
+        pool,
+        message_id,
+        parsed.text.as_deref(),
+        parsed.html.as_deref(),
+        &parsed.snippet,
+    )
+    .await?;
+    Ok(parsed)
+}
+
 async fn initial_fetch(
     session: &mut imap::ImapSession,
     exists: u32,

@@ -106,6 +106,45 @@ pub async fn stored_uid_validity(
     Ok(validity)
 }
 
+/// What a body request needs from the cache: the stored bodies plus the
+/// coordinates (account, mailbox, uid) for a lazy server fetch on miss.
+#[derive(Debug, sqlx::FromRow)]
+pub struct BodyRow {
+    pub account_id: i64,
+    pub mailbox: String,
+    pub uid: i64,
+    pub body_text: Option<String>,
+    pub body_html: Option<String>,
+}
+
+pub async fn get_body(pool: &SqlitePool, message_id: i64) -> Result<BodyRow, AppError> {
+    let row = sqlx::query_as(
+        "SELECT account_id, mailbox, uid, body_text, body_html FROM messages WHERE id = ?",
+    )
+    .bind(message_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Store a freshly fetched body; the snippet becomes real now that text exists.
+pub async fn set_body(
+    pool: &SqlitePool,
+    message_id: i64,
+    text: Option<&str>,
+    html: Option<&str>,
+    snippet: &str,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE messages SET body_text = ?, body_html = ?, snippet = ? WHERE id = ?")
+        .bind(text)
+        .bind(html)
+        .bind(snippet)
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Drop the cache for one mailbox — required when UIDVALIDITY changes
 /// (RFC 3501: old UIDs are meaningless after that).
 pub async fn clear_mailbox(
@@ -267,6 +306,43 @@ mod tests {
             stored_uid_validity(&pool, id, "INBOX").await.unwrap(),
             Some(7)
         );
+    }
+
+    #[tokio::test]
+    async fn body_roundtrips_and_updates_the_snippet() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "Hello", "2026-07-08T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        let message_id = list(&pool, Some(id)).await.unwrap()[0].id;
+
+        let before = get_body(&pool, message_id).await.unwrap();
+        assert_eq!(before.body_text, None);
+        assert_eq!(before.body_html, None);
+        assert_eq!(before.mailbox, "INBOX");
+        assert_eq!(before.uid, 1);
+
+        set_body(
+            &pool,
+            message_id,
+            Some("plain body"),
+            Some("<p>html body</p>"),
+            "plain body",
+        )
+        .await
+        .unwrap();
+
+        let after = get_body(&pool, message_id).await.unwrap();
+        assert_eq!(after.body_text.as_deref(), Some("plain body"));
+        assert_eq!(after.body_html.as_deref(), Some("<p>html body</p>"));
+        let headers = list(&pool, Some(id)).await.unwrap();
+        assert_eq!(headers[0].snippet, "plain body");
     }
 
     #[tokio::test]
