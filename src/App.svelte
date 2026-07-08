@@ -38,13 +38,6 @@
     }
   }
 
-  function handleKeydown(event: KeyboardEvent) {
-    if (event.metaKey && event.key === ",") {
-      event.preventDefault();
-      void openSettings();
-    }
-  }
-
   onMount(() => {
     void (async () => {
       await refreshAccounts();
@@ -58,8 +51,6 @@
     };
   });
 </script>
-
-<svelte:window onkeydown={handleKeydown} />
 
 <div class="layout">
   <aside>

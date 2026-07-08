@@ -116,14 +116,8 @@ it("clears the selected message when switching accounts", async () => {
   expect(await screen.findByText("Select a message")).toBeInTheDocument();
 });
 
-it("opens the settings window with cmd+comma", async () => {
-  render(App);
-  await screen.findByText("All Inboxes");
-
-  await fireEvent.keyDown(window, { key: ",", metaKey: true });
-
-  expect(api.openSettings).toHaveBeenCalled();
-});
+// note: cmd+comma is handled natively by the macOS app menu accelerator
+// (src-tauri lib.rs), so there is no webview handler left to test here.
 
 it("opens the settings window from the sidebar button", async () => {
   render(App);
