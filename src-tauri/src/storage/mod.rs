@@ -1,3 +1,5 @@
+pub mod accounts;
+
 use std::path::Path;
 use std::time::Duration;
 
