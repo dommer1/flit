@@ -6,11 +6,21 @@ pub fn accounts() -> Vec<Account> {
             id: 1,
             name: "Personal".to_string(),
             email: "domco@example.com".to_string(),
+            imap_host: "imap.example.com".to_string(),
+            imap_port: 993,
+            smtp_host: "smtp.example.com".to_string(),
+            smtp_port: 587,
+            username: "domco@example.com".to_string(),
         },
         Account {
             id: 2,
             name: "Work".to_string(),
             email: "hello@vocalio.sk".to_string(),
+            imap_host: "imap.vocalio.sk".to_string(),
+            imap_port: 993,
+            smtp_host: "smtp.vocalio.sk".to_string(),
+            smtp_port: 587,
+            username: "hello@vocalio.sk".to_string(),
         },
     ]
 }

@@ -10,6 +10,11 @@ pub struct Account {
     pub id: i64,
     pub name: String,
     pub email: String,
+    pub imap_host: String,
+    pub imap_port: u16,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub username: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
