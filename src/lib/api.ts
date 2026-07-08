@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
-import type { Account, MessageHeader, NewAccount } from "./types";
+import type { Account, MessageBody, MessageHeader, NewAccount } from "./types";
 
 export function listAccounts(): Promise<Account[]> {
   return invoke<Account[]>("list_accounts");
@@ -31,6 +31,11 @@ export function confirmAccountDeletion(account: Account): Promise<boolean> {
 /** `accountId: null` = unified inbox across all accounts. */
 export function listMessages(accountId: number | null): Promise<MessageHeader[]> {
   return invoke<MessageHeader[]>("list_messages", { accountId });
+}
+
+/** Body from cache, lazily fetched from the server on first open. */
+export function getMessageBody(messageId: number): Promise<MessageBody> {
+  return invoke<MessageBody>("get_message_body", { messageId });
 }
 
 /** Fire-and-forget header sync for one account's inbox. */

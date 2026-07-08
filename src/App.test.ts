@@ -58,6 +58,7 @@ vi.mock("./lib/api", () => ({
       ? allMessages
       : allMessages.filter((m) => m.accountId === accountId),
   ),
+  getMessageBody: vi.fn(async () => ({ html: null, text: "body text" })),
   onAccountsChanged: vi.fn(async (callback: () => void) => {
     accountsChanged = callback;
     return () => {};
