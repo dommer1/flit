@@ -4,6 +4,7 @@
   "description": "Capability for the app windows",
   "windows": ["main", "settings"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "dialog:allow-ask"
   ]
 }
