@@ -1,3 +1,4 @@
+pub mod auth;
 mod commands;
 pub mod error;
 mod mock;
