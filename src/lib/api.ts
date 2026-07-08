@@ -18,6 +18,14 @@ export function deleteAccount(id: number): Promise<void> {
   return invoke<void>("delete_account", { id });
 }
 
+/** Verify & Save: prove IMAP + SMTP credentials before saving the account. */
+export function testConnection(
+  account: NewAccount,
+  password: string,
+): Promise<void> {
+  return invoke<void>("test_connection", { account, password });
+}
+
 /** Native confirmation sheet; resolves to true when the user confirms. */
 export function confirmAccountDeletion(account: Account): Promise<boolean> {
   return ask(

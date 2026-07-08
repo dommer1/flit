@@ -71,6 +71,29 @@ pub async fn list_messages(
     storage::messages::list(&state.pool, account_id).await
 }
 
+/// Verify & Save: prove the submitted credentials against both servers
+/// before the account is stored anywhere. The AppError Display strings
+/// already name the failing leg ("imap error: …" / "smtp error: …").
+#[tauri::command]
+pub async fn test_connection(account: NewAccount, password: String) -> Result<(), AppError> {
+    let (imap, smtp) = tokio::join!(
+        mail::imap::verify(
+            &account.imap_host,
+            account.imap_port,
+            &account.username,
+            &password,
+        ),
+        mail::smtp::verify(
+            &account.smtp_host,
+            account.smtp_port,
+            &account.username,
+            &password,
+        ),
+    );
+    imap?;
+    smtp
+}
+
 /// Body for the viewer — served from cache, lazily fetched on first open.
 #[tauri::command]
 pub async fn get_message_body(
