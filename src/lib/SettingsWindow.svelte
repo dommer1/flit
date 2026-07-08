@@ -3,6 +3,7 @@
   import {
     addAccount,
     closeSettings,
+    confirmAccountDeletion,
     deleteAccount,
     listAccounts,
     onAccountsChanged,
@@ -32,10 +33,11 @@
     }
   }
 
-  async function handleDelete(id: number) {
+  async function handleDelete(account: Account) {
     lastError = null;
     try {
-      await deleteAccount(id);
+      if (!(await confirmAccountDeletion(account))) return;
+      await deleteAccount(account.id);
       await refresh();
     } catch (err) {
       lastError = String(err);

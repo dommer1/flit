@@ -77,13 +77,13 @@ it("switches the detail pane when another account is selected", async () => {
   expect(screen.getByText("imap.vocalio.sk:993")).toBeInTheDocument();
 });
 
-it("deletes the selected account", async () => {
+it("hands the selected account to onDelete", async () => {
   const { onDelete } = renderPane();
 
   await fireEvent.click(screen.getByText("Work"));
   await fireEvent.click(screen.getByLabelText("Delete account"));
 
-  expect(onDelete).toHaveBeenCalledWith(2);
+  expect(onDelete).toHaveBeenCalledWith(accounts[1]);
 });
 
 it("submits a new account and closes the form on success", async () => {

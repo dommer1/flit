@@ -32,6 +32,7 @@ vi.mock("./api", () => ({
     ...account,
   })),
   deleteAccount: vi.fn(async () => undefined),
+  confirmAccountDeletion: vi.fn(async () => true),
   closeSettings: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async () => () => {}),
 }));
@@ -92,14 +93,30 @@ it("adds an account through the form", async () => {
   ).not.toBeInTheDocument();
 });
 
-it("deletes the selected account", async () => {
+it("deletes the selected account after native confirmation", async () => {
   render(SettingsWindow);
   await screen.findByText("Work");
 
   await fireEvent.click(screen.getByText("Work"));
   await fireEvent.click(screen.getByLabelText("Delete account"));
 
+  expect(api.confirmAccountDeletion).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 2, name: "Work" }),
+  );
   expect(api.deleteAccount).toHaveBeenCalledWith(2);
+});
+
+it("keeps the account when the confirmation is declined", async () => {
+  vi.mocked(api.confirmAccountDeletion).mockResolvedValueOnce(false);
+  vi.mocked(api.deleteAccount).mockClear();
+  render(SettingsWindow);
+  await screen.findByText("Work");
+
+  await fireEvent.click(screen.getByText("Work"));
+  await fireEvent.click(screen.getByLabelText("Delete account"));
+
+  expect(api.confirmAccountDeletion).toHaveBeenCalled();
+  expect(api.deleteAccount).not.toHaveBeenCalled();
 });
 
 it("shows an error and keeps the form open when adding fails", async () => {

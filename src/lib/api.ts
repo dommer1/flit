@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
 import type { Account, MessageHeader, NewAccount } from "./types";
 
 export function listAccounts(): Promise<Account[]> {
@@ -15,6 +16,16 @@ export function addAccount(
 
 export function deleteAccount(id: number): Promise<void> {
   return invoke<void>("delete_account", { id });
+}
+
+/** Native confirmation sheet; resolves to true when the user confirms. */
+export function confirmAccountDeletion(account: Account): Promise<boolean> {
+  return ask(
+    `Delete the account “${account.name}” (${account.email})?\n\n` +
+      "Its password will be removed from the keychain. " +
+      "This cannot be undone.",
+    { title: "Delete Account", kind: "warning" },
+  );
 }
 
 /** `accountId: null` = unified inbox across all accounts. */

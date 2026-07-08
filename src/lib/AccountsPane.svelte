@@ -12,7 +12,9 @@
     // parent owns the api call and error display; the pane only needs to know
     // whether to leave the add form.
     onAdd: (account: NewAccount, password: string) => Promise<Account | null>;
-    onDelete: (id: number) => void;
+    // why: hands over the whole account — the parent's confirmation dialog
+    // needs the name and email, not just the id.
+    onDelete: (account: Account) => void;
   } = $props();
 
   let selectedId = $state<number | null>(null);
@@ -59,7 +61,7 @@
       <button
         aria-label="Delete account"
         disabled={adding || selected === null}
-        onclick={() => selected && onDelete(selected.id)}
+        onclick={() => selected && onDelete(selected)}
       >
         −
       </button>
