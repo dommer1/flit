@@ -25,6 +25,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_accounts,
+            commands::add_account,
+            commands::delete_account,
             commands::list_messages
         ])
         .run(tauri::generate_context!())

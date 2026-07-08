@@ -1,29 +1,4 @@
-use crate::models::{Account, MessageHeader};
-
-pub fn accounts() -> Vec<Account> {
-    vec![
-        Account {
-            id: 1,
-            name: "Personal".to_string(),
-            email: "domco@example.com".to_string(),
-            imap_host: "imap.example.com".to_string(),
-            imap_port: 993,
-            smtp_host: "smtp.example.com".to_string(),
-            smtp_port: 587,
-            username: "domco@example.com".to_string(),
-        },
-        Account {
-            id: 2,
-            name: "Work".to_string(),
-            email: "hello@vocalio.sk".to_string(),
-            imap_host: "imap.vocalio.sk".to_string(),
-            imap_port: 993,
-            smtp_host: "smtp.vocalio.sk".to_string(),
-            smtp_port: 587,
-            username: "hello@vocalio.sk".to_string(),
-        },
-    ]
-}
+use crate::models::MessageHeader;
 
 /// Messages for one account, or the unified inbox when `account_id` is `None`.
 ///
@@ -156,13 +131,5 @@ mod tests {
     #[test]
     fn unknown_account_returns_empty_list() {
         assert!(messages(Some(999)).is_empty());
-    }
-
-    #[test]
-    fn accounts_have_unique_ids() {
-        let accounts = accounts();
-        let mut ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
-        ids.dedup();
-        assert_eq!(ids.len(), accounts.len());
     }
 }
