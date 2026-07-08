@@ -5,7 +5,9 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
-    pub id: u32,
+    // why: i64, not u32 — SQLite rowids are 64-bit signed and sqlx decodes
+    // them as i64; matching the storage type avoids lossy casts.
+    pub id: i64,
     pub name: String,
     pub email: String,
 }
@@ -13,8 +15,8 @@ pub struct Account {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageHeader {
-    pub id: u32,
-    pub account_id: u32,
+    pub id: i64,
+    pub account_id: i64,
     pub from: String,
     pub subject: String,
     pub snippet: String,

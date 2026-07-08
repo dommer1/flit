@@ -20,7 +20,7 @@ pub fn accounts() -> Vec<Account> {
 /// why: the unified inbox is not a special case — it's the same list with the
 /// account filter dropped, merged and sorted by date desc. This mirrors the
 /// SQLite query that replaces this module in Phase 1.
-pub fn messages(account_id: Option<u32>) -> Vec<MessageHeader> {
+pub fn messages(account_id: Option<i64>) -> Vec<MessageHeader> {
     let mut messages: Vec<MessageHeader> = all_messages()
         .into_iter()
         .filter(|m| account_id.is_none_or(|id| m.account_id == id))
@@ -30,7 +30,7 @@ pub fn messages(account_id: Option<u32>) -> Vec<MessageHeader> {
 }
 
 fn all_messages() -> Vec<MessageHeader> {
-    let raw: [(u32, u32, &str, &str, &str, &str, bool); 8] = [
+    let raw: [(i64, i64, &str, &str, &str, &str, bool); 8] = [
         (
             1,
             1,

@@ -11,6 +11,6 @@ pub fn list_accounts() -> Result<Vec<Account>, String> {
 }
 
 #[tauri::command]
-pub fn list_messages(account_id: Option<u32>) -> Result<Vec<MessageHeader>, String> {
+pub fn list_messages(account_id: Option<i64>) -> Result<Vec<MessageHeader>, String> {
     Ok(mock::messages(account_id))
 }
