@@ -1,13 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    addAccount,
-    deleteAccount,
     listAccounts,
     listMessages,
+    onAccountsChanged,
+    openSettings,
   } from "./lib/api";
-  import type { Account, MessageHeader, NewAccount } from "./lib/types";
-  import Settings from "./lib/Settings.svelte";
+  import type { Account, MessageHeader } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
   import MessageList from "./lib/MessageList.svelte";
   import MessageView from "./lib/MessageView.svelte";
@@ -16,8 +15,6 @@
   let messages = $state<MessageHeader[]>([]);
   let selectedAccountId = $state<number | null>(null);
   let selectedMessageId = $state<number | null>(null);
-  let showSettings = $state(false);
-  let lastError = $state<string | null>(null);
 
   let selectedMessage = $derived(
     messages.find((m) => m.id === selectedMessageId) ?? null,
@@ -29,46 +26,36 @@
     messages = await listMessages(accountId);
   }
 
-  // why: returns the created account (or null on failure) so the caller —
-  // the settings pane — can decide whether to leave its add form open.
-  async function handleAddAccount(
-    account: NewAccount,
-    password: string,
-  ): Promise<Account | null> {
-    lastError = null;
-    try {
-      const created = await addAccount(account, password);
-      accounts = [...accounts, created];
-      return created;
-    } catch (err) {
-      lastError = String(err);
-      return null;
+  async function refreshAccounts() {
+    accounts = await listAccounts();
+    // why: if the selected account was deleted in the settings window, fall
+    // back to the unified inbox instead of filtering by a dead account.
+    if (
+      selectedAccountId !== null &&
+      !accounts.some((a) => a.id === selectedAccountId)
+    ) {
+      await selectAccount(null);
     }
   }
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.metaKey && event.key === ",") {
       event.preventDefault();
-      showSettings = !showSettings;
-    } else if (event.key === "Escape") {
-      showSettings = false;
+      void openSettings();
     }
   }
 
-  async function handleDeleteAccount(id: number) {
-    lastError = null;
-    try {
-      await deleteAccount(id);
-      accounts = accounts.filter((a) => a.id !== id);
-      if (selectedAccountId === id) await selectAccount(null);
-    } catch (err) {
-      lastError = String(err);
-    }
-  }
-
-  onMount(async () => {
-    accounts = await listAccounts();
-    await selectAccount(null);
+  onMount(() => {
+    void (async () => {
+      await refreshAccounts();
+      await selectAccount(null);
+    })();
+    // why: account CRUD lives in the settings window (its own JS context) —
+    // this window finds out through the backend's accounts-changed event.
+    const unlisten = onAccountsChanged(() => void refreshAccounts());
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
   });
 </script>
 
@@ -80,7 +67,7 @@
       {accounts}
       selectedId={selectedAccountId}
       onSelect={selectAccount}
-      onOpenSettings={() => (showSettings = true)}
+      onOpenSettings={() => void openSettings()}
     />
   </aside>
   <section class="list">
@@ -94,24 +81,6 @@
     <MessageView message={selectedMessage} />
   </section>
 </div>
-
-{#if lastError}
-  <div class="error-banner" role="alert">
-    <span>{lastError}</span>
-    <button aria-label="Dismiss error" onclick={() => (lastError = null)}>
-      ×
-    </button>
-  </div>
-{/if}
-
-{#if showSettings}
-  <Settings
-    {accounts}
-    onAdd={handleAddAccount}
-    onDelete={handleDeleteAccount}
-    onClose={() => (showSettings = false)}
-  />
-{/if}
 
 <style>
   :global(body) {
@@ -142,28 +111,5 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
-  }
-
-  .error-banner {
-    position: fixed;
-    top: 0.75rem;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid #f0c0c0;
-    border-radius: 0.375rem;
-    background: #fdf1f1;
-    color: #8a1f1f;
-  }
-
-  .error-banner button {
-    border: none;
-    background: none;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

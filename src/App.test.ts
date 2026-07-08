@@ -1,6 +1,6 @@
-import { expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/svelte";
-import type { Account, MessageHeader, NewAccount } from "./lib/types";
+import { beforeEach, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/svelte";
+import type { Account, MessageHeader } from "./lib/types";
 
 const accounts: Account[] = [
   {
@@ -46,22 +46,32 @@ const allMessages: MessageHeader[] = [
   },
 ];
 
+// why: mutable + captured by the mock factory, so tests can simulate the
+// settings window changing accounts and firing accounts-changed.
+let currentAccounts: Account[] = [];
+let accountsChanged: (() => void) | undefined;
+
 vi.mock("./lib/api", () => ({
-  listAccounts: vi.fn(async () => accounts),
+  listAccounts: vi.fn(async () => currentAccounts),
   listMessages: vi.fn(async (accountId: number | null) =>
     accountId === null
       ? allMessages
       : allMessages.filter((m) => m.accountId === accountId),
   ),
-  addAccount: vi.fn(async (account: NewAccount, _password: string) => ({
-    id: 99,
-    ...account,
-  })),
-  deleteAccount: vi.fn(async () => undefined),
+  openSettings: vi.fn(async () => undefined),
+  onAccountsChanged: vi.fn(async (callback: () => void) => {
+    accountsChanged = callback;
+    return () => {};
+  }),
 }));
 
 import * as api from "./lib/api";
 import App from "./App.svelte";
+
+beforeEach(() => {
+  currentAccounts = [...accounts];
+  accountsChanged = undefined;
+});
 
 it("loads accounts and the unified inbox on start", async () => {
   render(App);
@@ -106,86 +116,45 @@ it("clears the selected message when switching accounts", async () => {
   expect(await screen.findByText("Select a message")).toBeInTheDocument();
 });
 
-it("opens settings with cmd+comma and closes with escape", async () => {
+it("opens the settings window with cmd+comma", async () => {
   render(App);
   await screen.findByText("All Inboxes");
 
   await fireEvent.keyDown(window, { key: ",", metaKey: true });
-  expect(
-    await screen.findByRole("dialog", { name: "Settings" }),
-  ).toBeInTheDocument();
 
-  await fireEvent.keyDown(window, { key: "Escape" });
-  expect(
-    screen.queryByRole("dialog", { name: "Settings" }),
-  ).not.toBeInTheDocument();
+  expect(api.openSettings).toHaveBeenCalled();
 });
 
-it("opens settings from the sidebar button", async () => {
+it("opens the settings window from the sidebar button", async () => {
   render(App);
   await screen.findByText("All Inboxes");
 
   await fireEvent.click(screen.getByText("Settings"));
 
-  expect(
-    await screen.findByRole("dialog", { name: "Settings" }),
-  ).toBeInTheDocument();
+  expect(api.openSettings).toHaveBeenCalled();
 });
 
-it("adds an account through settings", async () => {
+it("refreshes accounts when another window changes them", async () => {
   render(App);
-  await screen.findByText("All Inboxes");
+  await screen.findByText("Work");
 
-  await fireEvent.click(screen.getByText("Settings"));
-  const dialog = await screen.findByRole("dialog", { name: "Settings" });
+  currentAccounts = [
+    ...accounts,
+    { ...accounts[0], id: 3, name: "Third", email: "third@example.com" },
+  ];
+  accountsChanged?.();
 
-  await fireEvent.click(within(dialog).getByLabelText("Add account"));
-  await fireEvent.input(within(dialog).getByLabelText("Name"), {
-    target: { value: "New" },
-  });
-  await fireEvent.input(within(dialog).getByLabelText("Email"), {
-    target: { value: "new@example.com" },
-  });
-  await fireEvent.input(within(dialog).getByLabelText("IMAP host"), {
-    target: { value: "imap.new.com" },
-  });
-  await fireEvent.input(within(dialog).getByLabelText("SMTP host"), {
-    target: { value: "smtp.new.com" },
-  });
-  await fireEvent.input(within(dialog).getByLabelText("Username"), {
-    target: { value: "new@example.com" },
-  });
-  await fireEvent.input(within(dialog).getByLabelText("Password"), {
-    target: { value: "pw" },
-  });
-  await fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
-
-  expect(api.addAccount).toHaveBeenCalledWith(
-    expect.objectContaining({ name: "New", imapHost: "imap.new.com" }),
-    "pw",
-  );
-  // the created account is selected and shown in the detail pane
-  expect(
-    await within(dialog).findByText("imap.new.com:993"),
-  ).toBeInTheDocument();
-
-  await fireEvent.keyDown(window, { key: "Escape" });
-  expect(screen.getByText("New")).toBeInTheDocument();
+  expect(await screen.findByText("Third")).toBeInTheDocument();
 });
 
-it("deletes an account via settings and falls back to the unified inbox", async () => {
+it("falls back to the unified inbox when the selected account disappears", async () => {
   render(App);
   await fireEvent.click(await screen.findByText("Work"));
   await screen.findByText("Re: Invoice");
 
-  await fireEvent.keyDown(window, { key: ",", metaKey: true });
-  const dialog = await screen.findByRole("dialog", { name: "Settings" });
-  await fireEvent.click(within(dialog).getByText("Work"));
-  await fireEvent.click(within(dialog).getByLabelText("Delete account"));
+  currentAccounts = [accounts[0]];
+  accountsChanged?.();
 
-  expect(api.deleteAccount).toHaveBeenCalledWith(2);
-
-  await fireEvent.keyDown(window, { key: "Escape" });
   expect(await screen.findByText("Weekend plans")).toBeInTheDocument();
   expect(screen.queryByText("Work")).not.toBeInTheDocument();
 });
