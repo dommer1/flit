@@ -21,6 +21,9 @@ pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
         // why: WAL lets readers proceed alongside a writer; sqlx keeps
         // SQLite's default journal mode (DELETE) unless set explicitly.
         .journal_mode(SqliteJournalMode::Wal)
+        // why: SQLite ships with foreign keys OFF per connection — without
+        // this, deleting an account would strand its cached messages.
+        .foreign_keys(true)
         .busy_timeout(Duration::from_secs(5));
 
     // why: a modest pool — SQLite allows only one writer at a time anyway,
@@ -41,7 +44,9 @@ pub(crate) async fn test_pool() -> SqlitePool {
 
     // why: every connection to :memory: opens its OWN empty database, so the
     // pool is capped at one connection to keep all queries on the same DB.
-    let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")
+        .unwrap()
+        .foreign_keys(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(options)
@@ -67,5 +72,55 @@ mod tests {
         .unwrap();
 
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn migrations_create_messages_table() {
+        let pool = test_pool().await;
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'messages'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn deleting_an_account_cascades_its_messages() {
+        let pool = test_pool().await;
+        let account = crate::storage::accounts::insert(
+            &pool,
+            &crate::models::NewAccount {
+                name: "Personal".to_string(),
+                email: "a@example.com".to_string(),
+                imap_host: "imap.example.com".to_string(),
+                imap_port: 993,
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_port: 587,
+                username: "a@example.com".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO messages (account_id, uid, uid_validity, date) VALUES (?, 1, 1, '2026-01-01T00:00:00Z')",
+        )
+        .bind(account.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        crate::storage::accounts::delete(&pool, account.id)
+            .await
+            .unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
