@@ -29,6 +29,9 @@ A minimal, privacy-first desktop email client for macOS (multiplatform later), m
 - **Use the `stack` skill** for environment setup, running the app, Rust↔Svelte IPC
   patterns, and troubleshooting.
 - Propose a plan before non-trivial changes; wait for review before executing.
+- **Commits land directly on main** — push after every green commit
+  (`git push origin HEAD:main` from a worktree). No feature branches or PRs
+  unless explicitly requested.
 - Never change a Hard Rule without flagging it explicitly.
 
 | Task | Command |

@@ -24,8 +24,21 @@ Every commit is small, green, and does exactly one thing.
       - Rust touched: `cd src-tauri && cargo fmt && cargo clippy -- -D warnings && cargo test`
    d. **Commit** (see format below). Test + implementation for the same unit go
       in the same commit, so every commit is green on its own.
-3. Repeat until the task is done. Then review the whole branch:
-   `git log --oneline origin/main..` — the sequence should read like a story.
+3. Repeat until the task is done. Then review the sequence:
+   `git log --oneline origin/main..` (or the last few commits) — it should read like a story.
+
+## Publishing — direct to main
+
+Work lands **directly on main** — no feature branches, no PRs, unless the user
+explicitly asks for one (e.g. for a risky or security-relevant change).
+
+- After each green commit (or a finished small series), push immediately:
+  `git push origin HEAD:main`.
+- In a Conductor worktree the local branch has a different name and `main`
+  is checked out elsewhere — that's fine; `HEAD:main` pushes commits straight
+  to main regardless of the local branch name. Never force-push.
+- If the push is rejected (main moved), `git pull --rebase origin main`, re-run
+  the gates, then push again.
 
 ## Commit format
 
