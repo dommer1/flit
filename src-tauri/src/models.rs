@@ -32,7 +32,7 @@ pub struct NewAccount {
     pub username: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageHeader {
     pub id: i64,

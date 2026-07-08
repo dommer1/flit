@@ -1,0 +1,299 @@
+use sqlx::SqlitePool;
+
+use crate::error::AppError;
+use crate::models::MessageHeader;
+
+/// Header data as it arrives from an IMAP fetch, before it has a row id.
+#[derive(Debug, Clone)]
+pub struct FetchedHeader {
+    pub uid: i64,
+    pub uid_validity: i64,
+    pub from: String,
+    pub subject: String,
+    pub date: String,
+    pub snippet: String,
+    pub read: bool,
+}
+
+/// Insert or refresh header rows. On conflict only the read flag is updated —
+/// header fields don't change server-side, and body columns must survive.
+pub async fn upsert_headers(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+    headers: &[FetchedHeader],
+) -> Result<(), AppError> {
+    for header in headers {
+        sqlx::query(
+            "INSERT INTO messages
+               (account_id, mailbox, uid, uid_validity, from_addr, subject, date, snippet, read)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (account_id, mailbox, uid) DO UPDATE SET read = excluded.read",
+        )
+        .bind(account_id)
+        .bind(mailbox)
+        .bind(header.uid)
+        .bind(header.uid_validity)
+        .bind(&header.from)
+        .bind(&header.subject)
+        .bind(&header.date)
+        .bind(&header.snippet)
+        .bind(header.read)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Headers for one account, or the unified inbox when `account_id` is `None` —
+/// the same query with the filter dropped, newest first.
+pub async fn list(
+    pool: &SqlitePool,
+    account_id: Option<i64>,
+) -> Result<Vec<MessageHeader>, AppError> {
+    // why: sqlx 0.9 rejects runtime-built SQL strings (SqlSafeStr), so the
+    // column list is spelled out twice instead of shared via format!().
+    let headers = match account_id {
+        Some(id) => {
+            sqlx::query_as(
+                r#"SELECT id, account_id, from_addr AS "from", subject, snippet, date, read
+                   FROM messages WHERE account_id = ? ORDER BY date DESC"#,
+            )
+            .bind(id)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                r#"SELECT id, account_id, from_addr AS "from", subject, snippet, date, read
+                   FROM messages ORDER BY date DESC"#,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(headers)
+}
+
+/// Highest cached UID for incremental sync; `None` when nothing is cached.
+pub async fn max_uid(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+) -> Result<Option<i64>, AppError> {
+    let uid =
+        sqlx::query_scalar("SELECT MAX(uid) FROM messages WHERE account_id = ? AND mailbox = ?")
+            .bind(account_id)
+            .bind(mailbox)
+            .fetch_one(pool)
+            .await?;
+    Ok(uid)
+}
+
+/// UIDVALIDITY the cache was built against; `None` when nothing is cached.
+pub async fn stored_uid_validity(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+) -> Result<Option<i64>, AppError> {
+    let validity = sqlx::query_scalar(
+        "SELECT uid_validity FROM messages WHERE account_id = ? AND mailbox = ? LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .fetch_optional(pool)
+    .await?;
+    Ok(validity)
+}
+
+/// Drop the cache for one mailbox — required when UIDVALIDITY changes
+/// (RFC 3501: old UIDs are meaningless after that).
+pub async fn clear_mailbox(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM messages WHERE account_id = ? AND mailbox = ?")
+        .bind(account_id)
+        .bind(mailbox)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::NewAccount;
+    use crate::storage::{accounts, test_pool};
+
+    async fn account(pool: &SqlitePool, name: &str) -> i64 {
+        accounts::insert(
+            pool,
+            &NewAccount {
+                name: name.to_string(),
+                email: format!("{}@example.com", name.to_lowercase()),
+                imap_host: "imap.example.com".to_string(),
+                imap_port: 993,
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_port: 587,
+                username: format!("{}@example.com", name.to_lowercase()),
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    fn header(uid: i64, subject: &str, date: &str, read: bool) -> FetchedHeader {
+        FetchedHeader {
+            uid,
+            uid_validity: 7,
+            from: "Alice <alice@example.com>".to_string(),
+            subject: subject.to_string(),
+            date: date.to_string(),
+            snippet: format!("snippet of {subject}"),
+            read,
+        }
+    }
+
+    #[tokio::test]
+    async fn unified_inbox_lists_all_accounts_newest_first() {
+        let pool = test_pool().await;
+        let first = account(&pool, "Personal").await;
+        let second = account(&pool, "Work").await;
+        upsert_headers(
+            &pool,
+            first,
+            "INBOX",
+            &[header(1, "Old", "2026-07-01T00:00:00Z", true)],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            second,
+            "INBOX",
+            &[header(1, "New", "2026-07-08T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+
+        let all = list(&pool, None).await.unwrap();
+
+        let subjects: Vec<&str> = all.iter().map(|m| m.subject.as_str()).collect();
+        assert_eq!(subjects, vec!["New", "Old"]);
+        assert_eq!(all[0].from, "Alice <alice@example.com>");
+    }
+
+    #[tokio::test]
+    async fn account_filter_returns_only_that_accounts_messages() {
+        let pool = test_pool().await;
+        let first = account(&pool, "Personal").await;
+        let second = account(&pool, "Work").await;
+        upsert_headers(
+            &pool,
+            first,
+            "INBOX",
+            &[header(1, "Mine", "2026-07-01T00:00:00Z", true)],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            second,
+            "INBOX",
+            &[header(1, "Other", "2026-07-08T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+
+        let mine = list(&pool, Some(first)).await.unwrap();
+
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].subject, "Mine");
+        assert!(list(&pool, Some(999)).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upsert_updates_read_flag_without_duplicating() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(5, "Hello", "2026-07-08T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(5, "Hello", "2026-07-08T00:00:00Z", true)],
+        )
+        .await
+        .unwrap();
+
+        let all = list(&pool, Some(id)).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].read);
+    }
+
+    #[tokio::test]
+    async fn max_uid_and_validity_reflect_the_cache() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+
+        assert_eq!(max_uid(&pool, id, "INBOX").await.unwrap(), None);
+        assert_eq!(stored_uid_validity(&pool, id, "INBOX").await.unwrap(), None);
+
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(3, "A", "2026-07-01T00:00:00Z", false),
+                header(9, "B", "2026-07-02T00:00:00Z", false),
+            ],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(max_uid(&pool, id, "INBOX").await.unwrap(), Some(9));
+        assert_eq!(
+            stored_uid_validity(&pool, id, "INBOX").await.unwrap(),
+            Some(7)
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_mailbox_removes_only_that_mailbox() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "Inbox", "2026-07-01T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "Archive",
+            &[header(1, "Archived", "2026-07-01T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+
+        clear_mailbox(&pool, id, "INBOX").await.unwrap();
+
+        let remaining = list(&pool, Some(id)).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].subject, "Archived");
+    }
+}
