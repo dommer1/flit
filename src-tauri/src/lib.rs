@@ -27,7 +27,9 @@ pub fn run() {
             commands::list_accounts,
             commands::add_account,
             commands::delete_account,
-            commands::list_messages
+            commands::list_messages,
+            commands::open_settings,
+            commands::close_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

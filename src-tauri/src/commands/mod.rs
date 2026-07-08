@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::mock;
@@ -52,4 +52,38 @@ pub async fn delete_account(
 #[tauri::command]
 pub fn list_messages(account_id: Option<i64>) -> Result<Vec<MessageHeader>, AppError> {
     Ok(mock::messages(account_id))
+}
+
+// why: async on purpose — Tauri docs warn that creating windows from a sync
+// command can deadlock on some platforms (the command runs on the main
+// thread there, and window creation needs it too).
+#[tauri::command]
+pub async fn open_settings(app: AppHandle) -> Result<(), AppError> {
+    // why: a closed window is destroyed, so reopen = rebuild; if it's only
+    // hidden/behind, just focus it instead of spawning a duplicate.
+    if let Some(window) = app.get_webview_window("settings") {
+        window.show()?;
+        window.set_focus()?;
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "settings",
+        // why: both windows serve the same bundle — main.ts picks the root
+        // component from the window label.
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Settings")
+    .inner_size(720.0, 480.0)
+    .min_inner_size(560.0, 360.0)
+    .build()?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn close_settings(app: AppHandle) -> Result<(), AppError> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.close()?;
+    }
+    Ok(())
 }
