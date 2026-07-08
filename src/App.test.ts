@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import type { Account, MessageHeader } from "./lib/types";
 
 const accounts: Account[] = [
@@ -47,29 +47,40 @@ const allMessages: MessageHeader[] = [
 ];
 
 // why: mutable + captured by the mock factory, so tests can simulate the
-// settings window changing accounts and firing accounts-changed.
+// backend changing state and firing change events.
 let currentAccounts: Account[] = [];
+let currentMessages: MessageHeader[] = [];
 let accountsChanged: (() => void) | undefined;
+let messagesChanged: (() => void) | undefined;
 
 vi.mock("./lib/api", () => ({
   listAccounts: vi.fn(async () => currentAccounts),
   listMessages: vi.fn(async (accountId: number | null) =>
     accountId === null
-      ? allMessages
-      : allMessages.filter((m) => m.accountId === accountId),
+      ? currentMessages
+      : currentMessages.filter((m) => m.accountId === accountId),
   ),
   getMessageBody: vi.fn(async () => ({ html: null, text: "body text" })),
+  syncInbox: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async (callback: () => void) => {
     accountsChanged = callback;
     return () => {};
   }),
+  onMessagesChanged: vi.fn(async (callback: () => void) => {
+    messagesChanged = callback;
+    return () => {};
+  }),
 }));
 
+import * as api from "./lib/api";
 import App from "./App.svelte";
 
 beforeEach(() => {
   currentAccounts = [...accounts];
+  currentMessages = [...allMessages];
   accountsChanged = undefined;
+  messagesChanged = undefined;
+  vi.clearAllMocks();
 });
 
 it("loads accounts and the unified inbox on start", async () => {
@@ -117,6 +128,41 @@ it("clears the selected message when switching accounts", async () => {
 
 // note: settings open only through the native macOS app menu (Settings…, ⌘,
 // — src-tauri lib.rs), so there is no webview trigger left to test here.
+
+it("starts a sync for every account on launch", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+
+  await waitFor(() => {
+    expect(api.syncInbox).toHaveBeenCalledWith(1);
+    expect(api.syncInbox).toHaveBeenCalledWith(2);
+  });
+});
+
+it("refreshes the list on messages-changed and keeps the selection", async () => {
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  await screen.findByRole("heading", { name: "Weekend plans" });
+
+  currentMessages = [
+    ...allMessages,
+    {
+      id: 3,
+      accountId: 1,
+      from: "New Sender",
+      subject: "Brand new",
+      snippet: "",
+      date: "2026-07-09T00:00:00Z",
+      read: false,
+    },
+  ];
+  messagesChanged?.();
+
+  expect(await screen.findByText("Brand new")).toBeInTheDocument();
+  expect(
+    screen.getByRole("heading", { name: "Weekend plans" }),
+  ).toBeInTheDocument();
+});
 
 it("refreshes accounts when another window changes them", async () => {
   render(App);

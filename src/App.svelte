@@ -1,6 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listAccounts, listMessages, onAccountsChanged } from "./lib/api";
+  import {
+    listAccounts,
+    listMessages,
+    onAccountsChanged,
+    onMessagesChanged,
+    syncInbox,
+  } from "./lib/api";
   import type { Account, MessageHeader } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
   import MessageList from "./lib/MessageList.svelte";
@@ -19,6 +25,28 @@
     selectedAccountId = accountId;
     selectedMessageId = null;
     messages = await listMessages(accountId);
+    startSync(accountId === null ? accounts.map((a) => a.id) : [accountId]);
+  }
+
+  // Re-query the current view without touching the selection — the derived
+  // selectedMessage keeps pointing at the same id if it still exists.
+  async function refreshMessages() {
+    messages = await listMessages(selectedAccountId);
+  }
+
+  // why: fire-and-forget and sequential on purpose — the UI reads from the
+  // cache and updates via messages-changed events, and phase 3 turns this
+  // loop into parallel per-account tasks.
+  function startSync(accountIds: number[]) {
+    void (async () => {
+      for (const id of accountIds) {
+        try {
+          await syncInbox(id);
+        } catch (err) {
+          console.error(`inbox sync failed for account ${id}:`, err);
+        }
+      }
+    })();
   }
 
   async function refreshAccounts() {
@@ -40,9 +68,11 @@
     })();
     // why: account CRUD lives in the settings window (its own JS context) —
     // this window finds out through the backend's accounts-changed event.
-    const unlisten = onAccountsChanged(() => void refreshAccounts());
+    const unlistenAccounts = onAccountsChanged(() => void refreshAccounts());
+    const unlistenMessages = onMessagesChanged(() => void refreshMessages());
     return () => {
-      void unlisten.then((stop) => stop());
+      void unlistenAccounts.then((stop) => stop());
+      void unlistenMessages.then((stop) => stop());
     };
   });
 </script>
