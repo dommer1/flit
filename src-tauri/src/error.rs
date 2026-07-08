@@ -15,6 +15,10 @@ pub enum AppError {
     TaskJoin(#[from] tokio::task::JoinError),
     #[error("window error: {0}")]
     Tauri(#[from] tauri::Error),
+    // why: a String, not #[from] — async-imap's login returns (Error, Client)
+    // tuples and we add context (connect/tls/login) at each call site.
+    #[error("imap error: {0}")]
+    Imap(String),
 }
 
 // why: Serialize can't be derived here because the wrapped errors (sqlx,
@@ -30,6 +34,15 @@ impl serde::Serialize for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serializes_imap_error_with_context() {
+        let err = AppError::Imap("login: no".to_string());
+
+        let json = serde_json::to_string(&err).unwrap();
+
+        assert_eq!(json, "\"imap error: login: no\"");
+    }
 
     #[test]
     fn serializes_to_display_string() {
