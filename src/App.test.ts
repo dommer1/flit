@@ -106,6 +106,32 @@ it("clears the selected message when switching accounts", async () => {
   expect(await screen.findByText("Select a message")).toBeInTheDocument();
 });
 
+it("opens settings with cmd+comma and closes with escape", async () => {
+  render(App);
+  await screen.findByText("All Inboxes");
+
+  await fireEvent.keyDown(window, { key: ",", metaKey: true });
+  expect(
+    await screen.findByRole("dialog", { name: "Settings" }),
+  ).toBeInTheDocument();
+
+  await fireEvent.keyDown(window, { key: "Escape" });
+  expect(
+    screen.queryByRole("dialog", { name: "Settings" }),
+  ).not.toBeInTheDocument();
+});
+
+it("opens settings from the sidebar button", async () => {
+  render(App);
+  await screen.findByText("All Inboxes");
+
+  await fireEvent.click(screen.getByText("Settings"));
+
+  expect(
+    await screen.findByRole("dialog", { name: "Settings" }),
+  ).toBeInTheDocument();
+});
+
 it("adds an account through the form", async () => {
   render(App);
   await screen.findByText("All Inboxes");

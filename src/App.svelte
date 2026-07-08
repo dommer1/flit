@@ -8,6 +8,7 @@
   } from "./lib/api";
   import type { Account, MessageHeader, NewAccount } from "./lib/types";
   import AddAccountForm from "./lib/AddAccountForm.svelte";
+  import Settings from "./lib/Settings.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import MessageList from "./lib/MessageList.svelte";
   import MessageView from "./lib/MessageView.svelte";
@@ -17,6 +18,7 @@
   let selectedAccountId = $state<number | null>(null);
   let selectedMessageId = $state<number | null>(null);
   let showAddForm = $state(false);
+  let showSettings = $state(false);
   let lastError = $state<string | null>(null);
 
   let selectedMessage = $derived(
@@ -29,14 +31,29 @@
     messages = await listMessages(accountId);
   }
 
-  async function handleAddAccount(account: NewAccount, password: string) {
+  // why: returns the created account (or null on failure) so the caller —
+  // the settings pane — can decide whether to leave its add form open.
+  async function handleAddAccount(
+    account: NewAccount,
+    password: string,
+  ): Promise<Account | null> {
     lastError = null;
     try {
       const created = await addAccount(account, password);
       accounts = [...accounts, created];
-      showAddForm = false;
+      return created;
     } catch (err) {
       lastError = String(err);
+      return null;
+    }
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.metaKey && event.key === ",") {
+      event.preventDefault();
+      showSettings = !showSettings;
+    } else if (event.key === "Escape") {
+      showSettings = false;
     }
   }
 
@@ -57,6 +74,8 @@
   });
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 <div class="layout">
   <aside>
     <Sidebar
@@ -65,6 +84,7 @@
       onSelect={selectAccount}
       onAdd={() => (showAddForm = true)}
       onDelete={handleDeleteAccount}
+      onOpenSettings={() => (showSettings = true)}
     />
   </aside>
   <section class="list">
@@ -91,10 +111,21 @@
 {#if showAddForm}
   <div class="overlay">
     <AddAccountForm
-      onSubmit={handleAddAccount}
+      onSubmit={async (account, password) => {
+        if (await handleAddAccount(account, password)) showAddForm = false;
+      }}
       onCancel={() => (showAddForm = false)}
     />
   </div>
+{/if}
+
+{#if showSettings}
+  <Settings
+    {accounts}
+    onAdd={handleAddAccount}
+    onDelete={handleDeleteAccount}
+    onClose={() => (showSettings = false)}
+  />
 {/if}
 
 <style>

@@ -7,12 +7,14 @@
     onSelect,
     onAdd,
     onDelete,
+    onOpenSettings,
   }: {
     accounts: Account[];
     selectedId: number | null;
     onSelect: (id: number | null) => void;
     onAdd: () => void;
     onDelete: (id: number) => void;
+    onOpenSettings: () => void;
   } = $props();
 </script>
 
@@ -46,6 +48,8 @@
   {/each}
 
   <button class="add" onclick={onAdd}>+ Add account</button>
+
+  <button class="settings" onclick={onOpenSettings}>Settings</button>
 </nav>
 
 <style>
@@ -53,6 +57,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.125rem;
+    box-sizing: border-box;
+    height: 100%;
     padding: 0.5rem;
   }
 
@@ -115,6 +121,17 @@
   }
 
   .add:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+
+  .settings {
+    margin-top: auto;
+    padding: 0.5rem 0.625rem;
+    color: #666;
+    font-size: 0.75rem;
+  }
+
+  .settings:hover {
     background: rgba(0, 0, 0, 0.05);
   }
 
