@@ -22,6 +22,41 @@ pub fn run() {
             // then assume the pool always exists in state.
             let pool = tauri::async_runtime::block_on(storage::init(&data_dir.join("flit.db")))?;
             app.manage(AppState { pool });
+
+            // why: macOS convention puts "Settings…" (⌘,) in the app menu; we
+            // extend Tauri's default menu instead of rebuilding it from
+            // scratch so all standard items (Edit, Window, …) stay intact.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
+
+                let menu = Menu::default(app.handle())?;
+                if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.first() {
+                    // why: position 2 = right after "About" and its
+                    // separator, where the HIG places Settings.
+                    app_menu.insert_items(
+                        &[
+                            &MenuItem::with_id(app, "settings", "Settings…", true, Some("Cmd+,"))?,
+                            &PredefinedMenuItem::separator(app)?,
+                        ],
+                        2,
+                    )?;
+                }
+                app.set_menu(menu)?;
+                app.on_menu_event(|app, event| {
+                    if event.id() == "settings" {
+                        let app = app.clone();
+                        // why: menu handlers are sync — spawn the async
+                        // window-opening command instead of blocking here.
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(err) = commands::open_settings(app).await {
+                                eprintln!("failed to open settings window: {err}");
+                            }
+                        });
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
