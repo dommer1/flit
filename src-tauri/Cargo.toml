@@ -19,3 +19,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# why: sqlite-bundled statically vendors libsqlite3 so the app doesn't depend
+# on the system SQLite version; runtime-tokio matches Tauri's async runtime.
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite-bundled"] }
+keyring = "4"
+thiserror = "2"
+# why: rt is needed for task::spawn_blocking (keychain calls are sync and must
+# not block the async executor); macros is compile-time only (#[tokio::test]).
+tokio = { version = "1", features = ["rt", "macros"] }
