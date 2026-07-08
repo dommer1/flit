@@ -1,21 +1,40 @@
-# Flit
+# CLAUDE.md — Flit (Mail Client)
 
-Desktop app built with Tauri 2 (Rust backend) + Svelte 5 (TypeScript frontend) + Vite.
+Project memory for Claude Code. Read at the start of every session. Keep edits to this file deliberate.
 
-## Stack
+## What we're building
 
-- **Backend:** Rust, Tauri 2 — lives in `src-tauri/`
-- **Frontend:** Svelte 5 + TypeScript + Vite — lives in `src/`
-- **Frontend tests:** Vitest (+ Testing Library for components)
-- **Rust tests:** built-in `cargo test`
-- **Package manager:** npm
+A minimal, privacy-first desktop email client for macOS (multiplatform later), meant to replace Canary Mail. Plain IMAP/POP3 + SMTP and Gmail, multiple accounts, unified inbox. No feature bloat — a clean, fast client for reading and writing mail.
 
-## Commands
+**Stack:** Tauri v2 (Rust backend + system webview frontend), Svelte 5 + TypeScript + Vite frontend, Rust backend in `src-tauri/`.
+
+## Design goals — the north star. Every decision serves these.
+
+1. **Privacy-first.** Local-first: data lives only in a local SQLite DB. No sync server, no telemetry, no phone-home. Secrets in the OS keychain, all network over TLS.
+2. **Open-source.** Permissive dependencies, no proprietary lock-in. (License: decide MIT/Apache-2.0 vs GPL early.)
+3. **Blazing fast.** Instant startup from local cache, parallel async account sync, lazy-loaded message bodies, virtualized message list.
+4. **Clean UI.** "Nice" here means typography, density, consistent spacing, dark mode, and keyboard control — not effects.
+
+## Hard rules — never violate
+
+- **Email-body rendering is security-critical.** The webview that renders message HTML MUST have JavaScript disabled, MUST block remote resource loading by default (remote images = tracking pixels), and MUST sanitize the HTML. Render bodies in a sandboxed, isolated context (sandboxed iframe / restricted webview), never in the app's main frame. Treat any change to this path as a security change and flag it explicitly.
+- **Secrets never hit disk in plaintext.** Account passwords and OAuth tokens go in the macOS Keychain (`keyring` crate). Never write credentials or tokens to plaintext files, logs, or the SQLite DB.
+- **All network I/O over TLS.**
+- **No telemetry, no analytics, no external calls** other than the user's own mail servers and (later) the OAuth provider.
+
+## Development workflow
+
+- **Always follow the `workflow` skill**: test-first, small atomic commits, every commit
+  green. Never batch a whole feature into one commit.
+- **Use the `stack` skill** for environment setup, running the app, Rust↔Svelte IPC
+  patterns, and troubleshooting.
+- Propose a plan before non-trivial changes; wait for review before executing.
+- Never change a Hard Rule without flagging it explicitly.
 
 | Task | Command |
 |---|---|
 | Run the desktop app (dev) | `npm run tauri dev` |
-| Run frontend only in browser | `npm run dev` |
+| Frontend only in browser | `npm run dev` |
 | Build release app | `npm run tauri build` |
 | Frontend tests | `npm test` |
 | Frontend type/lint check | `npm run check` |
@@ -23,24 +42,63 @@ Desktop app built with Tauri 2 (Rust backend) + Svelte 5 (TypeScript frontend) +
 | Rust lint | `cargo clippy -- -D warnings` (in `src-tauri/`) |
 | Rust format | `cargo fmt` (in `src-tauri/`) |
 
-## Project structure
+All of `npm run check` + `npm test` + `cargo test` + `cargo clippy` must pass before any commit.
 
-```
-src/                  Svelte frontend (components, lib, stores)
-src/lib/              Shared frontend code — put logic here, keep components thin
-src-tauri/src/        Rust code; Tauri commands in lib.rs (or modules it declares)
-src-tauri/tauri.conf.json  Tauri app config (window, bundle, dev server)
-```
+## Code conventions
 
-## Rules
+- **Simplicity over cleverness.** This is a small app. Prefer the straightforward solution. Do NOT add abstraction (traits, generics, extra layers, "provider frameworks") until there's a concrete present need — usually the third real use, not the first. A little duplication beats the wrong abstraction. If you're about to build a framework, stop and ask.
+- **Idiomatic, not inventive.** Write idiomatic Rust and idiomatic Tauri; follow established community conventions. Don't design novel architecture. When unsure of the idiomatic pattern, fetch current docs (see Tooling) instead of guessing.
+- **Errors:** return `Result<T, E>`, use `?`. Define a small app error enum with `thiserror`. `#[tauri::command]` functions return a `Result` with a serializable error so the frontend can handle failure. No `.unwrap()`/`.expect()` on fallible runtime paths.
+- **Async for all I/O** (IMAP, SMTP, DB). Fetch multiple accounts in parallel, never sequentially.
+- **Svelte 5 runes** (`$state`, `$derived`, `$effect`). Do NOT emit Svelte 4 reactive syntax (`$:`). Keep components small.
+- **Explain non-obvious decisions.** The maintainer is new to Rust and reviews to learn. When you make a non-trivial ownership/lifetime/async/architecture choice, say why (a short chat note or a `// why:` comment). Comment the *why*, not the *what*.
 
-- **Always follow the `workflow` skill** when implementing anything: test-first,
-  small atomic commits, every commit green. Never batch a whole feature into one commit.
-- **Use the `stack` skill** for environment setup, running the app, Rust↔Svelte IPC
-  patterns, and troubleshooting.
-- Business logic goes in plain, testable units (Rust modules / `src/lib` TS modules),
-  not inside UI components or command handlers — those stay thin wrappers.
-- Tauri commands are the only bridge between frontend and backend. Keep their
-  payloads small, serializable, and typed on both sides.
-- Prefer `npm run check` + `npm test` + `cargo test` + `cargo clippy` all passing
-  before any commit.
+## Architecture — keep it exactly this simple
+
+**Backend (`src-tauri/src/`):**
+
+- `main.rs` / `lib.rs` — boots Tauri, registers commands, builds shared state.
+- `state.rs` — `AppState` managed by Tauri (DB pool, per-account sessions/config). The app's shared state.
+- `commands/` — the `#[tauri::command]` functions. The ONLY API surface the frontend calls. Keep them thin: validate input, call a module, return `Result`. No business logic here.
+- `mail/` — IMAP/SMTP: connect, fetch headers/bodies, send, flags; MIME parsing.
+- `storage/` — SQLite: schema, queries, cache.
+- `auth/` — credentials, OAuth2, Keychain access.
+- `models.rs` — shared structs (`Account`, `MessageHeader`, `Message`) serialized to the frontend.
+
+**Frontend (`src/`):**
+
+- Three-pane layout: sidebar (accounts + unified inbox) / message list / message body.
+- Talks to the backend ONLY via `invoke('command_name', {...})`.
+- State in Svelte runes/stores. No business logic in the frontend — it renders and calls commands.
+- Mirror command payload types in `src/lib/types.ts` and keep them in sync with `models.rs`.
+
+**Data model (multi-account from day one):**
+
+- Every message row carries `account_id`.
+- Unified inbox is not a special table — it's a query across all accounts, merged, sorted by date desc.
+- Compose tracks the "From" account: reply → the account it arrived on; new mail → default account + a switcher.
+
+## Non-goals — do not build unless explicitly asked
+
+Threading/conversation view, full-text search, IMAP IDLE/push, snooze, send-later, rules/filters, PGP, calendar. Out of scope until the core read / write / multi-account flow is solid.
+
+## Backend crates (baseline)
+
+`async-imap`, `lettre` (SMTP), `mail-parser` (MIME), `oauth2`, `rusqlite` or `sqlx` (SQLite), `keyring` (Keychain), `tokio`, `thiserror`, `serde`. **Confirm current versions and APIs via Context7 before writing code against any crate — do not rely on training data for crate APIs.**
+
+## Tooling — use these, don't guess APIs
+
+- **Context7 MCP** (when connected): fetch current, version-specific docs for Rust crates and libraries before coding against them. If not connected in the session, verify against docs.rs / official docs instead of training data.
+- **Svelte MCP** (when connected): use for Svelte 5 / SvelteKit docs, and run its autofixer on Svelte code before finishing. Never emit Svelte 4 syntax.
+- For Tauri, prefer current **Tauri v2** docs — Tauri v1 patterns are common online and wrong for this project.
+
+## Build order — one phase at a time, commit after each
+
+0. **Skeleton** — three empty panes, mock data, prove `invoke()` round-trips.
+1. **Account model + storage** — SQLite schema with `account_id`; account CRUD; Keychain for secrets. (Before any real fetching.)
+2. **Read path** — one IMAP account: fetch headers → list → click → body in the sandboxed webview (JS off, remote images blocked).
+3. **Multi-account + unified inbox** — parallel fetch, merge, "All Inboxes" view.
+4. **Write path** — compose, reply (correct From), send via SMTP.
+5. **Gmail OAuth2** — Google Cloud app (testing mode), XOAUTH2. Only after plain IMAP works.
+6. **Actions** — read/unread, delete, archive, synced back to the server.
+7. **Polish** — typography, spacing, dark mode, keyboard shortcuts (j/k, Cmd+Enter to send).
