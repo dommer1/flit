@@ -13,6 +13,8 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("background task failed: {0}")]
     TaskJoin(#[from] tokio::task::JoinError),
+    #[error("window error: {0}")]
+    Tauri(#[from] tauri::Error),
 }
 
 // why: Serialize can't be derived here because the wrapped errors (sqlx,

@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
 use crate::mock;
@@ -16,6 +16,7 @@ pub async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<Account>, A
 
 #[tauri::command]
 pub async fn add_account(
+    app: AppHandle,
     state: State<'_, AppState>,
     account: NewAccount,
     password: String,
@@ -27,15 +28,24 @@ pub async fn add_account(
         storage::accounts::delete(&state.pool, inserted.id).await?;
         return Err(err);
     }
+    // why: broadcast to every window — the settings window mutates accounts,
+    // the main window listens and refetches its sidebar list.
+    app.emit("accounts-changed", ())?;
     Ok(inserted)
 }
 
 #[tauri::command]
-pub async fn delete_account(state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
+pub async fn delete_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), AppError> {
     // why: keychain first — if it fails the account stays intact; the reverse
     // order could strand a secret in the keychain with no owning account row.
     auth::delete_password(id).await?;
-    storage::accounts::delete(&state.pool, id).await
+    storage::accounts::delete(&state.pool, id).await?;
+    app.emit("accounts-changed", ())?;
+    Ok(())
 }
 
 // why: messages stay mocked until Phase 2 wires real IMAP fetching.
