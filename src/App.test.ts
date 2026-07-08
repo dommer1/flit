@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/svelte";
-import type { Account, MessageHeader } from "./lib/types";
+import type { Account, MessageHeader, NewAccount } from "./lib/types";
 
 const accounts: Account[] = [
   {
@@ -53,8 +53,14 @@ vi.mock("./lib/api", () => ({
       ? allMessages
       : allMessages.filter((m) => m.accountId === accountId),
   ),
+  addAccount: vi.fn(async (account: NewAccount, _password: string) => ({
+    id: 99,
+    ...account,
+  })),
+  deleteAccount: vi.fn(async () => undefined),
 }));
 
+import * as api from "./lib/api";
 import App from "./App.svelte";
 
 it("loads accounts and the unified inbox on start", async () => {
@@ -98,4 +104,49 @@ it("clears the selected message when switching accounts", async () => {
   await fireEvent.click(screen.getByText("Work"));
 
   expect(await screen.findByText("Select a message")).toBeInTheDocument();
+});
+
+it("adds an account through the form", async () => {
+  render(App);
+  await screen.findByText("All Inboxes");
+
+  await fireEvent.click(screen.getByText("+ Add account"));
+  await fireEvent.input(screen.getByLabelText("Name"), {
+    target: { value: "New" },
+  });
+  await fireEvent.input(screen.getByLabelText("Email"), {
+    target: { value: "new@example.com" },
+  });
+  await fireEvent.input(screen.getByLabelText("IMAP host"), {
+    target: { value: "imap.new.com" },
+  });
+  await fireEvent.input(screen.getByLabelText("SMTP host"), {
+    target: { value: "smtp.new.com" },
+  });
+  await fireEvent.input(screen.getByLabelText("Username"), {
+    target: { value: "new@example.com" },
+  });
+  await fireEvent.input(screen.getByLabelText("Password"), {
+    target: { value: "pw" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+  expect(await screen.findByText("New")).toBeInTheDocument();
+  expect(api.addAccount).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "New", imapHost: "imap.new.com" }),
+    "pw",
+  );
+  expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
+});
+
+it("deletes an account and falls back to the unified inbox", async () => {
+  render(App);
+  await fireEvent.click(await screen.findByText("Work"));
+  await screen.findByText("Re: Invoice");
+
+  await fireEvent.click(screen.getByLabelText("Delete Work"));
+
+  expect(api.deleteAccount).toHaveBeenCalledWith(2);
+  expect(await screen.findByText("Weekend plans")).toBeInTheDocument();
+  expect(screen.queryByText("Work")).not.toBeInTheDocument();
 });
