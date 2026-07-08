@@ -16,7 +16,7 @@ it("submits the account payload and the password separately", async () => {
   await fill("SMTP host", "smtp.vocalio.sk");
   await fill("Username", "hello@vocalio.sk");
   await fill("Password", "s3cret");
-  await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Verify & Save" }));
 
   expect(onSubmit).toHaveBeenCalledWith(
     {

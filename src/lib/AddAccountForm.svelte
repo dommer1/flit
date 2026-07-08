@@ -5,9 +5,11 @@
     onSubmit,
     onCancel,
   }: {
-    onSubmit: (account: NewAccount, password: string) => void;
+    onSubmit: (account: NewAccount, password: string) => Promise<void> | void;
     onCancel: () => void;
   } = $props();
+
+  let submitting = $state(false);
 
   let name = $state("");
   let email = $state("");
@@ -18,12 +20,17 @@
   let username = $state("");
   let password = $state("");
 
-  function submit(event: SubmitEvent) {
+  async function submit(event: SubmitEvent) {
     event.preventDefault();
-    onSubmit(
-      { name, email, imapHost, imapPort, smtpHost, smtpPort, username },
-      password,
-    );
+    submitting = true;
+    try {
+      await onSubmit(
+        { name, email, imapHost, imapPort, smtpHost, smtpPort, username },
+        password,
+      );
+    } finally {
+      submitting = false;
+    }
   }
 </script>
 
@@ -51,7 +58,11 @@
 
   <footer>
     <button type="button" onclick={onCancel}>Cancel</button>
-    <button type="submit">Add</button>
+    <!-- why: saving is gated on a live IMAP+SMTP check (test_connection),
+         hence the label — the button pins the invariant into the UI. -->
+    <button type="submit" disabled={submitting}>
+      {submitting ? "Verifying…" : "Verify & Save"}
+    </button>
   </footer>
 </form>
 

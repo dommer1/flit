@@ -32,6 +32,7 @@ vi.mock("./api", () => ({
     ...account,
   })),
   deleteAccount: vi.fn(async () => undefined),
+  testConnection: vi.fn(async () => undefined),
   confirmAccountDeletion: vi.fn(async () => true),
   closeSettings: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async () => () => {}),
@@ -62,7 +63,7 @@ async function fillAccountForm() {
   await fireEvent.input(screen.getByLabelText("Password"), {
     target: { value: "pw" },
   });
-  await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Verify & Save" }));
 }
 
 it("loads accounts and shows the first one's details", async () => {
@@ -80,6 +81,10 @@ it("adds an account through the form", async () => {
 
   await fillAccountForm();
 
+  expect(api.testConnection).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "New", imapHost: "imap.new.com" }),
+    "pw",
+  );
   expect(api.addAccount).toHaveBeenCalledWith(
     expect.objectContaining({ name: "New", imapHost: "imap.new.com" }),
     "pw",
@@ -89,8 +94,25 @@ it("adds an account through the form", async () => {
     await screen.findByText("imap.example.com:993"),
   ).toBeInTheDocument();
   expect(
-    screen.queryByRole("button", { name: "Add" }),
+    screen.queryByRole("button", { name: "Verify & Save" }),
   ).not.toBeInTheDocument();
+});
+
+it("does not save the account when verification fails", async () => {
+  vi.mocked(api.testConnection).mockRejectedValueOnce("imap error: login: no");
+  vi.mocked(api.addAccount).mockClear();
+  render(SettingsWindow);
+  await screen.findByText("imap.example.com:993");
+
+  await fillAccountForm();
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "imap error: login: no",
+  );
+  expect(api.addAccount).not.toHaveBeenCalled();
+  expect(
+    screen.getByRole("button", { name: "Verify & Save" }),
+  ).toBeInTheDocument();
 });
 
 it("deletes the selected account after native confirmation", async () => {
@@ -129,7 +151,7 @@ it("shows an error and keeps the form open when adding fails", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "keychain says no",
   );
-  expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Verify & Save" })).toBeInTheDocument();
 });
 
 it("closes the window on escape", async () => {

@@ -7,6 +7,7 @@
     deleteAccount,
     listAccounts,
     onAccountsChanged,
+    testConnection,
   } from "./api";
   import type { Account, NewAccount } from "./types";
   import AccountsPane from "./AccountsPane.svelte";
@@ -24,6 +25,9 @@
   ): Promise<Account | null> {
     lastError = null;
     try {
+      // why: Verify & Save — the account is only stored after both servers
+      // accepted the credentials (decided 2026-07-08, see CLAUDE.md phase 2).
+      await testConnection(account, password);
       const created = await addAccount(account, password);
       await refresh();
       return created;

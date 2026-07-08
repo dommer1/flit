@@ -59,7 +59,7 @@ async function fillAccountForm() {
   await fireEvent.input(screen.getByLabelText("Password"), {
     target: { value: "pw" },
   });
-  await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Verify & Save" }));
 }
 
 it("shows the first account's details by default", () => {
@@ -97,7 +97,7 @@ it("submits a new account and closes the form on success", async () => {
     "pw",
   );
   expect(
-    screen.queryByRole("button", { name: "Add" }),
+    screen.queryByRole("button", { name: "Verify & Save" }),
   ).not.toBeInTheDocument();
 });
 
@@ -107,7 +107,7 @@ it("keeps the form open when adding fails", async () => {
   await fillAccountForm();
 
   expect(onAdd).toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Verify & Save" })).toBeInTheDocument();
 });
 
 it("shows an empty state and disables delete without accounts", () => {
