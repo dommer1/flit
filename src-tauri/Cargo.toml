@@ -26,5 +26,22 @@ tauri-plugin-dialog = "2"
 keyring = "4"
 thiserror = "2"
 # why: rt is needed for task::spawn_blocking (keychain calls are sync and must
-# not block the async executor); macros is compile-time only (#[tokio::test]).
-tokio = { version = "1", features = ["rt", "macros"] }
+# not block the async executor); net/time for IMAP TCP connects with timeouts;
+# macros is compile-time only (#[tokio::test]).
+tokio = { version = "1", features = ["rt", "macros", "net", "time"] }
+# why: async-imap defaults to async-std — runtime-tokio must be selected
+# explicitly. It has no TLS of its own; async-native-tls wraps the TCP stream
+# first (macOS SecureTransport, so system cert store just works).
+async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
+async-native-tls = { version = "0.6", default-features = false, features = ["runtime-tokio"] }
+mail-parser = "0.11"
+ammonia = "4"
+# why: async-imap fetch results arrive as a Stream; futures provides the
+# collect combinators.
+futures = "0.3"
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "tokio1",
+    "tokio1-native-tls",
+    "builder",
+] }
