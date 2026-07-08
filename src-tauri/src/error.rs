@@ -19,6 +19,8 @@ pub enum AppError {
     // tuples and we add context (connect/tls/login) at each call site.
     #[error("imap error: {0}")]
     Imap(String),
+    #[error("smtp error: {0}")]
+    Smtp(String),
 }
 
 // why: Serialize can't be derived here because the wrapped errors (sqlx,
