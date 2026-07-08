@@ -99,7 +99,7 @@ Threading/conversation view, full-text search, IMAP IDLE/push, snooze, send-late
 
 0. **Skeleton** — three empty panes, mock data, prove `invoke()` round-trips.
 1. **Account model + storage** — SQLite schema with `account_id`; account CRUD; Keychain for secrets. (Before any real fetching.)
-2. **Read path** — one IMAP account: fetch headers → list → click → body in the sandboxed webview (JS off, remote images blocked).
+2. **Read path** — one IMAP account: fetch headers → list → click → body in the sandboxed webview (JS off, remote images blocked). Also: connection check in the add-account flow ("Verify & Save" — IMAP TLS connect + LOGIN, SMTP connect; save only on success). Decided 2026-07-08: phase 1 stores accounts unverified.
 3. **Multi-account + unified inbox** — parallel fetch, merge, "All Inboxes" view.
 4. **Write path** — compose, reply (correct From), send via SMTP.
 5. **Gmail OAuth2** — Google Cloud app (testing mode), XOAUTH2. Only after plain IMAP works.
