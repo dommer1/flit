@@ -5,12 +5,10 @@
     accounts,
     selectedId,
     onSelect,
-    onOpenSettings,
   }: {
     accounts: Account[];
     selectedId: number | null;
     onSelect: (id: number | null) => void;
-    onOpenSettings: () => void;
   } = $props();
 </script>
 
@@ -33,8 +31,6 @@
       <span class="email">{account.email}</span>
     </button>
   {/each}
-
-  <button class="settings" onclick={onOpenSettings}>Settings</button>
 </nav>
 
 <style>
@@ -42,8 +38,6 @@
     display: flex;
     flex-direction: column;
     gap: 0.125rem;
-    box-sizing: border-box;
-    height: 100%;
     padding: 0.5rem;
   }
 
@@ -71,17 +65,6 @@
   .row.active {
     background: rgba(0, 0, 0, 0.08);
     font-weight: 600;
-  }
-
-  .settings {
-    margin-top: auto;
-    padding: 0.5rem 0.625rem;
-    color: #666;
-    font-size: 0.75rem;
-  }
-
-  .settings:hover {
-    background: rgba(0, 0, 0, 0.05);
   }
 
   .email {

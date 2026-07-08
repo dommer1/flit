@@ -1,11 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import {
-    listAccounts,
-    listMessages,
-    onAccountsChanged,
-    openSettings,
-  } from "./lib/api";
+  import { listAccounts, listMessages, onAccountsChanged } from "./lib/api";
   import type { Account, MessageHeader } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
   import MessageList from "./lib/MessageList.svelte";
@@ -58,7 +53,6 @@
       {accounts}
       selectedId={selectedAccountId}
       onSelect={selectAccount}
-      onOpenSettings={() => void openSettings()}
     />
   </aside>
   <section class="list">
