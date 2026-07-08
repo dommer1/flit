@@ -3,8 +3,26 @@ import { fireEvent, render, screen } from "@testing-library/svelte";
 import type { Account, MessageHeader } from "./lib/types";
 
 const accounts: Account[] = [
-  { id: 1, name: "Personal", email: "domco@example.com" },
-  { id: 2, name: "Work", email: "hello@vocalio.sk" },
+  {
+    id: 1,
+    name: "Personal",
+    email: "domco@example.com",
+    imapHost: "imap.example.com",
+    imapPort: 993,
+    smtpHost: "smtp.example.com",
+    smtpPort: 587,
+    username: "domco@example.com",
+  },
+  {
+    id: 2,
+    name: "Work",
+    email: "hello@vocalio.sk",
+    imapHost: "imap.vocalio.sk",
+    imapPort: 993,
+    smtpHost: "smtp.vocalio.sk",
+    smtpPort: 587,
+    username: "hello@vocalio.sk",
+  },
 ];
 
 const allMessages: MessageHeader[] = [

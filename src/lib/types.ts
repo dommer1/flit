@@ -4,6 +4,22 @@ export interface Account {
   id: number;
   name: string;
   email: string;
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  username: string;
+}
+
+/** Payload for add_account — the password travels as a separate argument. */
+export interface NewAccount {
+  name: string;
+  email: string;
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  username: string;
 }
 
 export interface MessageHeader {
