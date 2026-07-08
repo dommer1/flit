@@ -56,15 +56,14 @@
 </form>
 
 <style>
+  /* why: no card chrome — the form renders inside the settings detail pane,
+     which already provides padding and a bounded, scrollable container. */
   form {
     display: flex;
     flex-direction: column;
     gap: 0.625rem;
-    width: 20rem;
-    padding: 1rem 1.25rem 1.25rem;
-    border: 1px solid #e5e5e5;
-    border-radius: 0.5rem;
-    background: #fff;
+    width: 100%;
+    max-width: 22rem;
   }
 
   h2 {

@@ -7,7 +7,6 @@
     listMessages,
   } from "./lib/api";
   import type { Account, MessageHeader, NewAccount } from "./lib/types";
-  import AddAccountForm from "./lib/AddAccountForm.svelte";
   import Settings from "./lib/Settings.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import MessageList from "./lib/MessageList.svelte";
@@ -17,7 +16,6 @@
   let messages = $state<MessageHeader[]>([]);
   let selectedAccountId = $state<number | null>(null);
   let selectedMessageId = $state<number | null>(null);
-  let showAddForm = $state(false);
   let showSettings = $state(false);
   let lastError = $state<string | null>(null);
 
@@ -82,8 +80,6 @@
       {accounts}
       selectedId={selectedAccountId}
       onSelect={selectAccount}
-      onAdd={() => (showAddForm = true)}
-      onDelete={handleDeleteAccount}
       onOpenSettings={() => (showSettings = true)}
     />
   </aside>
@@ -105,17 +101,6 @@
     <button aria-label="Dismiss error" onclick={() => (lastError = null)}>
       ×
     </button>
-  </div>
-{/if}
-
-{#if showAddForm}
-  <div class="overlay">
-    <AddAccountForm
-      onSubmit={async (account, password) => {
-        if (await handleAddAccount(account, password)) showAddForm = false;
-      }}
-      onCancel={() => (showAddForm = false)}
-    />
   </div>
 {/if}
 
@@ -157,15 +142,6 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
-  }
-
-  .overlay {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.25);
   }
 
   .error-banner {

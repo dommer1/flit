@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import type { Account, MessageHeader, NewAccount } from "./lib/types";
 
 const accounts: Account[] = [
@@ -132,47 +132,60 @@ it("opens settings from the sidebar button", async () => {
   ).toBeInTheDocument();
 });
 
-it("adds an account through the form", async () => {
+it("adds an account through settings", async () => {
   render(App);
   await screen.findByText("All Inboxes");
 
-  await fireEvent.click(screen.getByText("+ Add account"));
-  await fireEvent.input(screen.getByLabelText("Name"), {
+  await fireEvent.click(screen.getByText("Settings"));
+  const dialog = await screen.findByRole("dialog", { name: "Settings" });
+
+  await fireEvent.click(within(dialog).getByLabelText("Add account"));
+  await fireEvent.input(within(dialog).getByLabelText("Name"), {
     target: { value: "New" },
   });
-  await fireEvent.input(screen.getByLabelText("Email"), {
+  await fireEvent.input(within(dialog).getByLabelText("Email"), {
     target: { value: "new@example.com" },
   });
-  await fireEvent.input(screen.getByLabelText("IMAP host"), {
+  await fireEvent.input(within(dialog).getByLabelText("IMAP host"), {
     target: { value: "imap.new.com" },
   });
-  await fireEvent.input(screen.getByLabelText("SMTP host"), {
+  await fireEvent.input(within(dialog).getByLabelText("SMTP host"), {
     target: { value: "smtp.new.com" },
   });
-  await fireEvent.input(screen.getByLabelText("Username"), {
+  await fireEvent.input(within(dialog).getByLabelText("Username"), {
     target: { value: "new@example.com" },
   });
-  await fireEvent.input(screen.getByLabelText("Password"), {
+  await fireEvent.input(within(dialog).getByLabelText("Password"), {
     target: { value: "pw" },
   });
-  await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
 
-  expect(await screen.findByText("New")).toBeInTheDocument();
   expect(api.addAccount).toHaveBeenCalledWith(
     expect.objectContaining({ name: "New", imapHost: "imap.new.com" }),
     "pw",
   );
-  expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
+  // the created account is selected and shown in the detail pane
+  expect(
+    await within(dialog).findByText("imap.new.com:993"),
+  ).toBeInTheDocument();
+
+  await fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.getByText("New")).toBeInTheDocument();
 });
 
-it("deletes an account and falls back to the unified inbox", async () => {
+it("deletes an account via settings and falls back to the unified inbox", async () => {
   render(App);
   await fireEvent.click(await screen.findByText("Work"));
   await screen.findByText("Re: Invoice");
 
-  await fireEvent.click(screen.getByLabelText("Delete Work"));
+  await fireEvent.keyDown(window, { key: ",", metaKey: true });
+  const dialog = await screen.findByRole("dialog", { name: "Settings" });
+  await fireEvent.click(within(dialog).getByText("Work"));
+  await fireEvent.click(within(dialog).getByLabelText("Delete account"));
 
   expect(api.deleteAccount).toHaveBeenCalledWith(2);
+
+  await fireEvent.keyDown(window, { key: "Escape" });
   expect(await screen.findByText("Weekend plans")).toBeInTheDocument();
   expect(screen.queryByText("Work")).not.toBeInTheDocument();
 });
