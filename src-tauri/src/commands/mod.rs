@@ -1,7 +1,6 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
-use crate::mock;
 use crate::models::{Account, MessageHeader, NewAccount};
 use crate::state::AppState;
 use crate::{auth, storage};
@@ -48,10 +47,12 @@ pub async fn delete_account(
     Ok(())
 }
 
-// why: messages stay mocked until Phase 2 wires real IMAP fetching.
 #[tauri::command]
-pub fn list_messages(account_id: Option<i64>) -> Result<Vec<MessageHeader>, AppError> {
-    Ok(mock::messages(account_id))
+pub async fn list_messages(
+    state: State<'_, AppState>,
+    account_id: Option<i64>,
+) -> Result<Vec<MessageHeader>, AppError> {
+    storage::messages::list(&state.pool, account_id).await
 }
 
 // why: async on purpose — Tauri docs warn that creating windows from a sync

@@ -1,7 +1,6 @@
 pub mod auth;
 mod commands;
 pub mod error;
-mod mock;
 mod models;
 pub mod state;
 pub mod storage;
