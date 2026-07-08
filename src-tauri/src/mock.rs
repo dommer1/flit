@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn accounts_have_unique_ids() {
         let accounts = accounts();
-        let mut ids: Vec<u32> = accounts.iter().map(|a| a.id).collect();
+        let mut ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
         ids.dedup();
         assert_eq!(ids.len(), accounts.len());
     }
