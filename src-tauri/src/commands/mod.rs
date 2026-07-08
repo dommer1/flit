@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::error::AppError;
 use crate::models::{Account, MessageHeader, NewAccount};
 use crate::state::AppState;
-use crate::{auth, storage};
+use crate::{auth, mail, storage};
 
 // why: commands stay thin — validate/orchestrate, call a module, return
 // Result. Business logic lives in storage/ and auth/, which are unit-tested.
@@ -44,6 +44,22 @@ pub async fn delete_account(
     auth::delete_password(id).await?;
     storage::accounts::delete(&state.pool, id).await?;
     app.emit("accounts-changed", ())?;
+    Ok(())
+}
+
+/// Sync one account's INBOX headers into the local cache.
+#[tauri::command]
+pub async fn sync_inbox(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    account_id: i64,
+) -> Result<(), AppError> {
+    let account = storage::accounts::get(&state.pool, account_id).await?;
+    // why: the password is read from the keychain at call time and lives only
+    // on this task's stack — never in state, events, or logs.
+    let password = auth::get_password(account_id).await?;
+    mail::sync::sync_inbox(&state.pool, &account, &password).await?;
+    app.emit("messages-changed", account_id)?;
     Ok(())
 }
 

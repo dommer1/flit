@@ -33,6 +33,16 @@ export function listMessages(accountId: number | null): Promise<MessageHeader[]>
   return invoke<MessageHeader[]>("list_messages", { accountId });
 }
 
+/** Fire-and-forget header sync for one account's inbox. */
+export function syncInbox(accountId: number): Promise<void> {
+  return invoke<void>("sync_inbox", { accountId });
+}
+
+/** Fires whenever the message cache changes (any account, any window). */
+export function onMessagesChanged(callback: () => void): Promise<UnlistenFn> {
+  return listen("messages-changed", callback);
+}
+
 export function openSettings(): Promise<void> {
   return invoke<void>("open_settings");
 }

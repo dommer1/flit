@@ -24,6 +24,15 @@ pub async fn insert(pool: &SqlitePool, account: &NewAccount) -> Result<Account, 
     Ok(inserted)
 }
 
+/// One account by id; errors (RowNotFound) when it doesn't exist.
+pub async fn get(pool: &SqlitePool, id: i64) -> Result<Account, AppError> {
+    let account = sqlx::query_as("SELECT * FROM accounts WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+    Ok(account)
+}
+
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Account>, AppError> {
     let accounts = sqlx::query_as("SELECT * FROM accounts ORDER BY id")
         .fetch_all(pool)
@@ -90,6 +99,17 @@ mod tests {
         delete(&pool, account.id).await.unwrap();
 
         assert!(list(&pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_returns_the_account_or_errors() {
+        let pool = test_pool().await;
+        let inserted = insert(&pool, &sample("Personal")).await.unwrap();
+
+        let found = get(&pool, inserted.id).await.unwrap();
+
+        assert_eq!(found.email, "personal@example.com");
+        assert!(get(&pool, 999).await.is_err());
     }
 
     #[tokio::test]
