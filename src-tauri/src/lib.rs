@@ -1,4 +1,5 @@
 mod commands;
+pub mod error;
 mod mock;
 mod models;
 

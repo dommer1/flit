@@ -1,0 +1,43 @@
+use serde::Serializer;
+
+/// App-wide error type returned by every fallible `#[tauri::command]`.
+#[derive(Debug, thiserror::Error)]
+pub enum AppError {
+    #[error("database error: {0}")]
+    Db(#[from] sqlx::Error),
+    #[error("migration error: {0}")]
+    Migrate(#[from] sqlx::migrate::MigrateError),
+    #[error("keychain error: {0}")]
+    Keychain(#[from] keyring::Error),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("background task failed: {0}")]
+    TaskJoin(#[from] tokio::task::JoinError),
+}
+
+// why: Serialize can't be derived here because the wrapped errors (sqlx,
+// keyring, io) don't implement it. The official Tauri v2 pattern is a manual
+// impl that serializes the Display string, so a failed invoke() rejects with
+// a readable message on the frontend.
+impl serde::Serialize for AppError {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serializes_to_display_string() {
+        let err = AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing file",
+        ));
+
+        let json = serde_json::to_string(&err).unwrap();
+
+        assert_eq!(json, "\"io error: missing file\"");
+    }
+}
