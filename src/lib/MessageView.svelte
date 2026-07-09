@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getMessageBody } from "./api";
+  import { formatFullDate, senderInitials, senderName } from "./format";
   import type { MessageBody, MessageHeader } from "./types";
 
   let { message }: { message: MessageHeader | null } = $props();
@@ -34,11 +35,14 @@
     <p class="empty">Select a message</p>
   {:else}
     <header>
-      <h2>{message.subject}</h2>
-      <p class="meta">
-        <span class="from">{message.from}</span>
-        <span class="date">{message.date}</span>
-      </p>
+      <span class="avatar" aria-hidden="true">
+        {senderInitials(message.from)}
+      </span>
+      <div class="who">
+        <p class="from" title={message.from}>{senderName(message.from)}</p>
+        <h2 class="subject">{message.subject}</h2>
+      </div>
+      <span class="date">{formatFullDate(message.date)}</span>
     </header>
     {#if loading}
       <p class="empty">Loading…</p>
@@ -66,38 +70,77 @@
   article {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
     flex: 1;
-    padding: 1.25rem 1.5rem;
-    overflow-y: auto;
+    min-height: 0;
+    background: var(--bg-window);
   }
 
   .empty {
     margin: auto;
-    color: #888;
+    color: var(--text-tertiary);
   }
 
   .error {
     margin: 0;
-    color: #8a1f1f;
+    padding: 16px 20px;
+    color: #d9302c;
   }
 
-  h2 {
-    margin: 0 0 0.375rem;
-    font-size: 1.125rem;
-  }
-
-  .meta {
+  header {
     display: flex;
-    justify-content: space-between;
-    gap: 0.5rem;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .avatar {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #a8b0bd, #8b95a6);
+    font-size: 15px;
+    font-weight: 600;
+    color: #ffffff;
+  }
+
+  .who {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .who > * {
+    overflow: hidden;
     margin: 0;
-    font-size: 0.8125rem;
-    color: #666;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .from {
+    font-weight: 600;
+  }
+
+  .subject {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
+
+  .date {
+    flex-shrink: 0;
+    align-self: flex-start;
+    font-size: 11px;
+    color: var(--text-secondary);
   }
 
   .body {
     margin: 0;
+    padding: 16px 20px;
+    overflow-y: auto;
     font: inherit;
     line-height: 1.5;
     white-space: pre-wrap;
