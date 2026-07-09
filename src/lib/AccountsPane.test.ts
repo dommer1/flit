@@ -13,6 +13,8 @@ const accounts: Account[] = [
     smtpHost: "smtp.example.com",
     smtpPort: 587,
     username: "domco@example.com",
+    lastError: null,
+    checkedAt: 1751900000,
   },
   {
     id: 2,
@@ -23,6 +25,8 @@ const accounts: Account[] = [
     smtpHost: "smtp.vocalio.sk",
     smtpPort: 587,
     username: "hello@vocalio.sk",
+    lastError: null,
+    checkedAt: 1751900000,
   },
 ];
 
@@ -108,6 +112,37 @@ it("keeps the form open when adding fails", async () => {
 
   expect(onAdd).toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Verify & Save" })).toBeInTheDocument();
+});
+
+it("shows connected status for a healthy account", () => {
+  renderPane();
+
+  expect(screen.getByText("Connected")).toBeInTheDocument();
+  expect(screen.queryByTitle("Connection problem")).not.toBeInTheDocument();
+});
+
+it("shows the error and a list warning for a broken account", async () => {
+  const broken = {
+    ...accounts[1],
+    lastError: "imap error: login: denied",
+    checkedAt: 1751990000,
+  };
+  renderPane({ accounts: [accounts[0], broken] });
+
+  // warning marker in the list, visible without selecting the account
+  expect(screen.getByTitle("Connection problem")).toBeInTheDocument();
+
+  await fireEvent.click(screen.getByText("Work"));
+
+  expect(screen.getByText("imap error: login: denied")).toBeInTheDocument();
+  expect(screen.queryByText("Connected")).not.toBeInTheDocument();
+});
+
+it("shows not-checked-yet for a brand new account", () => {
+  const fresh = { ...accounts[0], lastError: null, checkedAt: null };
+  renderPane({ accounts: [fresh] });
+
+  expect(screen.getByText("Not checked yet")).toBeInTheDocument();
 });
 
 it("shows an empty state and disables delete without accounts", () => {

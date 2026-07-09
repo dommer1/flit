@@ -48,7 +48,12 @@
               adding = false;
             }}
           >
-            <span class="name">{account.name}</span>
+            <span class="name">
+              {account.name}
+              {#if account.lastError}
+                <span class="warning" title="Connection problem">⚠︎</span>
+              {/if}
+            </span>
             <span class="email">{account.email}</span>
           </button>
         </li>
@@ -76,6 +81,19 @@
       />
     {:else if selected}
       <dl>
+        <dt>Status</dt>
+        <dd>
+          {#if selected.lastError}
+            <span class="status broken">{selected.lastError}</span>
+          {:else if selected.checkedAt !== null}
+            <span class="status ok">Connected</span>
+            <span class="checked-at">
+              checked {new Date(selected.checkedAt * 1000).toLocaleString()}
+            </span>
+          {:else}
+            <span class="status unknown">Not checked yet</span>
+          {/if}
+        </dd>
         <dt>Name</dt>
         <dd>{selected.name}</dd>
         <dt>Email</dt>
@@ -146,6 +164,33 @@
   .email {
     font-size: 0.75rem;
     font-weight: 400;
+    color: #666;
+  }
+
+  .warning {
+    margin-left: 0.25rem;
+    color: #b26b00;
+  }
+
+  .status::before {
+    content: "● ";
+  }
+
+  .status.ok::before {
+    color: #2e7d32;
+  }
+
+  .status.broken {
+    color: #8a1f1f;
+  }
+
+  .status.unknown::before {
+    color: #999;
+  }
+
+  .checked-at {
+    margin-left: 0.375rem;
+    font-size: 0.75rem;
     color: #666;
   }
 

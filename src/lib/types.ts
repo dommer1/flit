@@ -9,6 +9,10 @@ export interface Account {
   smtpHost: string;
   smtpPort: number;
   username: string;
+  /** Error message from the last connection check; null = healthy. */
+  lastError: string | null;
+  /** Unix seconds of the last check; null = never checked yet. */
+  checkedAt: number | null;
 }
 
 /** Payload for add_account — the password travels as a separate argument. */

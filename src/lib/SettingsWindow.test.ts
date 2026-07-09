@@ -12,6 +12,8 @@ const accounts: Account[] = [
     smtpHost: "smtp.example.com",
     smtpPort: 587,
     username: "domco@example.com",
+    lastError: null,
+    checkedAt: 1751900000,
   },
   {
     id: 2,
@@ -22,6 +24,8 @@ const accounts: Account[] = [
     smtpHost: "smtp.vocalio.sk",
     smtpPort: 587,
     username: "hello@vocalio.sk",
+    lastError: null,
+    checkedAt: 1751900000,
   },
 ];
 
