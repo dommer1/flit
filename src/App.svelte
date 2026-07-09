@@ -170,20 +170,13 @@
 </div>
 
 <style>
-  :global(body) {
-    margin: 0;
-    font-family: system-ui, sans-serif;
-    font-size: 0.875rem;
-    color: #1a1a1a;
-  }
-
   .layout {
     display: grid;
     height: 100vh;
   }
 
   aside {
-    background: #fafafa;
+    background: var(--bg-sidebar);
     overflow-y: auto;
   }
 
@@ -195,7 +188,7 @@
      a drag handle, with a wider invisible grab area via the ::after overlay. */
   .divider {
     position: relative;
-    background: #e5e5e5;
+    background: var(--divider);
     cursor: col-resize;
     touch-action: none;
   }
@@ -211,7 +204,7 @@
 
   .divider:focus-visible {
     outline: none;
-    background: #6b9fff;
+    background: var(--accent);
   }
 
   .view {

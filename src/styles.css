@@ -1,0 +1,62 @@
+/* Design tokens shared by every window. Values approximate the macOS light
+   and dark system palettes so the app reads as native in the webview. */
+
+:root {
+  color-scheme: light dark;
+
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui,
+    sans-serif;
+
+  --accent: #007aff;
+  --accent-text: #ffffff;
+
+  --bg-window: #ffffff;
+  --bg-sidebar: #f2f1f6;
+  --bg-hover: rgba(0, 0, 0, 0.045);
+  --bg-selected-muted: rgba(0, 0, 0, 0.08);
+
+  --text-primary: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #98989d;
+
+  --divider: rgba(0, 0, 0, 0.12);
+  --hairline: rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #0a84ff;
+
+    --bg-window: #1e1e1e;
+    --bg-sidebar: #29282b;
+    --bg-hover: rgba(255, 255, 255, 0.06);
+    --bg-selected-muted: rgba(255, 255, 255, 0.1);
+
+    --text-primary: #f5f5f7;
+    --text-secondary: #98989d;
+    --text-tertiary: #6e6e73;
+
+    --divider: rgba(255, 255, 255, 0.14);
+    --hairline: rgba(255, 255, 255, 0.1);
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg-window);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  /* why: a native app's chrome is not selectable or draggable text — content
+     panes (message body, inputs) opt back in below. */
+  user-select: none;
+  cursor: default;
+}
+
+input,
+textarea,
+pre {
+  user-select: text;
+}

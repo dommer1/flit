@@ -1,3 +1,4 @@
+import "./styles.css";
 import { mount } from "svelte";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import App from "./App.svelte";
