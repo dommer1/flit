@@ -94,8 +94,20 @@
     })();
   }
 
+  // why: plain variable, not $state — nothing renders from it; it only stops
+  // the very first refresh from double-syncing what onMount already syncs.
+  let accountsLoaded = false;
+
   async function refreshAccounts() {
+    const known = new Set(accounts.map((a) => a.id));
     accounts = await listAccounts();
+    // why: an account just added in settings syncs right away, so its
+    // messages and connection status appear without waiting for a selection.
+    if (accountsLoaded) {
+      const added = accounts.filter((a) => !known.has(a.id));
+      if (added.length > 0) startSync(added.map((a) => a.id));
+    }
+    accountsLoaded = true;
     // why: if the selected account was deleted in the settings window, fall
     // back to the unified inbox instead of filtering by a dead account.
     if (

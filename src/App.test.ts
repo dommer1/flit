@@ -190,6 +190,20 @@ it("refreshes accounts when another window changes them", async () => {
   expect(await screen.findByText("Third")).toBeInTheDocument();
 });
 
+it("syncs a newly added account immediately", async () => {
+  render(App);
+  await screen.findByText("Work");
+
+  currentAccounts = [
+    ...accounts,
+    { ...accounts[0], id: 3, name: "Third", email: "third@example.com" },
+  ];
+  accountsChanged?.();
+  await screen.findByText("Third");
+
+  await waitFor(() => expect(api.syncInbox).toHaveBeenCalledWith(3));
+});
+
 // why MouseEvent: jsdom has no PointerEvent constructor; a MouseEvent with a
 // pointer event type still reaches the pointerdown/... listeners with clientX.
 // bubbles is required — Svelte 5 delegates onpointerdown to the app root.
