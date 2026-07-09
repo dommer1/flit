@@ -73,6 +73,7 @@ vi.mock("./lib/api", () => ({
 }));
 
 import * as api from "./lib/api";
+import { PANE_WIDTHS_KEY } from "./lib/paneSizes";
 import App from "./App.svelte";
 
 beforeEach(() => {
@@ -80,6 +81,7 @@ beforeEach(() => {
   currentMessages = [...allMessages];
   accountsChanged = undefined;
   messagesChanged = undefined;
+  localStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -175,6 +177,80 @@ it("refreshes accounts when another window changes them", async () => {
   accountsChanged?.();
 
   expect(await screen.findByText("Third")).toBeInTheDocument();
+});
+
+// why MouseEvent: jsdom has no PointerEvent constructor; a MouseEvent with a
+// pointer event type still reaches the pointerdown/... listeners with clientX.
+// bubbles is required — Svelte 5 delegates onpointerdown to the app root.
+async function dragSeparator(
+  separator: HTMLElement,
+  fromX: number,
+  toX: number,
+) {
+  await fireEvent(
+    separator,
+    new MouseEvent("pointerdown", { clientX: fromX, bubbles: true }),
+  );
+  await fireEvent(
+    separator,
+    new MouseEvent("pointermove", { clientX: toX, bubbles: true }),
+  );
+  await fireEvent(separator, new MouseEvent("pointerup", { bubbles: true }));
+}
+
+it("resizes the sidebar by dragging its divider and persists the width", async () => {
+  render(App);
+  const separator = await screen.findByRole("separator", {
+    name: "Resize sidebar",
+  });
+
+  await dragSeparator(separator, 208, 258);
+
+  expect(separator).toHaveAttribute("aria-valuenow", "258");
+  expect(JSON.parse(localStorage.getItem(PANE_WIDTHS_KEY)!)).toEqual({
+    sidebar: 258,
+    list: 352,
+  });
+});
+
+it("clamps a drag past the pane's minimum width", async () => {
+  render(App);
+  const separator = await screen.findByRole("separator", {
+    name: "Resize message list",
+  });
+
+  await dragSeparator(separator, 560, 0);
+
+  expect(separator).toHaveAttribute("aria-valuenow", "240");
+});
+
+it("restores saved pane widths on start", async () => {
+  localStorage.setItem(
+    PANE_WIDTHS_KEY,
+    JSON.stringify({ sidebar: 300, list: 400 }),
+  );
+  render(App);
+
+  const separator = await screen.findByRole("separator", {
+    name: "Resize sidebar",
+  });
+  expect(separator).toHaveAttribute("aria-valuenow", "300");
+});
+
+it("resizes a pane with arrow keys on the focused divider", async () => {
+  render(App);
+  const separator = await screen.findByRole("separator", {
+    name: "Resize sidebar",
+  });
+
+  await fireEvent.keyDown(separator, { key: "ArrowRight" });
+  await fireEvent.keyDown(separator, { key: "ArrowRight" });
+  await fireEvent.keyDown(separator, { key: "ArrowLeft" });
+
+  expect(separator).toHaveAttribute("aria-valuenow", "224");
+  expect(
+    JSON.parse(localStorage.getItem(PANE_WIDTHS_KEY)!).sidebar,
+  ).toBe(224);
 });
 
 it("falls back to the unified inbox when the selected account disappears", async () => {

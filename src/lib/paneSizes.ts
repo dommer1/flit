@@ -13,13 +13,14 @@ export const PANE_WIDTHS_KEY = "flit.paneWidths";
 
 export const DEFAULT_PANE_WIDTHS: PaneWidths = { sidebar: 208, list: 352 };
 
-const LIMITS: Record<keyof PaneWidths, { min: number; max: number }> = {
-  sidebar: { min: 140, max: 400 },
-  list: { min: 240, max: 640 },
-};
+export const PANE_LIMITS: Record<keyof PaneWidths, { min: number; max: number }> =
+  {
+    sidebar: { min: 140, max: 400 },
+    list: { min: 240, max: 640 },
+  };
 
 export function clampPaneWidth(pane: keyof PaneWidths, width: number): number {
-  const { min, max } = LIMITS[pane];
+  const { min, max } = PANE_LIMITS[pane];
   return Math.min(max, Math.max(min, width));
 }
 
