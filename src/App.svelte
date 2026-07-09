@@ -134,6 +134,10 @@
   });
 </script>
 
+<!-- why: with titleBarStyle Overlay there is no native title bar left to grab,
+     so the strip under the traffic lights becomes the window drag handle. -->
+<div class="titlebar" data-tauri-drag-region></div>
+
 <div
   class="layout"
   style:grid-template-columns={`${paneWidths.sidebar}px 1px ${paneWidths.list}px 1px minmax(0, 1fr)`}
@@ -189,17 +193,28 @@
 </div>
 
 <style>
+  .titlebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--titlebar-inset);
+    z-index: 10;
+  }
+
   .layout {
     display: grid;
     height: 100vh;
   }
 
   aside {
+    padding-top: var(--titlebar-inset);
     background: var(--bg-sidebar);
     overflow-y: auto;
   }
 
   .list {
+    padding-top: var(--titlebar-inset);
     overflow-y: auto;
   }
 
@@ -229,6 +244,7 @@
   .view {
     display: flex;
     flex-direction: column;
+    padding-top: var(--titlebar-inset);
     overflow-y: auto;
   }
 </style>

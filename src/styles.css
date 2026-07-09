@@ -22,6 +22,10 @@
 
   --divider: rgba(0, 0, 0, 0.12);
   --hairline: rgba(0, 0, 0, 0.08);
+
+  /* Height reserved for the macOS traffic lights — the main window uses
+     titleBarStyle Overlay, so the webview extends to the top edge. */
+  --titlebar-inset: 38px;
 }
 
 @media (prefers-color-scheme: dark) {
