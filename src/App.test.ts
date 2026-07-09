@@ -88,11 +88,18 @@ beforeEach(() => {
 it("loads accounts and the unified inbox on start", async () => {
   render(App);
 
-  expect(await screen.findByText("All Inboxes")).toBeInTheDocument();
+  expect(
+    await screen.findByRole("button", { name: "All Inboxes" }),
+  ).toBeInTheDocument();
   expect(screen.getByText("Personal")).toBeInTheDocument();
   expect(screen.getByText("Work")).toBeInTheDocument();
   expect(await screen.findByText("Weekend plans")).toBeInTheDocument();
   expect(screen.getByText("Re: Invoice")).toBeInTheDocument();
+  // the list pane header names the current mailbox and counts its messages
+  expect(
+    screen.getByRole("heading", { name: "All Inboxes" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText("2 messages")).toBeInTheDocument();
 });
 
 it("shows the selected message in the view pane", async () => {

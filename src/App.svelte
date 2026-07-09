@@ -28,6 +28,12 @@
     messages.find((m) => m.id === selectedMessageId) ?? null,
   );
 
+  let listTitle = $derived(
+    selectedAccountId === null
+      ? "All Inboxes"
+      : (accounts.find((a) => a.id === selectedAccountId)?.name ?? "Inbox"),
+  );
+
   let paneWidths = $state<PaneWidths>(loadPaneWidths(localStorage));
 
   function startPaneResize(pane: keyof PaneWidths, event: PointerEvent) {
@@ -144,6 +150,7 @@
   ></div>
   <section class="list">
     <MessageList
+      title={listTitle}
       {messages}
       selectedId={selectedMessageId}
       onSelect={(id) => (selectedMessageId = id)}

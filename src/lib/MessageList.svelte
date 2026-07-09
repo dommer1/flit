@@ -1,108 +1,202 @@
 <script lang="ts">
+  import { formatListDate, senderName } from "./format";
   import type { MessageHeader } from "./types";
 
   let {
+    title,
     messages,
     selectedId,
     onSelect,
   }: {
+    title: string;
     messages: MessageHeader[];
     selectedId: number | null;
     onSelect: (id: number) => void;
   } = $props();
 </script>
 
-<div class="list" role="listbox" aria-label="Messages">
-  {#if messages.length === 0}
-    <p class="empty">No messages</p>
-  {:else}
-    {#each messages as message (message.id)}
-      <button
-        role="option"
-        aria-selected={selectedId === message.id}
-        class:selected={selectedId === message.id}
-        class:unread={!message.read}
-        onclick={() => onSelect(message.id)}
-      >
-        <span class="row">
-          <span class="from">{message.from}</span>
-          <span class="date">{message.date.slice(0, 10)}</span>
-        </span>
-        <span class="subject">{message.subject}</span>
-        <span class="snippet">{message.snippet}</span>
-      </button>
-    {/each}
-  {/if}
+<div class="pane">
+  <header>
+    <h1>{title}</h1>
+    <p class="count">
+      {messages.length}
+      {messages.length === 1 ? "message" : "messages"}
+    </p>
+  </header>
+
+  <div class="list" role="listbox" aria-label="Messages">
+    {#if messages.length === 0}
+      <p class="empty">No Messages</p>
+    {:else}
+      {#each messages as message (message.id)}
+        <button
+          role="option"
+          aria-selected={selectedId === message.id}
+          class:selected={selectedId === message.id}
+          class:unread={!message.read}
+          onclick={() => onSelect(message.id)}
+        >
+          <span class="dot" aria-hidden="true"></span>
+          <span class="content">
+            <span class="row">
+              <span class="from">{senderName(message.from)}</span>
+              <span class="date">{formatListDate(message.date)}</span>
+            </span>
+            <span class="subject">{message.subject}</span>
+            <span class="snippet">{message.snippet}</span>
+          </span>
+        </button>
+      {/each}
+    {/if}
+  </div>
 </div>
 
 <style>
-  .list {
+  .pane {
     display: flex;
     flex-direction: column;
+    height: 100%;
+    background: var(--bg-window);
+  }
+
+  header {
+    flex-shrink: 0;
+    padding: 12px 16px 8px;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  .count {
+    margin: 1px 0 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  .list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 4px 6px;
     overflow-y: auto;
   }
 
   .empty {
-    padding: 1rem;
-    color: #888;
-    text-align: center;
+    margin: auto;
+    color: var(--text-tertiary);
   }
 
   button {
     display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-    padding: 0.625rem 0.75rem;
+    align-items: flex-start;
+    padding: 7px 8px 7px 4px;
     border: none;
-    border-bottom: 1px solid #eee;
+    border-radius: 7px;
     background: none;
     font: inherit;
+    color: inherit;
     text-align: left;
-    cursor: pointer;
+    cursor: default;
   }
 
-  button:hover {
-    background: rgba(0, 0, 0, 0.03);
+  /* Inset separators between rows, hidden around the selected one —
+     the Apple Mail look. */
+  button + button {
+    position: relative;
+  }
+
+  button + button::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: 20px;
+    right: 8px;
+    height: 1px;
+    background: var(--hairline);
+  }
+
+  button.selected + button::before,
+  button.selected::before {
+    background: transparent;
   }
 
   button.selected {
-    background: rgba(0, 0, 0, 0.07);
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  .dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    margin: 5px 4px 0 0;
+    border-radius: 50%;
+  }
+
+  .unread .dot {
+    background: var(--accent);
+  }
+
+  .selected.unread .dot {
+    background: var(--accent-text);
+  }
+
+  .content {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    flex: 1;
   }
 
   .row {
     display: flex;
     justify-content: space-between;
-    gap: 0.5rem;
-    width: 100%;
+    align-items: baseline;
+    gap: 8px;
   }
 
   .from {
     overflow: hidden;
+    font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .unread .from,
-  .unread .subject {
-    font-weight: 600;
   }
 
   .date {
     flex-shrink: 0;
-    font-size: 0.75rem;
-    color: #888;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  .selected .date {
+    color: var(--accent-text);
+    opacity: 0.85;
   }
 
   .subject {
-    font-size: 0.875rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .snippet {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     overflow: hidden;
-    font-size: 0.8125rem;
-    color: #777;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
+    font-size: 12px;
+    line-height: 1.3;
+    color: var(--text-secondary);
+  }
+
+  .selected .snippet {
+    color: var(--accent-text);
+    opacity: 0.85;
   }
 </style>
