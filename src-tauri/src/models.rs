@@ -15,6 +15,10 @@ pub struct Account {
     pub smtp_host: String,
     pub smtp_port: u16,
     pub username: String,
+    /// Error message from the last connection check; `None` = healthy.
+    pub last_error: Option<String>,
+    /// Unix seconds of the last check; `None` = never checked yet.
+    pub checked_at: Option<i64>,
 }
 
 /// Payload for creating an account. Deliberately has no password field —

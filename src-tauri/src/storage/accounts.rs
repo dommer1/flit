@@ -40,6 +40,22 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<Account>, AppError> {
     Ok(accounts)
 }
 
+/// Record the outcome of a connection check (`None` error = healthy).
+pub async fn set_status(
+    pool: &SqlitePool,
+    id: i64,
+    error: Option<&str>,
+    checked_at: i64,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE accounts SET last_error = ?, checked_at = ? WHERE id = ?")
+        .bind(error)
+        .bind(checked_at)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Delete an account row. Idempotent — deleting a missing id is not an error.
 pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), AppError> {
     sqlx::query("DELETE FROM accounts WHERE id = ?")
@@ -99,6 +115,26 @@ mod tests {
         delete(&pool, account.id).await.unwrap();
 
         assert!(list(&pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_status_records_and_clears_the_error() {
+        let pool = test_pool().await;
+        let account = insert(&pool, &sample("Personal")).await.unwrap();
+        assert_eq!(account.last_error, None);
+        assert_eq!(account.checked_at, None);
+
+        set_status(&pool, account.id, Some("imap error: login"), 100)
+            .await
+            .unwrap();
+        let broken = get(&pool, account.id).await.unwrap();
+        assert_eq!(broken.last_error.as_deref(), Some("imap error: login"));
+        assert_eq!(broken.checked_at, Some(100));
+
+        set_status(&pool, account.id, None, 200).await.unwrap();
+        let healthy = get(&pool, account.id).await.unwrap();
+        assert_eq!(healthy.last_error, None);
+        assert_eq!(healthy.checked_at, Some(200));
     }
 
     #[tokio::test]

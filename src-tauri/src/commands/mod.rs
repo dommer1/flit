@@ -57,10 +57,29 @@ pub async fn sync_inbox(
     let account = storage::accounts::get(&state.pool, account_id).await?;
     // why: the password is read from the keychain at call time and lives only
     // on this task's stack — never in state, events, or logs.
-    let password = auth::get_password(account_id).await?;
-    mail::sync::sync_inbox(&state.pool, &account, &password).await?;
+    let result = async {
+        let password = auth::get_password(account_id).await?;
+        mail::sync::sync_inbox(&state.pool, &account, &password).await
+    }
+    .await;
+
+    // why: every sync doubles as a health check — the recorded outcome is
+    // what settings shows when credentials go stale server-side.
+    let error_text = result.as_ref().err().map(ToString::to_string);
+    storage::accounts::set_status(&state.pool, account_id, error_text.as_deref(), now_epoch())
+        .await?;
+    app.emit("accounts-changed", ())?;
+
+    result?;
     app.emit("messages-changed", account_id)?;
     Ok(())
+}
+
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[tauri::command]
