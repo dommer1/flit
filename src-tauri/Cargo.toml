@@ -16,7 +16,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# why: macos-private-api unlocks the transparent webview background that the
+# vibrancy backdrop needs (app.macOSPrivateApi in tauri.conf.json).
+tauri = { version = "2", features = ["macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # why: sqlite-bundled statically vendors libsqlite3 so the app doesn't depend
@@ -45,3 +47,6 @@ lettre = { version = "0.11", default-features = false, features = [
     "tokio1-native-tls",
     "builder",
 ] }
+# why: NSVisualEffectView behind the webview — the translucent "glass"
+# sidebar of native macOS apps; pure decoration, no data access.
+window-vibrancy = "0.7.1"

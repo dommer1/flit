@@ -23,6 +23,19 @@ pub fn run() {
             let pool = tauri::async_runtime::block_on(storage::init(&data_dir.join("flit.db")))?;
             app.manage(AppState { pool });
 
+            // why: the main window is transparent (tauri.conf.json) and this
+            // NSVisualEffectView provides the actual backdrop — the frontend
+            // leaves the sidebar area transparent so the blur shows through.
+            #[cfg(target_os = "macos")]
+            {
+                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+
+                let window = app
+                    .get_webview_window("main")
+                    .ok_or("main window not found")?;
+                apply_vibrancy(&window, NSVisualEffectMaterial::Sidebar, None, None)?;
+            }
+
             // why: macOS convention puts "Settings…" (⌘,) in the app menu; we
             // extend Tauri's default menu instead of rebuilding it from
             // scratch so all standard items (Edit, Window, …) stay intact.
