@@ -92,10 +92,10 @@
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 4px 8px;
-    min-height: 28px;
+    padding: 4px 9px;
+    min-height: 30px;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     background: none;
     font: inherit;
     color: inherit;

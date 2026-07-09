@@ -140,7 +140,7 @@
 
 <div
   class="layout"
-  style:grid-template-columns={`${paneWidths.sidebar}px 1px ${paneWidths.list}px 1px minmax(0, 1fr)`}
+  style:grid-template-columns={`${paneWidths.sidebar}px 1px minmax(0, 1fr)`}
 >
   <aside>
     <Sidebar
@@ -153,7 +153,7 @@
        — a focusable separator is the ARIA "window splitter" widget; Svelte's
        checker only knows the static (non-focusable) separator variant. -->
   <div
-    class="divider"
+    class="divider ghost"
     role="separator"
     tabindex="0"
     aria-orientation="vertical"
@@ -164,41 +164,55 @@
     onpointerdown={(e) => startPaneResize("sidebar", e)}
     onkeydown={(e) => nudgePane("sidebar", e)}
   ></div>
-  <section class="list">
-    <MessageList
-      title={listTitle}
-      {messages}
-      selectedId={selectedMessageId}
-      onSelect={(id) => (selectedMessageId = id)}
-    />
-  </section>
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions
-       — a focusable separator is the ARIA "window splitter" widget; Svelte's
-       checker only knows the static (non-focusable) separator variant. -->
-  <div
-    class="divider"
-    role="separator"
-    tabindex="0"
-    aria-orientation="vertical"
-    aria-label="Resize message list"
-    aria-valuenow={paneWidths.list}
-    aria-valuemin={PANE_LIMITS.list.min}
-    aria-valuemax={PANE_LIMITS.list.max}
-    onpointerdown={(e) => startPaneResize("list", e)}
-    onkeydown={(e) => nudgePane("list", e)}
-  ></div>
-  <section class="view">
-    <MessageView message={selectedMessage} />
-  </section>
+  <!-- The list and reading panes share one floating rounded card on top of
+       the window's glass backdrop — the macOS Tahoe content-area look. -->
+  <main
+    class="card"
+    style:grid-template-columns={`${paneWidths.list}px 1px minmax(0, 1fr)`}
+  >
+    <section class="list">
+      <MessageList
+        title={listTitle}
+        {messages}
+        selectedId={selectedMessageId}
+        onSelect={(id) => (selectedMessageId = id)}
+      />
+    </section>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions
+         — a focusable separator is the ARIA "window splitter" widget; Svelte's
+         checker only knows the static (non-focusable) separator variant. -->
+    <div
+      class="divider"
+      role="separator"
+      tabindex="0"
+      aria-orientation="vertical"
+      aria-label="Resize message list"
+      aria-valuenow={paneWidths.list}
+      aria-valuemin={PANE_LIMITS.list.min}
+      aria-valuemax={PANE_LIMITS.list.max}
+      onpointerdown={(e) => startPaneResize("list", e)}
+      onkeydown={(e) => nudgePane("list", e)}
+    ></div>
+    <section class="view">
+      <MessageView message={selectedMessage} />
+    </section>
+  </main>
 </div>
 
 <style>
+  /* why: the vibrancy NSVisualEffectView sits behind the webview — the body
+     must not paint over it. Only this window applies vibrancy, so the rule
+     lives here rather than in the shared stylesheet. */
+  :global(body) {
+    background: transparent;
+  }
+
   .titlebar {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
-    height: var(--titlebar-inset);
+    height: calc(var(--titlebar-inset) - 6px);
     z-index: 10;
   }
 
@@ -209,12 +223,22 @@
 
   aside {
     padding-top: var(--titlebar-inset);
-    background: var(--bg-sidebar);
     overflow-y: auto;
   }
 
+  .card {
+    display: grid;
+    min-width: 0;
+    margin: calc(var(--titlebar-inset) - 6px) 10px 10px 0;
+    border-radius: 10px;
+    background: var(--bg-window);
+    box-shadow:
+      0 0 0 1px var(--hairline),
+      0 8px 28px rgba(0, 0, 0, 0.14);
+    overflow: hidden;
+  }
+
   .list {
-    padding-top: var(--titlebar-inset);
     overflow-y: auto;
   }
 
@@ -236,6 +260,12 @@
     right: -3px;
   }
 
+  /* The sidebar handle is invisible — on the glass backdrop the card edge
+     is the visual boundary, but the grab area stays. */
+  .divider.ghost {
+    background: transparent;
+  }
+
   .divider:focus-visible {
     outline: none;
     background: var(--accent);
@@ -244,7 +274,6 @@
   .view {
     display: flex;
     flex-direction: column;
-    padding-top: var(--titlebar-inset);
     overflow-y: auto;
   }
 </style>
