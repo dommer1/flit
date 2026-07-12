@@ -36,6 +36,20 @@ pub struct NewAccount {
     pub username: String,
 }
 
+/// Payload for send_message: what the compose form submits. Deliberately has
+/// no From field — the sender address always comes from the account row, so
+/// the frontend can never spoof it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingMessage {
+    pub account_id: i64,
+    /// One or more recipients, comma-separated.
+    pub to: String,
+    pub subject: String,
+    /// Plain text only for now — no HTML composing.
+    pub body: String,
+}
+
 /// Body payload for the message viewer. `html`, when present, is already a
 /// full sanitized srcdoc document (mail::sanitize) — never raw mail HTML.
 #[derive(Debug, Clone, Serialize)]
