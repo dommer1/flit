@@ -81,6 +81,31 @@ pub async fn fetch_headers_by_uid(
     Ok(fetches.iter().filter_map(raw_header).collect())
 }
 
+/// RFC822.SIZE for a set of UIDs in one round trip → `(uid, bytes)` pairs.
+/// UIDs the server no longer knows simply don't come back.
+pub async fn fetch_sizes(
+    session: &mut ImapSession,
+    uids: &[i64],
+) -> Result<Vec<(i64, u32)>, AppError> {
+    if uids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let set = uids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let stream = session
+        .uid_fetch(set, "(UID RFC822.SIZE)")
+        .await
+        .map_err(imap_err)?;
+    let fetches: Vec<Fetch> = stream.try_collect().await.map_err(imap_err)?;
+    Ok(fetches
+        .iter()
+        .filter_map(|f| Some((i64::from(f.uid?), f.size?)))
+        .collect())
+}
+
 /// Fetch one full raw message by UID; `None` when the server has no such UID.
 pub async fn fetch_body(session: &mut ImapSession, uid: i64) -> Result<Option<Vec<u8>>, AppError> {
     let stream = session

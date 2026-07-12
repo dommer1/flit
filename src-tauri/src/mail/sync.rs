@@ -8,6 +8,14 @@ use crate::storage::messages::{self, FetchedHeader};
 const MAILBOX: &str = "INBOX";
 const INITIAL_FETCH: u32 = 50;
 
+/// Background prefetch downloads a message's full body only when the whole
+/// message is under this size. Bigger almost always means attachments, and
+/// those stay on the server until the user opens the message.
+const MAX_PREFETCH_BYTES: u32 = 256 * 1024;
+/// Bodies fetched per sync run; matches INITIAL_FETCH so the first run can
+/// cover a fresh mailbox.
+const PREFETCH_BATCH: i64 = 50;
+
 /// What a sync run has to do, decided from cache + server state.
 #[derive(Debug, PartialEq)]
 pub enum SyncPlan {
@@ -69,6 +77,70 @@ pub async fn sync_inbox(
 
     let headers: Vec<FetchedHeader> = raw.iter().map(|r| to_fetched(r, server_validity)).collect();
     messages::upsert_headers(pool, account.id, MAILBOX, &headers).await
+}
+
+/// Cross the prefetch work-list with the sizes the server reported: keep
+/// only messages known to be small enough. No size reported → skipped —
+/// never download blind.
+fn prefetch_plan(missing: &[(i64, i64)], sizes: &[(i64, u32)], max_bytes: u32) -> Vec<(i64, i64)> {
+    missing
+        .iter()
+        .filter(|(_, uid)| {
+            sizes
+                .iter()
+                .any(|(sized_uid, size)| sized_uid == uid && *size <= max_bytes)
+        })
+        .copied()
+        .collect()
+}
+
+/// Download and cache bodies for recent messages that have none, so search
+/// covers mail the user never opened. Returns how many bodies were cached.
+pub async fn prefetch_bodies(
+    pool: &SqlitePool,
+    account: &Account,
+    password: &str,
+) -> Result<usize, AppError> {
+    let missing = messages::uids_missing_body(pool, account.id, MAILBOX, PREFETCH_BATCH).await?;
+    if missing.is_empty() {
+        return Ok(0);
+    }
+
+    let mut session = imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        password,
+    )
+    .await?;
+    session
+        .select(MAILBOX)
+        .await
+        .map_err(|e| AppError::Imap(format!("select {MAILBOX}: {e}")))?;
+
+    let uids: Vec<i64> = missing.iter().map(|(_, uid)| *uid).collect();
+    let sizes = imap::fetch_sizes(&mut session, &uids).await?;
+
+    let mut cached = 0;
+    for (message_id, uid) in prefetch_plan(&missing, &sizes, MAX_PREFETCH_BYTES) {
+        // why: a UID can vanish mid-run (deleted on another device) — skip it
+        // rather than aborting the whole batch.
+        let Some(raw) = imap::fetch_body(&mut session, uid).await? else {
+            continue;
+        };
+        let parsed = parse::parse_body(&raw);
+        messages::set_body(
+            pool,
+            message_id,
+            parsed.text.as_deref(),
+            parsed.html.as_deref(),
+            &parsed.snippet,
+        )
+        .await?;
+        cached += 1;
+    }
+    let _ = session.logout().await;
+    Ok(cached)
 }
 
 /// Download, parse and cache one message body; returns the parsed body.
@@ -158,6 +230,15 @@ mod tests {
     #[test]
     fn matching_validity_without_uids_plans_initial() {
         assert_eq!(plan(Some(7), 7, None), SyncPlan::Initial);
+    }
+
+    #[test]
+    fn prefetch_plan_keeps_only_small_messages_with_a_known_size() {
+        let missing = [(1, 101), (2, 102), (3, 103)];
+        // 102 is over the cap; 103 never got a size back from the server.
+        let sizes = [(101, 10_000), (102, 999_999)];
+
+        assert_eq!(prefetch_plan(&missing, &sizes, 262_144), vec![(1, 101)]);
     }
 
     #[test]
