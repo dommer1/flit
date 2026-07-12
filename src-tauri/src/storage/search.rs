@@ -1,4 +1,10 @@
-//! Gmail-style search query parsing: `from:x is:unread faktúra`.
+//! Gmail-style search: query parsing (`from:x is:unread faktúra`) and the
+//! SQL that runs it against the message cache + FTS5 index.
+
+use sqlx::SqlitePool;
+
+use crate::error::AppError;
+use crate::models::MessageHeader;
 
 /// A search query broken into structured filters plus free text.
 ///
@@ -77,6 +83,81 @@ fn tokenize(input: &str) -> Vec<String> {
     tokens
 }
 
+/// why: enough for any result list a human scrolls, and it caps the IPC
+/// payload — the full match set stays in SQLite.
+const RESULT_LIMIT: i64 = 200;
+
+/// Run a parsed query against the cache. `account_id = None` searches all
+/// accounts (unified inbox); operators filter columns, free text goes to the
+/// FTS5 index. Newest first.
+pub async fn search(
+    pool: &SqlitePool,
+    account_id: Option<i64>,
+    query: &SearchQuery,
+) -> Result<Vec<MessageHeader>, AppError> {
+    // why: one static SQL with `(? IS NULL OR …)` per filter instead of
+    // building the string at runtime — sqlx 0.9 rejects runtime-built SQL
+    // (SqlSafeStr), and a single shape keeps the query plan cached.
+    let rows = sqlx::query_as(
+        r#"SELECT id, account_id, from_addr AS "from", subject, snippet, date, read
+           FROM messages
+           WHERE (?1 IS NULL OR account_id = ?1)
+             AND (?2 IS NULL OR from_addr LIKE '%' || ?2 || '%' ESCAPE '\')
+             AND (?3 IS NULL OR to_addr LIKE '%' || ?3 || '%' ESCAPE '\')
+             AND (?4 IS NULL OR subject LIKE '%' || ?4 || '%' ESCAPE '\')
+             AND (?5 IS NULL OR read = ?5)
+             AND (?6 IS NULL OR date >= ?6)
+             AND (?7 IS NULL OR date < ?7)
+             AND (?8 IS NULL OR id IN
+                  (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?8))
+           ORDER BY date DESC
+           LIMIT ?9"#,
+    )
+    .bind(account_id)
+    .bind(query.from.as_deref().map(escape_like))
+    .bind(query.to.as_deref().map(escape_like))
+    .bind(query.subject.as_deref().map(escape_like))
+    .bind(query.read)
+    .bind(query.after.as_deref())
+    .bind(query.before.as_deref())
+    .bind(fts_match_expr(&query.text))
+    .bind(RESULT_LIMIT)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Free text → an FTS5 MATCH expression: every word quoted (so user input
+/// can't inject MATCH syntax like NOT or ^), joined by implicit AND. The
+/// last word matches as a prefix, so typing "výro" already finds "výrobu".
+fn fts_match_expr(text: &str) -> Option<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let last = words.len().checked_sub(1)?;
+    let expr = words
+        .iter()
+        .enumerate()
+        .map(|(i, word)| {
+            let quoted = format!("\"{}\"", word.replace('"', "\"\""));
+            if i == last {
+                format!("{quoted}*")
+            } else {
+                quoted
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(expr)
+}
+
+/// Make a LIKE pattern fragment literal: escape the wildcards and the escape
+/// character itself (the query uses ESCAPE '\').
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 /// Strictly YYYY-MM-DD. The date column is RFC3339 text, so a well-formed
 /// prefix compares correctly as a plain string — no date parsing needed.
 fn is_iso_date(value: &str) -> bool {
@@ -91,6 +172,257 @@ fn is_iso_date(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::test_pool;
+    use sqlx::SqlitePool;
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_message(
+        pool: &SqlitePool,
+        account_id: i64,
+        uid: i64,
+        from: &str,
+        to: &str,
+        subject: &str,
+        date: &str,
+        read: bool,
+        body_text: Option<&str>,
+    ) {
+        sqlx::query(
+            "INSERT INTO messages
+               (account_id, uid, uid_validity, from_addr, to_addr, subject, date, read, body_text)
+             VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(account_id)
+        .bind(uid)
+        .bind(from)
+        .bind(to)
+        .bind(subject)
+        .bind(date)
+        .bind(read)
+        .bind(body_text)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn test_account(pool: &SqlitePool, name: &str) -> i64 {
+        crate::storage::accounts::insert(
+            pool,
+            &crate::models::NewAccount {
+                name: name.to_string(),
+                email: format!("{}@example.com", name.to_lowercase()),
+                imap_host: "imap.example.com".to_string(),
+                imap_port: 993,
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_port: 587,
+                username: format!("{}@example.com", name.to_lowercase()),
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn subjects_for(pool: &SqlitePool, account_id: Option<i64>, input: &str) -> Vec<String> {
+        search(pool, account_id, &parse_query(input))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.subject)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn free_text_searches_bodies_and_folds_diacritics() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Personal").await;
+        insert_message(
+            &pool,
+            id,
+            1,
+            "a@example.com",
+            "",
+            "Ponuka",
+            "2026-07-01T00:00:00Z",
+            false,
+            Some("cenová ponuka na výrobu"),
+        )
+        .await;
+        insert_message(
+            &pool,
+            id,
+            2,
+            "b@example.com",
+            "",
+            "Iné",
+            "2026-07-02T00:00:00Z",
+            false,
+            Some("úplne iný obsah"),
+        )
+        .await;
+
+        // Diacritics fold ("vyrobu" finds "výrobu"), but FTS does no Slovak
+        // stemming — a different declension ("výroba") would not match.
+        assert_eq!(subjects_for(&pool, None, "vyrobu").await, vec!["Ponuka"]);
+        // The last word acts as a prefix — search-as-you-type finds partials.
+        assert_eq!(subjects_for(&pool, None, "výro").await, vec!["Ponuka"]);
+        assert!(subjects_for(&pool, None, "neexistuje").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn from_operator_narrows_and_combines_with_text() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Personal").await;
+        insert_message(
+            &pool,
+            id,
+            1,
+            "Dominik <dominik@vocalio.sk>",
+            "",
+            "Faktúra jún",
+            "2026-07-01T00:00:00Z",
+            false,
+            Some("faktúra v prílohe"),
+        )
+        .await;
+        insert_message(
+            &pool,
+            id,
+            2,
+            "Iný <iny@example.com>",
+            "",
+            "Faktúra máj",
+            "2026-07-02T00:00:00Z",
+            false,
+            Some("faktúra v prílohe"),
+        )
+        .await;
+
+        assert_eq!(
+            subjects_for(&pool, None, "from:dominik@vocalio.sk faktura").await,
+            vec!["Faktúra jún"]
+        );
+        assert_eq!(
+            subjects_for(&pool, None, "from:dominik@vocalio.sk neexistuje").await,
+            Vec::<String>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn read_flag_and_date_range_filter() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Personal").await;
+        insert_message(
+            &pool,
+            id,
+            1,
+            "a@example.com",
+            "",
+            "Stará neprečítaná",
+            "2026-05-01T10:00:00Z",
+            false,
+            None,
+        )
+        .await;
+        insert_message(
+            &pool,
+            id,
+            2,
+            "a@example.com",
+            "",
+            "Nová neprečítaná",
+            "2026-07-05T10:00:00Z",
+            false,
+            None,
+        )
+        .await;
+        insert_message(
+            &pool,
+            id,
+            3,
+            "a@example.com",
+            "",
+            "Nová prečítaná",
+            "2026-07-06T10:00:00Z",
+            true,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            subjects_for(&pool, None, "is:unread after:2026-07-01").await,
+            vec!["Nová neprečítaná"]
+        );
+        assert_eq!(
+            subjects_for(&pool, None, "before:2026-07-01").await,
+            vec!["Stará neprečítaná"]
+        );
+    }
+
+    #[tokio::test]
+    async fn results_are_scoped_to_the_account_and_sorted_newest_first() {
+        let pool = test_pool().await;
+        let personal = test_account(&pool, "Personal").await;
+        let work = test_account(&pool, "Work").await;
+        insert_message(
+            &pool,
+            personal,
+            1,
+            "a@example.com",
+            "",
+            "Osobná zmluva",
+            "2026-07-01T00:00:00Z",
+            false,
+            None,
+        )
+        .await;
+        insert_message(
+            &pool,
+            work,
+            1,
+            "a@example.com",
+            "",
+            "Pracovná zmluva",
+            "2026-07-02T00:00:00Z",
+            false,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            subjects_for(&pool, None, "zmluva").await,
+            vec!["Pracovná zmluva", "Osobná zmluva"]
+        );
+        assert_eq!(
+            subjects_for(&pool, Some(personal), "zmluva").await,
+            vec!["Osobná zmluva"]
+        );
+    }
+
+    #[tokio::test]
+    async fn like_wildcards_in_operator_values_are_literal() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Personal").await;
+        insert_message(
+            &pool,
+            id,
+            1,
+            "sale100x@example.com",
+            "",
+            "Wildcard",
+            "2026-07-01T00:00:00Z",
+            false,
+            None,
+        )
+        .await;
+
+        // A "%" in the value must not act as a LIKE wildcard.
+        assert!(subjects_for(&pool, None, "from:100%").await.is_empty());
+        assert_eq!(
+            subjects_for(&pool, None, "from:100x").await,
+            vec!["Wildcard"]
+        );
+    }
 
     #[test]
     fn plain_text_has_no_filters() {
