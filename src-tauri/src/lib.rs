@@ -81,6 +81,9 @@ pub fn run() {
             commands::get_message_body,
             commands::send_message,
             commands::test_connection,
+            commands::open_compose,
+            commands::take_compose_draft,
+            commands::close_compose,
             commands::open_settings,
             commands::close_settings
         ])

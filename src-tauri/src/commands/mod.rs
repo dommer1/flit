@@ -171,6 +171,67 @@ fn sanitized_body(html: Option<String>, text: Option<String>) -> MessageBody {
     }
 }
 
+/// Open a native compose window seeded with `draft`. Every call opens its
+/// own window (unique label), so several drafts can be in flight at once.
+#[tauri::command]
+pub async fn open_compose(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    draft: OutgoingMessage,
+) -> Result<(), AppError> {
+    // why: a process-wide counter, not "count of open windows" — labels of
+    // closed windows must never be reused while their drafts might linger.
+    static COMPOSE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let label = format!(
+        "compose-{}",
+        COMPOSE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+
+    let title = if draft.subject.trim().is_empty() {
+        "New Message".to_string()
+    } else {
+        draft.subject.clone()
+    };
+    state.park_draft(&label, draft);
+
+    let builder = tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        // why: all windows serve the same bundle — main.ts picks the root
+        // component from the window label.
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title(title)
+    .inner_size(640.0, 680.0)
+    .min_inner_size(480.0, 400.0);
+    // why: overlay puts the traffic lights on the compose toolbar strip,
+    // matching the main window's chrome.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    builder.build()?;
+    Ok(())
+}
+
+/// One-shot draft pickup for a freshly opened compose window; `None` when
+/// the draft was already taken (e.g. after a webview reload).
+#[tauri::command]
+pub fn take_compose_draft(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<OutgoingMessage>, AppError> {
+    Ok(state.take_draft(window.label()))
+}
+
+/// Close the invoking compose window — windows lack the core close
+/// permission, mirroring how settings closes through a command.
+#[tauri::command]
+pub async fn close_compose(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    window.close()?;
+    Ok(())
+}
+
 // why: async on purpose — Tauri docs warn that creating windows from a sync
 // command can deadlock on some platforms (the command runs on the main
 // thread there, and window creation needs it too).
