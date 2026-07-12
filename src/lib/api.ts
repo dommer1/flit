@@ -47,6 +47,17 @@ export function listMessages(accountId: number | null): Promise<MessageHeader[]>
   return invoke<MessageHeader[]>("list_messages", { accountId });
 }
 
+/**
+ * Search the local cache with a gmail-style query
+ * (`from:x is:unread faktúra`). `accountId: null` searches all accounts.
+ */
+export function searchMessages(
+  accountId: number | null,
+  query: string,
+): Promise<MessageHeader[]> {
+  return invoke<MessageHeader[]>("search_messages", { accountId, query });
+}
+
 /** Body from cache, lazily fetched from the server on first open. */
 export function getMessageBody(messageId: number): Promise<MessageBody> {
   return invoke<MessageBody>("get_message_body", { messageId });

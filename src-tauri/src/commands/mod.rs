@@ -90,6 +90,18 @@ pub async fn list_messages(
     storage::messages::list(&state.pool, account_id).await
 }
 
+/// Search the local cache with a gmail-style query ("from:x is:unread text").
+/// Purely local — never talks to the server.
+#[tauri::command]
+pub async fn search_messages(
+    state: State<'_, AppState>,
+    account_id: Option<i64>,
+    query: String,
+) -> Result<Vec<MessageHeader>, AppError> {
+    let parsed = storage::search::parse_query(&query);
+    storage::search::search(&state.pool, account_id, &parsed).await
+}
+
 /// Send a composed message through the sending account's SMTP server.
 #[tauri::command]
 pub async fn send_message(
