@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod messages;
+pub mod search;
 
 use std::path::Path;
 use std::time::Duration;
