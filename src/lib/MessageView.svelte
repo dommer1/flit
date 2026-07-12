@@ -3,7 +3,15 @@
   import { formatFullDate, senderInitials, senderName } from "./format";
   import type { MessageBody, MessageHeader } from "./types";
 
-  let { message }: { message: MessageHeader | null } = $props();
+  let {
+    message,
+    onReply,
+  }: {
+    message: MessageHeader | null;
+    // why: bodyText rides along so the reply can quote what is on screen
+    // without the parent re-fetching the body it never held.
+    onReply?: (message: MessageHeader, bodyText: string | null) => void;
+  } = $props();
 
   let body = $state<MessageBody | null>(null);
   let loading = $state(false);
@@ -42,7 +50,15 @@
         <p class="from" title={message.from}>{senderName(message.from)}</p>
         <h2 class="subject">{message.subject}</h2>
       </div>
-      <span class="date">{formatFullDate(message.date)}</span>
+      <div class="meta">
+        <span class="date">{formatFullDate(message.date)}</span>
+        {#if onReply}
+          {@const current = message}
+          <button class="reply" onclick={() => onReply(current, body?.text ?? null)}>
+            Reply
+          </button>
+        {/if}
+      </div>
     </header>
     {#if loading}
       <p class="empty">Loading…</p>
@@ -130,11 +146,28 @@
     color: var(--text-secondary);
   }
 
-  .date {
+  .meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
     flex-shrink: 0;
     align-self: flex-start;
+  }
+
+  .date {
     font-size: 11px;
     color: var(--text-secondary);
+  }
+
+  .reply {
+    padding: 3px 10px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--bg-window);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
   }
 
   .body {

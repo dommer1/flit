@@ -7,21 +7,33 @@
     messages,
     selectedId,
     onSelect,
+    onCompose,
   }: {
     title: string;
     messages: MessageHeader[];
     selectedId: number | null;
     onSelect: (id: number) => void;
+    onCompose: () => void;
   } = $props();
 </script>
 
 <div class="pane">
   <header>
-    <h1>{title}</h1>
-    <p class="count">
-      {messages.length}
-      {messages.length === 1 ? "message" : "messages"}
-    </p>
+    <div class="titles">
+      <h1>{title}</h1>
+      <p class="count">
+        {messages.length}
+        {messages.length === 1 ? "message" : "messages"}
+      </p>
+    </div>
+    <button
+      class="compose"
+      aria-label="New Message"
+      title="New Message"
+      onclick={onCompose}
+    >
+      ✎
+    </button>
   </header>
 
   <div class="list" role="listbox" aria-label="Messages">
@@ -60,9 +72,24 @@
   }
 
   header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     flex-shrink: 0;
     padding: 12px 16px 8px;
     border-bottom: 1px solid var(--hairline);
+  }
+
+  .compose {
+    padding: 3px 9px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--bg-window);
+    font: inherit;
+    font-size: 14px;
+    color: var(--text-secondary);
+    cursor: pointer;
   }
 
   h1 {

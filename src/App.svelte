@@ -5,9 +5,15 @@
     listMessages,
     onAccountsChanged,
     onMessagesChanged,
+    sendMessage,
     syncInbox,
   } from "./lib/api";
-  import type { Account, MessageHeader } from "./lib/types";
+  import { replyDraft, type ComposeDraft } from "./lib/draft";
+  import type {
+    Account,
+    MessageHeader,
+    OutgoingMessage,
+  } from "./lib/types";
   import {
     clampPaneWidth,
     loadPaneWidths,
@@ -18,6 +24,7 @@
   import Sidebar from "./lib/Sidebar.svelte";
   import MessageList from "./lib/MessageList.svelte";
   import MessageView from "./lib/MessageView.svelte";
+  import Compose from "./lib/Compose.svelte";
 
   let accounts = $state<Account[]>([]);
   let messages = $state<MessageHeader[]>([]);
@@ -35,6 +42,33 @@
   );
 
   let paneWidths = $state<PaneWidths>(loadPaneWidths(localStorage));
+
+  /** Non-null while the compose sheet is open. */
+  let composeDraft = $state<ComposeDraft | null>(null);
+
+  function openNewMessage() {
+    const fallback = accounts[0];
+    if (!fallback) return;
+    // why: new mail goes from the account being viewed; on the unified inbox
+    // the first account acts as the default sender.
+    composeDraft = {
+      accountId: selectedAccountId ?? fallback.id,
+      to: "",
+      subject: "",
+      body: "",
+    };
+  }
+
+  function openReply(message: MessageHeader, bodyText: string | null) {
+    composeDraft = replyDraft(message, bodyText);
+  }
+
+  async function sendDraft(message: OutgoingMessage) {
+    // why: no catch — a rejection stays in the compose form, which shows the
+    // error and keeps the draft editable. Success is what closes the sheet.
+    await sendMessage(message);
+    composeDraft = null;
+  }
 
   function startPaneResize(pane: keyof PaneWidths, event: PointerEvent) {
     event.preventDefault();
@@ -172,6 +206,7 @@
         {messages}
         selectedId={selectedMessageId}
         onSelect={(id) => (selectedMessageId = id)}
+        onCompose={openNewMessage}
       />
     </section>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions
@@ -190,10 +225,19 @@
       onkeydown={(e) => nudgePane("list", e)}
     ></div>
     <section class="view">
-      <MessageView message={selectedMessage} />
+      <MessageView message={selectedMessage} onReply={openReply} />
     </section>
   </main>
 </div>
+
+{#if composeDraft}
+  <Compose
+    {accounts}
+    draft={composeDraft}
+    onSend={sendDraft}
+    onCancel={() => (composeDraft = null)}
+  />
+{/if}
 
 <style>
   /* why: the vibrancy NSVisualEffectView sits behind the webview — the body

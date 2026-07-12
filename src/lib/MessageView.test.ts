@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import type { MessageHeader } from "./types";
 
 vi.mock("./api", () => ({
@@ -66,4 +66,19 @@ it("shows the empty state and fetches nothing without a message", () => {
 
   expect(screen.getByText("Select a message")).toBeInTheDocument();
   expect(api.getMessageBody).not.toHaveBeenCalled();
+});
+
+it("replies with the message and its loaded text", async () => {
+  vi.mocked(api.getMessageBody).mockResolvedValueOnce({
+    html: null,
+    text: "hi there",
+  });
+  const onReply = vi.fn();
+
+  render(MessageView, { props: { message, onReply } });
+  await screen.findByText("hi there");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+  expect(onReply).toHaveBeenCalledWith(message, "hi there");
 });
