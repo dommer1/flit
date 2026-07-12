@@ -6,8 +6,10 @@
     onAccountsChanged,
     onMessagesChanged,
     openCompose,
+    searchMessages,
     syncInbox,
   } from "./lib/api";
+  import { debounce } from "./lib/debounce";
   import { replyDraft } from "./lib/draft";
   import type { Account, MessageHeader } from "./lib/types";
   import {
@@ -87,17 +89,35 @@
     savePaneWidths(localStorage, paneWidths);
   }
 
+  // why: plain variable, not $state — the input's value lives in MessageList;
+  // this only steers which query refreshMessages runs.
+  let searchQuery = "";
+
   async function selectAccount(accountId: number | null) {
     selectedAccountId = accountId;
     selectedMessageId = null;
-    messages = await listMessages(accountId);
+    await refreshMessages();
     startSync(accountId === null ? accounts.map((a) => a.id) : [accountId]);
   }
 
   // Re-query the current view without touching the selection — the derived
-  // selectedMessage keeps pointing at the same id if it still exists.
+  // selectedMessage keeps pointing at the same id if it still exists. With a
+  // search active, "the current view" is the result list, so a sync landing
+  // mid-search refreshes the hits instead of yanking the full list back.
   async function refreshMessages() {
-    messages = await listMessages(selectedAccountId);
+    const query = searchQuery.trim();
+    messages = query
+      ? await searchMessages(selectedAccountId, query)
+      : await listMessages(selectedAccountId);
+  }
+
+  // why 200ms: long enough to collapse a typing burst into one query, short
+  // enough that results still feel live (search is a local SQLite hit).
+  const refreshDebounced = debounce(() => void refreshMessages(), 200);
+
+  function handleSearch(query: string) {
+    searchQuery = query;
+    refreshDebounced();
   }
 
   // why: fire-and-forget and parallel — every invoke runs as its own async
@@ -194,6 +214,7 @@
         selectedId={selectedMessageId}
         onSelect={(id) => (selectedMessageId = id)}
         onCompose={openNewMessage}
+        onSearch={handleSearch}
       />
     </section>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions

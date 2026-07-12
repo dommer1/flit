@@ -8,13 +8,17 @@
     selectedId,
     onSelect,
     onCompose,
+    onSearch,
   }: {
     title: string;
     messages: MessageHeader[];
     selectedId: number | null;
     onSelect: (id: number) => void;
     onCompose: () => void;
+    onSearch: (query: string) => void;
   } = $props();
+
+  let query = $state("");
 </script>
 
 <div class="pane">
@@ -35,6 +39,16 @@
       ✎
     </button>
   </header>
+
+  <div class="search">
+    <input
+      type="search"
+      placeholder="Search — from:… to:… subject:… is:unread"
+      aria-label="Search messages"
+      bind:value={query}
+      oninput={() => onSearch(query)}
+    />
+  </div>
 
   <div class="list" role="listbox" aria-label="Messages">
     {#if messages.length === 0}
@@ -102,6 +116,28 @@
     margin: 1px 0 0;
     font-size: 11px;
     color: var(--text-secondary);
+  }
+
+  .search {
+    flex-shrink: 0;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .search input {
+    width: 100%;
+    padding: 4px 8px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--bg-window);
+    font: inherit;
+    font-size: 12px;
+    color: inherit;
+  }
+
+  .search input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
   }
 
   .list {

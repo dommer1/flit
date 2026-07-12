@@ -64,6 +64,9 @@ vi.mock("./lib/api", () => ({
       ? currentMessages
       : currentMessages.filter((m) => m.accountId === accountId),
   ),
+  // why: a canned single-hit result — App tests only assert the wiring
+  // (what was called with what); real matching is covered by Rust tests.
+  searchMessages: vi.fn(async () => [currentMessages[1]]),
   getMessageBody: vi.fn(async () => ({ html: null, text: "body text" })),
   syncInbox: vi.fn(async () => undefined),
   openCompose: vi.fn(async () => undefined),
@@ -233,6 +236,57 @@ it("refreshes the list on messages-changed and keeps the selection", async () =>
   expect(
     screen.getByRole("heading", { name: "Weekend plans" }),
   ).toBeInTheDocument();
+});
+
+// why fake timers mid-test: the initial load must run on real timers
+// (findBy* polls with them), only the debounce window itself is faked.
+async function typeIntoSearch(value: string) {
+  const input = screen.getByRole("searchbox", { name: "Search messages" });
+  vi.useFakeTimers();
+  await fireEvent.input(input, { target: { value } });
+  await vi.advanceTimersByTimeAsync(250);
+  vi.useRealTimers();
+}
+
+it("runs one debounced search and shows its results", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+
+  const input = screen.getByRole("searchbox", { name: "Search messages" });
+  vi.useFakeTimers();
+  await fireEvent.input(input, { target: { value: "from:pet" } });
+  await fireEvent.input(input, { target: { value: "from:peter" } });
+  await vi.advanceTimersByTimeAsync(250);
+  vi.useRealTimers();
+
+  expect(api.searchMessages).toHaveBeenCalledTimes(1);
+  expect(api.searchMessages).toHaveBeenCalledWith(null, "from:peter");
+  expect(await screen.findByText("Re: Invoice")).toBeInTheDocument();
+  expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
+});
+
+it("clearing the search restores the plain list", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+  await typeIntoSearch("invoice");
+  await screen.findByText("Re: Invoice");
+
+  await typeIntoSearch("");
+
+  expect(await screen.findByText("Weekend plans")).toBeInTheDocument();
+  // an empty query never hits the search backend
+  expect(api.searchMessages).toHaveBeenCalledTimes(1);
+});
+
+it("scopes the search to the selected account", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+  await fireEvent.click(screen.getByText("Work"));
+  await screen.findByText("Re: Invoice");
+
+  await typeIntoSearch("faktura");
+
+  expect(api.searchMessages).toHaveBeenCalledWith(2, "faktura");
 });
 
 it("refreshes accounts when another window changes them", async () => {
