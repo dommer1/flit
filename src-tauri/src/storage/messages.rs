@@ -147,6 +147,29 @@ pub async fn set_body(
     Ok(())
 }
 
+/// The body-prefetch work-list: `(id, uid)` of messages with no cached body,
+/// newest first so recent mail becomes searchable soonest.
+pub async fn uids_missing_body(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+    limit: i64,
+) -> Result<Vec<(i64, i64)>, AppError> {
+    let rows = sqlx::query_as(
+        "SELECT id, uid FROM messages
+         WHERE account_id = ? AND mailbox = ?
+           AND body_text IS NULL AND body_html IS NULL
+         ORDER BY date DESC
+         LIMIT ?",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Drop the cache for one mailbox — required when UIDVALIDITY changes
 /// (RFC 3501: old UIDs are meaningless after that).
 pub async fn clear_mailbox(
@@ -329,6 +352,42 @@ mod tests {
             stored_uid_validity(&pool, id, "INBOX").await.unwrap(),
             Some(7)
         );
+    }
+
+    #[tokio::test]
+    async fn missing_body_lists_newest_first_and_skips_cached() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(1, "Old", "2026-07-01T00:00:00Z", false),
+                header(2, "Cached", "2026-07-02T00:00:00Z", false),
+                header(3, "New", "2026-07-03T00:00:00Z", false),
+            ],
+        )
+        .await
+        .unwrap();
+        let cached_id = list(&pool, Some(id))
+            .await
+            .unwrap()
+            .iter()
+            .find(|m| m.subject == "Cached")
+            .unwrap()
+            .id;
+        set_body(&pool, cached_id, Some("text"), None, "text")
+            .await
+            .unwrap();
+
+        let missing = uids_missing_body(&pool, id, "INBOX", 10).await.unwrap();
+        let uids: Vec<i64> = missing.iter().map(|(_, uid)| *uid).collect();
+        assert_eq!(uids, vec![3, 1]);
+
+        let limited = uids_missing_body(&pool, id, "INBOX", 1).await.unwrap();
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].1, 3);
     }
 
     #[tokio::test]
