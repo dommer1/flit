@@ -79,6 +79,7 @@ pub fn run() {
             commands::list_messages,
             commands::sync_inbox,
             commands::get_message_body,
+            commands::send_message,
             commands::test_connection,
             commands::open_settings,
             commands::close_settings

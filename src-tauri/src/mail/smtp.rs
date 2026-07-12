@@ -6,12 +6,15 @@ use std::time::Duration;
 use lettre::message::header::ContentType;
 use lettre::message::{Mailbox, Mailboxes};
 use lettre::transport::smtp::authentication::Credentials;
-use lettre::{AsyncSmtpTransport, Message, Tokio1Executor};
+use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 use crate::error::AppError;
 use crate::models::OutgoingMessage;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+// why: a send uploads the whole message after connecting, so it gets more
+// headroom than the plain connection check.
+const SEND_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Port 465 speaks TLS from the first byte (SMTPS); everything else starts
 /// plain and upgrades via STARTTLS before any credentials are sent.
@@ -68,6 +71,22 @@ pub fn build_message(from_email: &str, outgoing: &OutgoingMessage) -> Result<Mes
     builder
         .body(outgoing.body.clone())
         .map_err(|e| AppError::Smtp(e.to_string()))
+}
+
+/// Send one built message through the account's SMTP server.
+pub async fn send(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    message: Message,
+) -> Result<(), AppError> {
+    let transport = transport(host, port, username, password)?;
+    tokio::time::timeout(SEND_TIMEOUT, transport.send(message))
+        .await
+        .map_err(|_| AppError::Smtp(format!("sending via {host}:{port} timed out")))?
+        .map_err(|e| AppError::Smtp(e.to_string()))?;
+    Ok(())
 }
 
 /// Connection check for the add-account flow: connect, TLS, EHLO, AUTH, NOOP.

@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
-use crate::models::{Account, MessageBody, MessageHeader, NewAccount};
+use crate::models::{Account, MessageBody, MessageHeader, NewAccount, OutgoingMessage};
 use crate::state::AppState;
 use crate::{auth, mail, storage};
 
@@ -88,6 +88,27 @@ pub async fn list_messages(
     account_id: Option<i64>,
 ) -> Result<Vec<MessageHeader>, AppError> {
     storage::messages::list(&state.pool, account_id).await
+}
+
+/// Send a composed message through the sending account's SMTP server.
+#[tauri::command]
+pub async fn send_message(
+    state: State<'_, AppState>,
+    message: OutgoingMessage,
+) -> Result<(), AppError> {
+    let account = storage::accounts::get(&state.pool, message.account_id).await?;
+    let mime = mail::smtp::build_message(&account.email, &message)?;
+    // why: the password is read from the keychain at call time and lives only
+    // on this task's stack — never in state, events, or logs.
+    let password = auth::get_password(message.account_id).await?;
+    mail::smtp::send(
+        &account.smtp_host,
+        account.smtp_port,
+        &account.username,
+        &password,
+        mime,
+    )
+    .await
 }
 
 /// Verify & Save: prove the submitted credentials against both servers
