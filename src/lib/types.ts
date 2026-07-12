@@ -26,6 +26,16 @@ export interface NewAccount {
   username: string;
 }
 
+/** Payload for send_message — the From address comes from the account row. */
+export interface OutgoingMessage {
+  accountId: number;
+  /** One or more recipients, comma-separated. */
+  to: string;
+  subject: string;
+  /** Plain text only for now. */
+  body: string;
+}
+
 /** `html`, when present, is a full sanitized srcdoc document from the backend. */
 export interface MessageBody {
   html: string | null;

@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
-import type { Account, MessageBody, MessageHeader, NewAccount } from "./types";
+import type {
+  Account,
+  MessageBody,
+  MessageHeader,
+  NewAccount,
+  OutgoingMessage,
+} from "./types";
 
 export function listAccounts(): Promise<Account[]> {
   return invoke<Account[]>("list_accounts");
@@ -49,6 +55,11 @@ export function getMessageBody(messageId: number): Promise<MessageBody> {
 /** Fire-and-forget header sync for one account's inbox. */
 export function syncInbox(accountId: number): Promise<void> {
   return invoke<void>("sync_inbox", { accountId });
+}
+
+/** Send a composed message via the sending account's SMTP server. */
+export function sendMessage(message: OutgoingMessage): Promise<void> {
+  return invoke<void>("send_message", { message });
 }
 
 /** Fires whenever the message cache changes (any account, any window). */
