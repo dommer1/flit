@@ -16,8 +16,14 @@ pub fn uses_implicit_tls(port: u16) -> bool {
     port == 465
 }
 
-/// Connection check for the add-account flow: connect, TLS, EHLO, AUTH, NOOP.
-pub async fn verify(host: &str, port: u16, username: &str, password: &str) -> Result<(), AppError> {
+/// Authenticated TLS transport to the account's SMTP server — the single
+/// construction path for both the connection check and real sends.
+fn transport(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+) -> Result<AsyncSmtpTransport<Tokio1Executor>, AppError> {
     let builder = if uses_implicit_tls(port) {
         AsyncSmtpTransport::<Tokio1Executor>::relay(host)
     } else {
@@ -25,10 +31,15 @@ pub async fn verify(host: &str, port: u16, username: &str, password: &str) -> Re
     }
     .map_err(|e| AppError::Smtp(e.to_string()))?;
 
-    let transport: AsyncSmtpTransport<Tokio1Executor> = builder
+    Ok(builder
         .port(port)
         .credentials(Credentials::new(username.to_string(), password.to_string()))
-        .build();
+        .build())
+}
+
+/// Connection check for the add-account flow: connect, TLS, EHLO, AUTH, NOOP.
+pub async fn verify(host: &str, port: u16, username: &str, password: &str) -> Result<(), AppError> {
+    let transport = transport(host, port, username, password)?;
 
     // why: test_connection authenticates while establishing the pooled
     // connection, so bad credentials fail here — exactly what Verify & Save
