@@ -62,6 +62,21 @@ export function sendMessage(message: OutgoingMessage): Promise<void> {
   return invoke<void>("send_message", { message });
 }
 
+/** Open a native compose window seeded with the draft. */
+export function openCompose(draft: OutgoingMessage): Promise<void> {
+  return invoke<void>("open_compose", { draft });
+}
+
+/** One-shot pickup of this compose window's draft; null after a reload. */
+export function takeComposeDraft(): Promise<OutgoingMessage | null> {
+  return invoke<OutgoingMessage | null>("take_compose_draft");
+}
+
+/** Close the compose window this call comes from. */
+export function closeCompose(): Promise<void> {
+  return invoke<void>("close_compose");
+}
+
 /** Fires whenever the message cache changes (any account, any window). */
 export function onMessagesChanged(callback: () => void): Promise<UnlistenFn> {
   return listen("messages-changed", callback);
