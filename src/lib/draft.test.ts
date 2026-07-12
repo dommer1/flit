@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { replyDraft } from "./compose";
+import { replyDraft } from "./draft";
 import type { MessageHeader } from "./types";
 
 const message: MessageHeader = {
