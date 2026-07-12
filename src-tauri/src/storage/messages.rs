@@ -9,6 +9,7 @@ pub struct FetchedHeader {
     pub uid: i64,
     pub uid_validity: i64,
     pub from: String,
+    pub to: String,
     pub subject: String,
     pub date: String,
     pub snippet: String,
@@ -26,8 +27,8 @@ pub async fn upsert_headers(
     for header in headers {
         sqlx::query(
             "INSERT INTO messages
-               (account_id, mailbox, uid, uid_validity, from_addr, subject, date, snippet, read)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, subject, date, snippet, read)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (account_id, mailbox, uid) DO UPDATE SET read = excluded.read",
         )
         .bind(account_id)
@@ -35,6 +36,7 @@ pub async fn upsert_headers(
         .bind(header.uid)
         .bind(header.uid_validity)
         .bind(&header.from)
+        .bind(&header.to)
         .bind(&header.subject)
         .bind(&header.date)
         .bind(&header.snippet)
@@ -189,11 +191,32 @@ mod tests {
             uid,
             uid_validity: 7,
             from: "Alice <alice@example.com>".to_string(),
+            to: "Bob <bob@example.com>".to_string(),
             subject: subject.to_string(),
             date: date.to_string(),
             snippet: format!("snippet of {subject}"),
             read,
         }
+    }
+
+    #[tokio::test]
+    async fn upsert_persists_recipients() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "Hello", "2026-07-08T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+
+        let to: String = sqlx::query_scalar("SELECT to_addr FROM messages WHERE uid = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(to, "Bob <bob@example.com>");
     }
 
     #[tokio::test]

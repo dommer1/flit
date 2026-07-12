@@ -1,9 +1,12 @@
-use mail_parser::{Message, MessageParser};
+use mail_parser::{Addr, Message, MessageParser};
 
 /// Fields extracted from a message's headers.
 #[derive(Debug, Default, PartialEq)]
 pub struct ParsedHeader {
     pub from: String,
+    /// All To and Cc recipients, comma-separated — one searchable string,
+    /// not a data model (the to: search operator matches inside it).
+    pub to: String,
     pub subject: String,
     /// RFC3339, or empty when the Date header is missing/unparsable —
     /// empty sorts last in the date-desc list instead of inventing a date.
@@ -25,6 +28,7 @@ pub fn parse_header(raw: &[u8]) -> ParsedHeader {
     };
     ParsedHeader {
         from: format_from(&message),
+        to: format_recipients(&message),
         subject: message.subject().unwrap_or_default().to_string(),
         date: message.date().map(|d| d.to_rfc3339()).unwrap_or_default(),
     }
@@ -51,9 +55,21 @@ pub fn parse_body(raw: &[u8]) -> ParsedBody {
 
 /// "Name <addr>" like mail clients show it, degrading to whichever part exists.
 fn format_from(message: &Message) -> String {
-    let Some(addr) = message.from().and_then(|a| a.first()) else {
-        return String::new();
-    };
+    message
+        .from()
+        .and_then(|a| a.first())
+        .map(format_addr)
+        .unwrap_or_default()
+}
+
+/// Every To and Cc address, comma-separated.
+fn format_recipients(message: &Message) -> String {
+    let to = message.to().into_iter().flat_map(|a| a.iter());
+    let cc = message.cc().into_iter().flat_map(|a| a.iter());
+    to.chain(cc).map(format_addr).collect::<Vec<_>>().join(", ")
+}
+
+fn format_addr(addr: &Addr) -> String {
     let email = addr.address().unwrap_or_default();
     match addr.name() {
         Some(name) if !email.is_empty() => format!("{name} <{email}>"),
@@ -84,6 +100,23 @@ mod tests {
         assert_eq!(header.from, "Alice Novak <alice@example.com>");
         assert_eq!(header.subject, "Weekend plans");
         assert!(header.date.starts_with("2026-07-07T09:15:00"));
+        assert_eq!(header.to, "");
+    }
+
+    #[test]
+    fn joins_to_and_cc_recipients() {
+        let raw = b"From: a@example.com\r\n\
+                    To: Bob <bob@example.com>, carol@example.com\r\n\
+                    Cc: Dana <dana@example.com>\r\n\
+                    Subject: Hi\r\n\
+                    \r\n";
+
+        let header = parse_header(raw);
+
+        assert_eq!(
+            header.to,
+            "Bob <bob@example.com>, carol@example.com, Dana <dana@example.com>"
+        );
     }
 
     #[test]
