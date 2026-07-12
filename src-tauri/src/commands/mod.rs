@@ -72,6 +72,27 @@ pub async fn sync_inbox(
 
     result?;
     app.emit("messages-changed", account_id)?;
+
+    // why: bodies download in the background AFTER the command returns — the
+    // header list is already usable, and each cached body feeds the FTS index
+    // so search covers unopened mail. The password is re-read from the
+    // keychain inside the task instead of being captured across the await.
+    let pool = state.pool.clone();
+    tauri::async_runtime::spawn(async move {
+        let prefetched = async {
+            let password = auth::get_password(account_id).await?;
+            mail::sync::prefetch_bodies(&pool, &account, &password).await
+        }
+        .await;
+        match prefetched {
+            // why: snippets just became real — lists and searches should see them.
+            Ok(cached) if cached > 0 => {
+                let _ = app.emit("messages-changed", account_id);
+            }
+            Ok(_) => {}
+            Err(err) => eprintln!("body prefetch failed for account {account_id}: {err}"),
+        }
+    });
     Ok(())
 }
 
