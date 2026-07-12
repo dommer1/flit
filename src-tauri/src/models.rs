@@ -38,8 +38,9 @@ pub struct NewAccount {
 
 /// Payload for send_message: what the compose form submits. Deliberately has
 /// no From field — the sender address always comes from the account row, so
-/// the frontend can never spoof it.
-#[derive(Debug, Clone, Deserialize)]
+/// the frontend can never spoof it. Also serves as the draft a compose
+/// window opens with, hence Serialize.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutgoingMessage {
     pub account_id: i64,
