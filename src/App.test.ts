@@ -152,6 +152,28 @@ it("starts a sync for every account on launch", async () => {
   });
 });
 
+it("syncs accounts in parallel, not one after another", async () => {
+  const started: number[] = [];
+  let releaseSyncs!: () => void;
+  const gate = new Promise<void>((resolve) => (releaseSyncs = resolve));
+  // why mockImplementationOnce: consumed by this test's two calls, so later
+  // tests fall back to the factory's instantly-resolving sync.
+  const gatedSync = async (id: number) => {
+    started.push(id);
+    await gate;
+  };
+  vi.mocked(api.syncInbox)
+    .mockImplementationOnce(gatedSync)
+    .mockImplementationOnce(gatedSync);
+
+  render(App);
+
+  // A sequential loop would await account 1's sync (blocked on the gate)
+  // before ever starting account 2's.
+  await waitFor(() => expect(started).toEqual([1, 2]));
+  releaseSyncs();
+});
+
 it("refreshes the list on messages-changed and keeps the selection", async () => {
   render(App);
   await fireEvent.click(await screen.findByText("Weekend plans"));

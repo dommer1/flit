@@ -79,19 +79,15 @@
     messages = await listMessages(selectedAccountId);
   }
 
-  // why: fire-and-forget and sequential on purpose — the UI reads from the
-  // cache and updates via messages-changed events, and phase 3 turns this
-  // loop into parallel per-account tasks.
+  // why: fire-and-forget and parallel — every invoke runs as its own async
+  // task in the backend, and the UI reads from the cache as each account's
+  // messages-changed event lands. One slow server never delays the others.
   function startSync(accountIds: number[]) {
-    void (async () => {
-      for (const id of accountIds) {
-        try {
-          await syncInbox(id);
-        } catch (err) {
-          console.error(`inbox sync failed for account ${id}:`, err);
-        }
-      }
-    })();
+    for (const id of accountIds) {
+      syncInbox(id).catch((err: unknown) => {
+        console.error(`inbox sync failed for account ${id}:`, err);
+      });
+    }
   }
 
   // why: plain variable, not $state — nothing renders from it; it only stops
