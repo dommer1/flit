@@ -1,15 +1,9 @@
-// Drafting logic for the compose form — pure functions, no invoke() here.
+// Drafting logic for compose windows — pure functions, no invoke() here.
+// A draft is an OutgoingMessage that has not been sent yet, so the two
+// share one shape.
 
 import { formatFullDate, senderName } from "./format";
-import type { MessageHeader } from "./types";
-
-/** What the compose form opens with; accountId picks the From account. */
-export interface ComposeDraft {
-  accountId: number;
-  to: string;
-  subject: string;
-  body: string;
-}
+import type { MessageHeader, OutgoingMessage } from "./types";
 
 /** Bare address out of `Name <addr>`; a plain address passes through. */
 function senderAddress(from: string): string {
@@ -36,7 +30,7 @@ function quote(message: MessageHeader, bodyText: string): string {
 export function replyDraft(
   message: MessageHeader,
   bodyText: string | null,
-): ComposeDraft {
+): OutgoingMessage {
   return {
     accountId: message.accountId,
     to: senderAddress(message.from),

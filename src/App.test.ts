@@ -66,7 +66,7 @@ vi.mock("./lib/api", () => ({
   ),
   getMessageBody: vi.fn(async () => ({ html: null, text: "body text" })),
   syncInbox: vi.fn(async () => undefined),
-  sendMessage: vi.fn(async () => undefined),
+  openCompose: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async (callback: () => void) => {
     accountsChanged = callback;
     return () => {};
@@ -143,34 +143,24 @@ it("clears the selected message when switching accounts", async () => {
 // note: settings open only through the native macOS app menu (Settings…, ⌘,
 // — src-tauri lib.rs), so there is no webview trigger left to test here.
 
-it("composes and sends a new message from the list header", async () => {
+it("opens a compose window for a new message", async () => {
   render(App);
   await screen.findByText("Weekend plans");
 
   await fireEvent.click(screen.getByRole("button", { name: "New Message" }));
 
   // the unified inbox has no account selected — From falls back to the first
-  expect(screen.getByLabelText("From")).toHaveValue("1");
-  await fireEvent.input(screen.getByLabelText("To"), {
-    target: { value: "bob@example.com" },
-  });
-  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
-
   await waitFor(() =>
-    expect(api.sendMessage).toHaveBeenCalledWith({
+    expect(api.openCompose).toHaveBeenCalledWith({
       accountId: 1,
-      to: "bob@example.com",
+      to: "",
       subject: "",
       body: "",
     }),
   );
-  // a successful send closes the compose sheet
-  await waitFor(() =>
-    expect(screen.queryByLabelText("To")).not.toBeInTheDocument(),
-  );
 });
 
-it("prefills a reply from the account the message arrived on", async () => {
+it("opens a reply draft from the account the message arrived on", async () => {
   render(App);
   await fireEvent.click(await screen.findByText("Weekend plans"));
   await screen.findByRole("heading", { name: "Weekend plans" });
@@ -178,11 +168,14 @@ it("prefills a reply from the account the message arrived on", async () => {
 
   await fireEvent.click(screen.getByRole("button", { name: "Reply" }));
 
-  expect(screen.getByLabelText("From")).toHaveValue("1");
-  expect(screen.getByLabelText("To")).toHaveValue("alice@example.com");
-  expect(screen.getByLabelText("Subject")).toHaveValue("Re: Weekend plans");
-  const body = screen.getByLabelText("Message body") as HTMLTextAreaElement;
-  expect(body.value).toContain("> body text");
+  await waitFor(() =>
+    expect(api.openCompose).toHaveBeenCalledWith({
+      accountId: 1,
+      to: "alice@example.com",
+      subject: "Re: Weekend plans",
+      body: expect.stringContaining("> body text"),
+    }),
+  );
 });
 
 it("starts a sync for every account on launch", async () => {

@@ -5,15 +5,11 @@
     listMessages,
     onAccountsChanged,
     onMessagesChanged,
-    sendMessage,
+    openCompose,
     syncInbox,
   } from "./lib/api";
-  import { replyDraft, type ComposeDraft } from "./lib/draft";
-  import type {
-    Account,
-    MessageHeader,
-    OutgoingMessage,
-  } from "./lib/types";
+  import { replyDraft } from "./lib/draft";
+  import type { Account, MessageHeader } from "./lib/types";
   import {
     clampPaneWidth,
     loadPaneWidths,
@@ -24,7 +20,6 @@
   import Sidebar from "./lib/Sidebar.svelte";
   import MessageList from "./lib/MessageList.svelte";
   import MessageView from "./lib/MessageView.svelte";
-  import Compose from "./lib/Compose.svelte";
 
   let accounts = $state<Account[]>([]);
   let messages = $state<MessageHeader[]>([]);
@@ -43,31 +38,23 @@
 
   let paneWidths = $state<PaneWidths>(loadPaneWidths(localStorage));
 
-  /** Non-null while the compose sheet is open. */
-  let composeDraft = $state<ComposeDraft | null>(null);
-
   function openNewMessage() {
     const fallback = accounts[0];
     if (!fallback) return;
     // why: new mail goes from the account being viewed; on the unified inbox
     // the first account acts as the default sender.
-    composeDraft = {
+    void openCompose({
       accountId: selectedAccountId ?? fallback.id,
       to: "",
       subject: "",
       body: "",
-    };
+    }).catch((err: unknown) => console.error("failed to open compose:", err));
   }
 
   function openReply(message: MessageHeader, bodyText: string | null) {
-    composeDraft = replyDraft(message, bodyText);
-  }
-
-  async function sendDraft(message: OutgoingMessage) {
-    // why: no catch — a rejection stays in the compose form, which shows the
-    // error and keeps the draft editable. Success is what closes the sheet.
-    await sendMessage(message);
-    composeDraft = null;
+    void openCompose(replyDraft(message, bodyText)).catch((err: unknown) =>
+      console.error("failed to open reply:", err),
+    );
   }
 
   function startPaneResize(pane: keyof PaneWidths, event: PointerEvent) {
@@ -229,15 +216,6 @@
     </section>
   </main>
 </div>
-
-{#if composeDraft}
-  <Compose
-    {accounts}
-    draft={composeDraft}
-    onSend={sendDraft}
-    onCancel={() => (composeDraft = null)}
-  />
-{/if}
 
 <style>
   /* why: the vibrancy NSVisualEffectView sits behind the webview — the body
