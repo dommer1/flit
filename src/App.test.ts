@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import type { Account, MessageHeader } from "./lib/types";
+import type { Account, MessageHeader, SendEvent } from "./lib/types";
 
 const accounts: Account[] = [
   {
@@ -69,6 +69,9 @@ let currentAccounts: Account[] = [];
 let currentMessages: MessageHeader[] = [];
 let accountsChanged: (() => void) | undefined;
 let messagesChanged: (() => void) | undefined;
+let sendQueued: ((e: SendEvent) => void) | undefined;
+let sendFinished: ((e: SendEvent) => void) | undefined;
+let sendUndone: ((e: SendEvent) => void) | undefined;
 
 vi.mock("./lib/api", () => ({
   listAccounts: vi.fn(async () => currentAccounts),
@@ -100,6 +103,19 @@ vi.mock("./lib/api", () => ({
     messagesChanged = callback;
     return () => {};
   }),
+  undoSend: vi.fn(async () => undefined),
+  onSendQueued: vi.fn(async (callback: (e: SendEvent) => void) => {
+    sendQueued = callback;
+    return () => {};
+  }),
+  onSendFinished: vi.fn(async (callback: (e: SendEvent) => void) => {
+    sendFinished = callback;
+    return () => {};
+  }),
+  onSendUndone: vi.fn(async (callback: (e: SendEvent) => void) => {
+    sendUndone = callback;
+    return () => {};
+  }),
 }));
 
 import * as api from "./lib/api";
@@ -111,6 +127,9 @@ beforeEach(() => {
   currentMessages = [...allMessages];
   accountsChanged = undefined;
   messagesChanged = undefined;
+  sendQueued = undefined;
+  sendFinished = undefined;
+  sendUndone = undefined;
   localStorage.clear();
   vi.clearAllMocks();
 });
@@ -448,4 +467,53 @@ it("falls back to the unified inbox when the selected account disappears", async
 
   expect(await screen.findByText("Weekend plans")).toBeInTheDocument();
   expect(screen.queryByText("Work")).not.toBeInTheDocument();
+});
+
+it("shows a sending badge whose undo hands the message back", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+
+  sendQueued?.({ id: 4, subject: "Ahoj", error: null });
+  expect(await screen.findByText("Sending: Ahoj")).toBeInTheDocument();
+
+  await fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(api.undoSend).toHaveBeenCalledWith(4);
+
+  // the badge leaves on the backend's confirmation, not on the click
+  sendUndone?.({ id: 4, subject: "Ahoj", error: null });
+  await waitFor(() =>
+    expect(screen.queryByText("Sending: Ahoj")).not.toBeInTheDocument(),
+  );
+});
+
+it("confirms a delivered send and hides the badge on its own", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+  sendQueued?.({ id: 5, subject: "Ahoj", error: null });
+  await screen.findByText("Sending: Ahoj");
+
+  vi.useFakeTimers();
+  sendFinished?.({ id: 5, subject: "Ahoj", error: null });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(screen.getByText("Sent: Ahoj")).toBeInTheDocument();
+
+  await vi.advanceTimersByTimeAsync(3000);
+  vi.useRealTimers();
+
+  expect(screen.queryByText("Sent: Ahoj")).not.toBeInTheDocument();
+});
+
+it("shows a failure badge with the delivery error", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+  sendQueued?.({ id: 6, subject: "Ahoj", error: null });
+  await screen.findByText("Sending: Ahoj");
+
+  vi.useFakeTimers();
+  sendFinished?.({ id: 6, subject: "Ahoj", error: "smtp error: relay refused" });
+  await vi.advanceTimersByTimeAsync(0);
+  vi.useRealTimers();
+
+  expect(screen.getByText("Couldn't send: Ahoj")).toBeInTheDocument();
+  expect(screen.getByText("smtp error: relay refused")).toBeInTheDocument();
 });

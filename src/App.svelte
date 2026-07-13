@@ -6,9 +6,13 @@
     listMessages,
     onAccountsChanged,
     onMessagesChanged,
+    onSendFinished,
+    onSendQueued,
+    onSendUndone,
     openCompose,
     searchMessages,
     syncAccount,
+    undoSend,
   } from "./lib/api";
   import { debounce } from "./lib/debounce";
   import { replyDraft } from "./lib/draft";
@@ -23,6 +27,7 @@
   import Sidebar from "./lib/Sidebar.svelte";
   import MessageList from "./lib/MessageList.svelte";
   import MessageView from "./lib/MessageView.svelte";
+  import Outbox, { type OutboxEntry } from "./lib/Outbox.svelte";
 
   let accounts = $state<Account[]>([]);
   let mailboxesByAccount = $state<Record<number, Mailbox[]>>({});
@@ -44,6 +49,38 @@
   );
 
   let paneWidths = $state<PaneWidths>(loadPaneWidths(localStorage));
+
+  // Sends riding out their undo window, mirrored from backend events.
+  let outbox = $state<OutboxEntry[]>([]);
+  /** How long a resolved badge lingers: long enough to read, short for ✓. */
+  const SENT_BADGE_MS = 2500;
+  const FAILED_BADGE_MS = 6000;
+
+  function badgeQueued(id: number, subject: string) {
+    outbox = [...outbox, { id, subject, status: "sending", error: null }];
+  }
+
+  function badgeFinished(id: number, error: string | null) {
+    outbox = outbox.map((b) =>
+      b.id === id ? { ...b, status: error ? "failed" : "sent", error } : b,
+    );
+    setTimeout(
+      () => (outbox = outbox.filter((b) => b.id !== id)),
+      error ? FAILED_BADGE_MS : SENT_BADGE_MS,
+    );
+  }
+
+  function badgeUndone(id: number) {
+    outbox = outbox.filter((b) => b.id !== id);
+  }
+
+  // why: the badge disappears on the backend's send-undone event, not here —
+  // if undo lost the race the send is in flight and the badge must resolve.
+  function handleUndo(id: number) {
+    void undoSend(id).catch((err: unknown) =>
+      console.error("undo send failed:", err),
+    );
+  }
 
   function openNewMessage() {
     const fallback = accounts[0];
@@ -186,9 +223,17 @@
       void refreshMessages();
       void refreshMailboxes();
     });
+    // why: compose windows queue sends in the backend; this window only
+    // mirrors the send-* events into badges.
+    const unlistenQueued = onSendQueued((e) => badgeQueued(e.id, e.subject));
+    const unlistenFinished = onSendFinished((e) => badgeFinished(e.id, e.error));
+    const unlistenUndone = onSendUndone((e) => badgeUndone(e.id));
     return () => {
       void unlistenAccounts.then((stop) => stop());
       void unlistenMessages.then((stop) => stop());
+      void unlistenQueued.then((stop) => stop());
+      void unlistenFinished.then((stop) => stop());
+      void unlistenUndone.then((stop) => stop());
     };
   });
 </script>
@@ -240,6 +285,7 @@
         onCompose={openNewMessage}
         onSearch={handleSearch}
       />
+      <Outbox entries={outbox} onUndo={handleUndo} />
     </section>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions
          — a focusable separator is the ARIA "window splitter" widget; Svelte's
@@ -302,6 +348,8 @@
   }
 
   .list {
+    /* why relative: the Outbox badges anchor to this pane's bottom edge. */
+    position: relative;
     overflow-y: auto;
   }
 
