@@ -24,6 +24,9 @@ pub struct SearchQuery {
     pub after: Option<String>,
     /// YYYY-MM-DD, exclusive upper bound on the message date.
     pub before: Option<String>,
+    /// `in:archive` — folder name, matched case-insensitively. Without it a
+    /// search spans every folder (like Gmail's All Mail).
+    pub mailbox: Option<String>,
     pub text: String,
 }
 
@@ -50,6 +53,7 @@ pub fn parse_query(input: &str) -> SearchQuery {
                 "after" if is_iso_date(&value) => query.after = Some(value),
                 "before" if is_iso_date(&value) => query.before = Some(value),
                 "after" | "before" => {}
+                "in" => query.mailbox = Some(value),
                 _ => text.push(token),
             },
             _ => text.push(token),
@@ -108,10 +112,11 @@ pub async fn search(
              AND (?5 IS NULL OR read = ?5)
              AND (?6 IS NULL OR date >= ?6)
              AND (?7 IS NULL OR date < ?7)
-             AND (?8 IS NULL OR id IN
-                  (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?8))
+             AND (?8 IS NULL OR mailbox = ?8 COLLATE NOCASE)
+             AND (?9 IS NULL OR id IN
+                  (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?9))
            ORDER BY date DESC
-           LIMIT ?9"#,
+           LIMIT ?10"#,
     )
     .bind(account_id)
     .bind(query.from.as_deref().map(escape_like))
@@ -120,6 +125,7 @@ pub async fn search(
     .bind(query.read)
     .bind(query.after.as_deref())
     .bind(query.before.as_deref())
+    .bind(query.mailbox.as_deref())
     .bind(fts_match_expr(&query.text))
     .bind(RESULT_LIMIT)
     .fetch_all(pool)
@@ -506,5 +512,57 @@ mod tests {
         let q = parse_query("to:jan@example.com");
 
         assert_eq!(q.to.as_deref(), Some("jan@example.com"));
+    }
+
+    #[test]
+    fn in_operator_captures_the_mailbox() {
+        let q = parse_query("in:archive faktúra");
+
+        assert_eq!(q.mailbox.as_deref(), Some("archive"));
+        assert_eq!(q.text, "faktúra");
+    }
+
+    #[tokio::test]
+    async fn in_operator_scopes_results_to_one_folder() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Personal").await;
+        insert_message(
+            &pool,
+            id,
+            1,
+            "a@example.com",
+            "",
+            "V inboxe",
+            "2026-07-01T00:00:00Z",
+            false,
+            Some("zmluva o dielo"),
+        )
+        .await;
+        sqlx::query("UPDATE messages SET mailbox = 'Archive' WHERE uid = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        insert_message(
+            &pool,
+            id,
+            2,
+            "a@example.com",
+            "",
+            "Tiež zmluva",
+            "2026-07-02T00:00:00Z",
+            false,
+            Some("zmluva o dielo"),
+        )
+        .await;
+
+        // Search spans all folders by default; in: narrows, case-insensitively.
+        assert_eq!(
+            subjects_for(&pool, None, "zmluva").await,
+            vec!["Tiež zmluva", "V inboxe"]
+        );
+        assert_eq!(
+            subjects_for(&pool, None, "in:archive zmluva").await,
+            vec!["V inboxe"]
+        );
     }
 }
