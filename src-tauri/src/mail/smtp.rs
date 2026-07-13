@@ -43,6 +43,17 @@ fn transport(
         .build())
 }
 
+/// Whether this SMTP server stores its own copy of every sent message.
+/// Gmail does (any authenticated send lands in "Sent Mail" server-side), so
+/// appending our own copy would duplicate it there.
+pub fn server_saves_sent_copy(smtp_host: &str) -> bool {
+    let host = smtp_host.to_ascii_lowercase();
+    host == "gmail.com"
+        || host.ends_with(".gmail.com")
+        || host == "googlemail.com"
+        || host.ends_with(".googlemail.com")
+}
+
 /// Build the MIME message for an outgoing mail. `to` accepts a
 /// comma-separated recipient list; the body is plain text for now.
 pub fn build_message(from_email: &str, outgoing: &OutgoingMessage) -> Result<Message, AppError> {
@@ -122,6 +133,21 @@ mod tests {
     fn submission_ports_use_starttls() {
         assert!(!uses_implicit_tls(587));
         assert!(!uses_implicit_tls(25));
+    }
+
+    #[test]
+    fn gmail_hosts_save_their_own_sent_copy() {
+        assert!(server_saves_sent_copy("smtp.gmail.com"));
+        assert!(server_saves_sent_copy("SMTP.Gmail.com"));
+        assert!(server_saves_sent_copy("smtp.googlemail.com"));
+    }
+
+    #[test]
+    fn other_hosts_need_an_explicit_sent_copy() {
+        assert!(!server_saves_sent_copy("smtp.example.com"));
+        assert!(!server_saves_sent_copy("smtp.mail.me.com"));
+        // A lookalike suffix must not match.
+        assert!(!server_saves_sent_copy("smtp.notgmail.com"));
     }
 
     fn outgoing(to: &str) -> OutgoingMessage {
