@@ -78,8 +78,17 @@ vi.mock("./lib/api", () => ({
   listMailboxes: vi.fn(async (accountId: number) =>
     accountId === 1
       ? [
-          { id: 1, accountId: 1, name: "INBOX", role: "inbox" },
-          { id: 2, accountId: 1, name: "Archive", role: "archive" },
+          { id: 1, accountId: 1, name: "INBOX", role: "inbox", displayName: "INBOX" },
+          { id: 2, accountId: 1, name: "Archive", role: "archive", displayName: "Archive" },
+          // A Gmail-style folder: the wire name stays modified UTF-7, the
+          // backend ships the decoded label alongside it.
+          {
+            id: 3,
+            accountId: 1,
+            name: "[Gmail]/Odoslan&AOk-",
+            role: "sent",
+            displayName: "Odoslané",
+          },
         ]
       : [],
   ),
@@ -186,6 +195,25 @@ it("expands an account and opens one of its folders", async () => {
   expect(await screen.findByText("Archived note")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Archive" })).toBeInTheDocument();
   expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
+});
+
+it("shows decoded folder names but talks to the backend in wire names", async () => {
+  const { listMessages } = await import("./lib/api");
+  render(App);
+  await screen.findByText("Weekend plans");
+
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Toggle folders for Personal" }),
+  );
+  // The sidebar and list header show the decoded label…
+  await fireEvent.click(await screen.findByRole("button", { name: "Odoslané" }));
+  expect(
+    await screen.findByRole("heading", { name: "Odoslané" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("[Gmail]/Odoslan&AOk-")).not.toBeInTheDocument();
+
+  // …while the IMAP wire name is what the backend receives.
+  expect(listMessages).toHaveBeenLastCalledWith(1, "[Gmail]/Odoslan&AOk-");
 });
 
 it("hides the folder toggle for accounts with no extra folders", async () => {

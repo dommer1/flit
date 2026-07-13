@@ -60,6 +60,8 @@ export interface Mailbox {
   name: string;
   /** "inbox" | "drafts" | "sent" | "archive" | "junk" | "trash" | null. */
   role: string | null;
+  /** Decoded, prefix-stripped name for the UI — never send to the backend. */
+  displayName: string;
 }
 
 export interface MessageHeader {

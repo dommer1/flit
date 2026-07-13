@@ -44,7 +44,9 @@
     selectedAccountId === null
       ? "All Inboxes"
       : selectedMailbox !== "INBOX"
-        ? selectedMailbox
+        ? (mailboxesByAccount[selectedAccountId]?.find(
+            (m) => m.name === selectedMailbox,
+          )?.displayName ?? selectedMailbox)
         : (accounts.find((a) => a.id === selectedAccountId)?.name ?? "Inbox"),
   );
 

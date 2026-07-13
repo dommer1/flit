@@ -122,7 +122,7 @@
             selectedMailbox === mailbox.name}
           onclick={() => onSelect(account.id, mailbox.name)}
         >
-          <span class="label">{mailbox.name}</span>
+          <span class="label">{mailbox.displayName}</span>
         </button>
       {/each}
     {/if}
