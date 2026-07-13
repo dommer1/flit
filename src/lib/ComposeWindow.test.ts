@@ -91,11 +91,58 @@ it("queues the send and closes the window immediately", async () => {
     expect(api.queueSend).toHaveBeenCalledWith({
       accountId: 1,
       to: "bob@example.com",
+      cc: "",
+      bcc: "",
       subject: "Hello",
       body: "",
     }),
   );
   await waitFor(() => expect(api.closeCompose).toHaveBeenCalled());
+});
+
+it("reveals cc/bcc on demand and queues them with the send", async () => {
+  await renderLoaded();
+
+  expect(screen.queryByLabelText("Cc")).toBeNull();
+  expect(screen.queryByLabelText("Bcc")).toBeNull();
+
+  await fireEvent.click(screen.getByRole("button", { name: "Cc/Bcc" }));
+  await fireEvent.input(screen.getByLabelText("Cc"), {
+    target: { value: "carol@example.com" },
+  });
+  await fireEvent.input(screen.getByLabelText("Bcc"), {
+    target: { value: "hidden@example.com" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith({
+      accountId: 1,
+      to: "bob@example.com",
+      cc: "carol@example.com",
+      bcc: "hidden@example.com",
+      subject: "",
+      body: "",
+    }),
+  );
+});
+
+it("shows the cc/bcc fields right away when the draft carries them", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    accountId: 1,
+    to: "alice@example.com",
+    cc: "carol@example.com",
+    bcc: "",
+    subject: "Re: Weekend plans",
+    body: "",
+  });
+
+  render(ComposeWindow);
+
+  await waitFor(() =>
+    expect(screen.getByLabelText("Cc")).toHaveValue("carol@example.com"),
+  );
+  expect(screen.getByLabelText("Bcc")).toHaveValue("");
 });
 
 it("shows the failure and stays open when queueing fails", async () => {

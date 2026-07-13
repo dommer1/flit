@@ -11,6 +11,11 @@
   let accounts = $state<Account[]>([]);
   let accountId = $state<number | null>(null);
   let to = $state("");
+  let cc = $state("");
+  let bcc = $state("");
+  // why: Cc/Bcc rows stay hidden until asked for (or the draft carries
+  // them) so the default envelope stays as quiet as Apple Mail's.
+  let showCcBcc = $state(false);
   let subject = $state("");
   let body = $state("");
 
@@ -28,6 +33,9 @@
       // message from the first account instead of a broken window.
       accountId = draft?.accountId ?? accounts[0]?.id ?? null;
       to = draft?.to ?? "";
+      cc = draft?.cc ?? "";
+      bcc = draft?.bcc ?? "";
+      showCcBcc = cc !== "" || bcc !== "";
       subject = draft?.subject ?? "";
       body = draft?.body ?? "";
     })();
@@ -42,7 +50,7 @@
     queueing = true;
     error = null;
     try {
-      await queueSend({ accountId, to, subject, body });
+      await queueSend({ accountId, to, cc, bcc, subject, body });
       await closeCompose();
     } catch (err) {
       error = String(err);
@@ -91,7 +99,27 @@
       disabled={queueing}
       placeholder="recipient@example.com"
     />
+    {#if !showCcBcc}
+      <button
+        type="button"
+        class="reveal"
+        onclick={() => (showCcBcc = true)}
+        disabled={queueing}
+      >
+        Cc/Bcc
+      </button>
+    {/if}
   </div>
+  {#if showCcBcc}
+    <div class="row">
+      <span class="key" aria-hidden="true">Cc:</span>
+      <input aria-label="Cc" bind:value={cc} disabled={queueing} />
+    </div>
+    <div class="row">
+      <span class="key" aria-hidden="true">Bcc:</span>
+      <input aria-label="Bcc" bind:value={bcc} disabled={queueing} />
+    </div>
+  {/if}
   <div class="row">
     <span class="key" aria-hidden="true">From:</span>
     <select
@@ -170,6 +198,21 @@
   .icon:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+
+  .reveal {
+    flex-shrink: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .reveal:hover {
+    color: var(--text-primary);
   }
 
   .row {
