@@ -128,6 +128,32 @@ fn role_from_name(name: &str) -> Option<&'static str> {
     }
 }
 
+/// One `(uid, seen)` sweep of the whole selected folder — numbers only, no
+/// content — so reconciliation can spot deletions and flag changes made by
+/// other clients. `exists` guards the empty-folder case (FETCH 1:* errors).
+pub async fn fetch_uid_flags(
+    session: &mut ImapSession,
+    exists: u32,
+) -> Result<Vec<(i64, bool)>, AppError> {
+    if exists == 0 {
+        return Ok(Vec::new());
+    }
+    let stream = session
+        .fetch("1:*", "(UID FLAGS)")
+        .await
+        .map_err(imap_err)?;
+    let fetches: Vec<Fetch> = stream.try_collect().await.map_err(imap_err)?;
+    Ok(fetches
+        .iter()
+        .filter_map(|f| {
+            Some((
+                i64::from(f.uid?),
+                f.flags().any(|flag| matches!(flag, Flag::Seen)),
+            ))
+        })
+        .collect())
+}
+
 /// RFC822.SIZE for a set of UIDs in one round trip → `(uid, bytes)` pairs.
 /// UIDs the server no longer knows simply don't come back.
 pub async fn fetch_sizes(

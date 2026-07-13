@@ -95,7 +95,45 @@ async fn sync_mailbox(
     };
 
     let headers: Vec<FetchedHeader> = raw.iter().map(|r| to_fetched(r, server_validity)).collect();
-    messages::upsert_headers(pool, account_id, mailbox, &headers).await
+    messages::upsert_headers(pool, account_id, mailbox, &headers).await?;
+
+    // Mirror what other clients did to this folder (moves, deletes, reads):
+    // one cheap numbers-only sweep, then apply the differences locally.
+    let server = imap::fetch_uid_flags(session, selected.exists).await?;
+    let cached = messages::uid_flags(pool, account_id, mailbox).await?;
+    let plan = reconcile_plan(&cached, &server);
+    for id in plan.delete {
+        messages::delete_by_id(pool, id).await?;
+    }
+    for (id, read) in plan.flag {
+        messages::set_read(pool, id, read).await?;
+    }
+    Ok(())
+}
+
+/// What reconciliation must change locally: rows to drop (the message left
+/// the folder server-side) and read flags to adopt.
+#[derive(Debug, Default, PartialEq)]
+struct ReconcilePlan {
+    delete: Vec<i64>,
+    /// `(message id, new read state)`
+    flag: Vec<(i64, bool)>,
+}
+
+/// Diff the cached rows `(id, uid, read)` against the server sweep
+/// `(uid, seen)`. Rows the server no longer lists are deleted; flag
+/// mismatches adopt the server's state — the server is the source of truth.
+fn reconcile_plan(cached: &[(i64, i64, bool)], server: &[(i64, bool)]) -> ReconcilePlan {
+    let server_by_uid: std::collections::HashMap<i64, bool> = server.iter().copied().collect();
+    let mut plan = ReconcilePlan::default();
+    for (id, uid, read) in cached {
+        match server_by_uid.get(uid) {
+            None => plan.delete.push(*id),
+            Some(seen) if seen != read => plan.flag.push((*id, *seen)),
+            Some(_) => {}
+        }
+    }
+    plan
 }
 
 /// Cross the prefetch work-list with the sizes the server reported: keep
@@ -249,6 +287,20 @@ mod tests {
     #[test]
     fn matching_validity_without_uids_plans_initial() {
         assert_eq!(plan(Some(7), 7, None), SyncPlan::Initial);
+    }
+
+    #[test]
+    fn reconcile_plan_deletes_missing_and_adopts_server_flags() {
+        // cached: (row id, uid, read)
+        let cached = [(1, 101, false), (2, 102, true), (3, 103, false)];
+        // server sweep: (uid, seen) — uid 102 vanished (moved or deleted),
+        // uid 101 was read elsewhere, uid 103 is unchanged.
+        let server = [(101, true), (103, false)];
+
+        let plan = reconcile_plan(&cached, &server);
+
+        assert_eq!(plan.delete, vec![2]);
+        assert_eq!(plan.flag, vec![(1, true)]);
     }
 
     #[test]

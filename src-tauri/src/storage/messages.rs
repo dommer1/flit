@@ -173,6 +173,43 @@ pub async fn uids_missing_body(
     Ok(rows)
 }
 
+/// `(id, uid, read)` of every cached row in one folder, uid order — the
+/// local side of reconciliation.
+pub async fn uid_flags(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+) -> Result<Vec<(i64, i64, bool)>, AppError> {
+    let rows = sqlx::query_as(
+        "SELECT id, uid, read FROM messages
+         WHERE account_id = ? AND mailbox = ? ORDER BY uid",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Remove one cached message (it vanished from the folder server-side).
+pub async fn delete_by_id(pool: &SqlitePool, message_id: i64) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM messages WHERE id = ?")
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Adopt the server's read/unread state for one message.
+pub async fn set_read(pool: &SqlitePool, message_id: i64, read: bool) -> Result<(), AppError> {
+    sqlx::query("UPDATE messages SET read = ? WHERE id = ?")
+        .bind(read)
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Drop the cache for one mailbox — required when UIDVALIDITY changes
 /// (RFC 3501: old UIDs are meaningless after that).
 pub async fn clear_mailbox(
@@ -466,6 +503,37 @@ mod tests {
         assert_eq!(after.body_html.as_deref(), Some("<p>html body</p>"));
         let headers = list(&pool, Some(id), "INBOX").await.unwrap();
         assert_eq!(headers[0].snippet, "plain body");
+    }
+
+    #[tokio::test]
+    async fn uid_flags_delete_and_set_read_roundtrip() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(1, "First", "2026-07-01T00:00:00Z", false),
+                header(2, "Second", "2026-07-02T00:00:00Z", true),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let rows = uid_flags(&pool, id, "INBOX").await.unwrap();
+        let uids: Vec<i64> = rows.iter().map(|(_, uid, _)| *uid).collect();
+        assert_eq!(uids, vec![1, 2]);
+
+        let (first_id, _, first_read) = rows[0];
+        assert!(!first_read);
+        set_read(&pool, first_id, true).await.unwrap();
+        assert!(uid_flags(&pool, id, "INBOX").await.unwrap()[0].2);
+
+        delete_by_id(&pool, first_id).await.unwrap();
+        let remaining = uid_flags(&pool, id, "INBOX").await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].1, 2);
     }
 
     #[tokio::test]
