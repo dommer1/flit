@@ -5,7 +5,6 @@ use crate::mail::{imap, parse};
 use crate::models::Account;
 use crate::storage::messages::{self, FetchedHeader};
 
-const MAILBOX: &str = "INBOX";
 const INITIAL_FETCH: u32 = 50;
 
 /// Background prefetch downloads a message's full body only when the whole
@@ -151,17 +150,18 @@ fn prefetch_plan(missing: &[(i64, i64)], sizes: &[(i64, u32)], max_bytes: u32) -
         .collect()
 }
 
-/// Download and cache bodies for recent messages that have none, so search
-/// covers mail the user never opened. Returns how many bodies were cached.
+/// Download and cache bodies for messages that have none, so search covers
+/// mail the user never opened. Folders run in sidebar order (INBOX first)
+/// against one shared budget per run. Returns how many bodies were cached.
 pub async fn prefetch_bodies(
     pool: &SqlitePool,
     account: &Account,
     password: &str,
 ) -> Result<usize, AppError> {
-    let missing = messages::uids_missing_body(pool, account.id, MAILBOX, PREFETCH_BATCH).await?;
-    if missing.is_empty() {
+    if !messages::has_missing_bodies(pool, account.id).await? {
         return Ok(0);
     }
+    let folders = crate::storage::mailboxes::list(pool, account.id).await?;
 
     let mut session = imap::connect(
         &account.imap_host,
@@ -170,31 +170,43 @@ pub async fn prefetch_bodies(
         password,
     )
     .await?;
-    session
-        .select(MAILBOX)
-        .await
-        .map_err(|e| AppError::Imap(format!("select {MAILBOX}: {e}")))?;
 
-    let uids: Vec<i64> = missing.iter().map(|(_, uid)| *uid).collect();
-    let sizes = imap::fetch_sizes(&mut session, &uids).await?;
-
+    let mut budget = PREFETCH_BATCH;
     let mut cached = 0;
-    for (message_id, uid) in prefetch_plan(&missing, &sizes, MAX_PREFETCH_BYTES) {
-        // why: a UID can vanish mid-run (deleted on another device) — skip it
-        // rather than aborting the whole batch.
-        let Some(raw) = imap::fetch_body(&mut session, uid).await? else {
+    for folder in &folders {
+        if budget == 0 {
+            break;
+        }
+        let missing = messages::uids_missing_body(pool, account.id, &folder.name, budget).await?;
+        if missing.is_empty() {
             continue;
-        };
-        let parsed = parse::parse_body(&raw);
-        messages::set_body(
-            pool,
-            message_id,
-            parsed.text.as_deref(),
-            parsed.html.as_deref(),
-            &parsed.snippet,
-        )
-        .await?;
-        cached += 1;
+        }
+        session
+            .select(&folder.name)
+            .await
+            .map_err(|e| AppError::Imap(format!("select {}: {e}", folder.name)))?;
+
+        let uids: Vec<i64> = missing.iter().map(|(_, uid)| *uid).collect();
+        let sizes = imap::fetch_sizes(&mut session, &uids).await?;
+
+        for (message_id, uid) in prefetch_plan(&missing, &sizes, MAX_PREFETCH_BYTES) {
+            // why: a UID can vanish mid-run (deleted on another device) —
+            // skip it rather than aborting the whole batch.
+            let Some(raw) = imap::fetch_body(&mut session, uid).await? else {
+                continue;
+            };
+            let parsed = parse::parse_body(&raw);
+            messages::set_body(
+                pool,
+                message_id,
+                parsed.text.as_deref(),
+                parsed.html.as_deref(),
+                &parsed.snippet,
+            )
+            .await?;
+            cached += 1;
+            budget -= 1;
+        }
     }
     let _ = session.logout().await;
     Ok(cached)

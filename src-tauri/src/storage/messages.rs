@@ -173,6 +173,19 @@ pub async fn uids_missing_body(
     Ok(rows)
 }
 
+/// Whether any cached message of this account, in any folder, still lacks
+/// a body — lets the prefetcher skip connecting when there is nothing to do.
+pub async fn has_missing_bodies(pool: &SqlitePool, account_id: i64) -> Result<bool, AppError> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM messages
+         WHERE account_id = ? AND body_text IS NULL AND body_html IS NULL",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count > 0)
+}
+
 /// `(id, uid, read)` of every cached row in one folder, uid order — the
 /// local side of reconciliation.
 pub async fn uid_flags(
@@ -430,6 +443,29 @@ mod tests {
             .map(|m| m.subject)
             .collect();
         assert_eq!(unified, vec!["Archived"]);
+    }
+
+    #[tokio::test]
+    async fn has_missing_bodies_spans_all_mailboxes() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        assert!(!has_missing_bodies(&pool, id).await.unwrap());
+
+        upsert_headers(
+            &pool,
+            id,
+            "Archive",
+            &[header(1, "Old", "2026-07-01T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        assert!(has_missing_bodies(&pool, id).await.unwrap());
+
+        let row_id = list(&pool, Some(id), "Archive").await.unwrap()[0].id;
+        set_body(&pool, row_id, Some("text"), None, "text")
+            .await
+            .unwrap();
+        assert!(!has_missing_bodies(&pool, id).await.unwrap());
     }
 
     #[tokio::test]
