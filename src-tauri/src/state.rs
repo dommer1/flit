@@ -17,6 +17,10 @@ pub struct AppState {
     /// why std Mutex, not tokio: it is only held for a map insert/remove,
     /// never across an await.
     pending_drafts: Mutex<HashMap<String, OutgoingMessage>>,
+    /// Messages sitting out their undo window before actually sending.
+    /// One-shot by design: whoever takes the entry owns the outcome — the
+    /// timer task sends it, or undo hands it back to a compose window.
+    pending_sends: Mutex<HashMap<u64, OutgoingMessage>>,
 }
 
 impl AppState {
@@ -24,6 +28,7 @@ impl AppState {
         Self {
             pool,
             pending_drafts: Mutex::new(HashMap::new()),
+            pending_sends: Mutex::new(HashMap::new()),
         }
     }
 
@@ -38,11 +43,28 @@ impl AppState {
         self.lock_drafts().remove(label)
     }
 
+    /// Park a message for the duration of its undo window.
+    pub fn park_send(&self, id: u64, message: OutgoingMessage) {
+        self.lock_sends().insert(id, message);
+    }
+
+    /// One-shot pickup: `None` means the other side already took it — for
+    /// the timer that's "undone", for undo that's "too late, already sending".
+    pub fn take_send(&self, id: u64) -> Option<OutgoingMessage> {
+        self.lock_sends().remove(&id)
+    }
+
     // why unwrap_or_else(into_inner): a poisoned lock only means some thread
     // panicked while holding it — the map itself is still coherent, and a
     // compose draft is not worth failing commands over.
     fn lock_drafts(&self) -> MutexGuard<'_, HashMap<String, OutgoingMessage>> {
         self.pending_drafts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_sends(&self) -> MutexGuard<'_, HashMap<u64, OutgoingMessage>> {
+        self.pending_sends
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -71,6 +93,19 @@ mod tests {
 
         assert_eq!(taken.map(|d| d.subject), Some("Hello".to_string()));
         assert!(state.take_draft("compose-0").is_none());
+    }
+
+    #[tokio::test]
+    async fn taking_a_pending_send_is_one_shot() {
+        let state = AppState::new(test_pool().await);
+        state.park_send(7, draft("Hello"));
+
+        let taken = state.take_send(7);
+
+        assert_eq!(taken.map(|d| d.subject), Some("Hello".to_string()));
+        // the second taker loses — that is the whole undo-vs-timer contract
+        assert!(state.take_send(7).is_none());
+        assert!(state.take_send(8).is_none());
     }
 
     #[tokio::test]
