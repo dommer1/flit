@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
-use crate::models::{Account, MessageBody, MessageHeader, NewAccount, OutgoingMessage};
+use crate::models::{Account, Mailbox, MessageBody, MessageHeader, NewAccount, OutgoingMessage};
 use crate::state::AppState;
 use crate::{auth, mail, storage};
 
@@ -112,6 +112,15 @@ pub async fn list_messages(
 ) -> Result<Vec<MessageHeader>, AppError> {
     let mailbox = mailbox.as_deref().unwrap_or("INBOX");
     storage::messages::list(&state.pool, account_id, mailbox).await
+}
+
+/// Folders of one account in sidebar order, from the local mirror.
+#[tauri::command]
+pub async fn list_mailboxes(
+    state: State<'_, AppState>,
+    account_id: i64,
+) -> Result<Vec<Mailbox>, AppError> {
+    storage::mailboxes::list(&state.pool, account_id).await
 }
 
 /// Search the local cache with a gmail-style query ("from:x is:unread text").

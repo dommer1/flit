@@ -76,6 +76,7 @@ pub fn run() {
             commands::list_accounts,
             commands::add_account,
             commands::delete_account,
+            commands::list_mailboxes,
             commands::list_messages,
             commands::search_messages,
             commands::sync_account,

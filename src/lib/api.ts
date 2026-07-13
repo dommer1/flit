@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import type {
   Account,
+  Mailbox,
   MessageBody,
   MessageHeader,
   NewAccount,
@@ -40,6 +41,11 @@ export function confirmAccountDeletion(account: Account): Promise<boolean> {
       "This cannot be undone.",
     { title: "Delete Account", kind: "warning" },
   );
+}
+
+/** Folders of one account in sidebar order (roles first, then customs). */
+export function listMailboxes(accountId: number): Promise<Mailbox[]> {
+  return invoke<Mailbox[]>("list_mailboxes", { accountId });
 }
 
 /** `accountId: null` = the given mailbox across all accounts. */

@@ -42,6 +42,16 @@ export interface MessageBody {
   text: string | null;
 }
 
+/** One folder of one account, as shown in the sidebar. */
+export interface Mailbox {
+  id: number;
+  accountId: number;
+  /** Full IMAP name — also the value list_messages expects as `mailbox`. */
+  name: string;
+  /** "inbox" | "drafts" | "sent" | "archive" | "junk" | "trash" | null. */
+  role: string | null;
+}
+
 export interface MessageHeader {
   id: number;
   accountId: number;
