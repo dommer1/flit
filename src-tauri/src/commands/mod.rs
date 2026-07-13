@@ -243,6 +243,9 @@ async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppE
     // why: the session cache reads the keychain at most once per account per
     // run; the password never reaches events or logs.
     let password = state.password(message.account_id).await?;
+    // why: formatted() consumes nothing but we need the raw bytes twice —
+    // once for SMTP, once for the Sent-folder copy below.
+    let raw = mime.formatted();
     mail::smtp::send(
         &account.smtp_host,
         account.smtp_port,
@@ -250,7 +253,40 @@ async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppE
         &password,
         mime,
     )
-    .await
+    .await?;
+    // why: best effort — the mail already left the machine, so a failed
+    // Sent copy must never surface as a failed send (or reopen the draft).
+    if let Err(err) = save_sent_copy(state, &account, &password, &raw).await {
+        eprintln!("sent copy for account {} failed: {err}", account.id);
+    }
+    Ok(())
+}
+
+/// Mirror a delivered message into the account's IMAP Sent folder so other
+/// clients (webmail, phone) see it. Skipped for servers that store their own
+/// copy (Gmail), where appending would duplicate the message.
+async fn save_sent_copy(
+    state: &AppState,
+    account: &Account,
+    password: &str,
+    raw: &[u8],
+) -> Result<(), AppError> {
+    if mail::smtp::server_saves_sent_copy(&account.smtp_host) {
+        return Ok(());
+    }
+    let Some(sent) = storage::mailboxes::sent_name(&state.pool, account.id).await? else {
+        return Err(AppError::Imap("no sent folder discovered yet".to_string()));
+    };
+    let mut session = mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        password,
+    )
+    .await?;
+    let result = mail::imap::append(&mut session, &sent, raw).await;
+    let _ = session.logout().await;
+    result
 }
 
 /// Verify & Save: prove the submitted credentials against both servers

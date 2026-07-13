@@ -179,6 +179,19 @@ pub async fn fetch_sizes(
         .collect())
 }
 
+/// Upload one raw RFC-2822 message into a mailbox, already marked read —
+/// used to mirror SMTP-sent mail into the Sent folder.
+pub async fn append(
+    session: &mut ImapSession,
+    mailbox: &str,
+    message: &[u8],
+) -> Result<(), AppError> {
+    session
+        .append(mailbox, Some("(\\Seen)"), None, message)
+        .await
+        .map_err(imap_err)
+}
+
 /// Fetch one full raw message by UID; `None` when the server has no such UID.
 pub async fn fetch_body(session: &mut ImapSession, uid: i64) -> Result<Option<Vec<u8>>, AppError> {
     let stream = session
