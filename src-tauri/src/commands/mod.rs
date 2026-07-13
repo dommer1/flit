@@ -149,6 +149,9 @@ struct SendEvent {
     id: u64,
     subject: String,
     error: Option<String>,
+    /// Length of the undo window in milliseconds — drives the countdown
+    /// donut in the badge. Only meaningful on send-queued; 0 elsewhere.
+    undo_ms: u64,
 }
 
 /// Park a composed message for its undo window, then send it. Returns as
@@ -175,6 +178,7 @@ pub async fn queue_send(
             id,
             subject: subject.clone(),
             error: None,
+            undo_ms: UNDO_WINDOW.as_millis() as u64,
         },
     )?;
 
@@ -200,6 +204,7 @@ pub async fn queue_send(
                 id,
                 subject,
                 error: error.map(|e| e.to_string()),
+                undo_ms: 0,
             },
         );
     });
@@ -224,6 +229,7 @@ pub async fn undo_send(
                 id,
                 subject,
                 error: None,
+                undo_ms: 0,
             },
         )?;
     }
