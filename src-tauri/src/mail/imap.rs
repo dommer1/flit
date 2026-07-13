@@ -4,13 +4,14 @@
 
 use std::time::Duration;
 
-use async_imap::types::{Fetch, Flag};
+use async_imap::types::{Fetch, Flag, Name, NameAttribute};
 use async_imap::Session;
 use async_native_tls::TlsStream;
 use futures::TryStreamExt;
 use tokio::net::TcpStream;
 
 use crate::error::AppError;
+use crate::storage::mailboxes::DiscoveredMailbox;
 
 pub type ImapSession = Session<TlsStream<TcpStream>>;
 
@@ -79,6 +80,52 @@ pub async fn fetch_headers_by_uid(
         .map_err(imap_err)?;
     let fetches: Vec<Fetch> = stream.try_collect().await.map_err(imap_err)?;
     Ok(fetches.iter().filter_map(raw_header).collect())
+}
+
+/// All selectable folders on the server, with their special-use roles.
+pub async fn list_mailboxes(session: &mut ImapSession) -> Result<Vec<DiscoveredMailbox>, AppError> {
+    let stream = session.list(Some(""), Some("*")).await.map_err(imap_err)?;
+    let names: Vec<Name> = stream.try_collect().await.map_err(imap_err)?;
+    Ok(names
+        .iter()
+        .filter_map(|n| discovered(n.name(), n.attributes()))
+        .collect())
+}
+
+/// Map one LIST line to a folder the app can use; `None` for containers
+/// that can't hold mail (\Noselect). SPECIAL-USE attributes (RFC 6154) win;
+/// well-known English names are the fallback for servers without them.
+fn discovered(name: &str, attributes: &[NameAttribute]) -> Option<DiscoveredMailbox> {
+    if attributes.contains(&NameAttribute::NoSelect) {
+        return None;
+    }
+    let role = attributes
+        .iter()
+        .find_map(|attr| match attr {
+            NameAttribute::Drafts => Some("drafts"),
+            NameAttribute::Sent => Some("sent"),
+            NameAttribute::Archive => Some("archive"),
+            NameAttribute::Junk => Some("junk"),
+            NameAttribute::Trash => Some("trash"),
+            _ => None,
+        })
+        .or_else(|| role_from_name(name));
+    Some(DiscoveredMailbox {
+        name: name.to_string(),
+        role: role.map(str::to_string),
+    })
+}
+
+fn role_from_name(name: &str) -> Option<&'static str> {
+    match name.to_ascii_lowercase().as_str() {
+        "inbox" => Some("inbox"),
+        "drafts" => Some("drafts"),
+        "sent" | "sent messages" | "sent items" => Some("sent"),
+        "archive" => Some("archive"),
+        "junk" | "spam" => Some("junk"),
+        "trash" | "deleted messages" => Some("trash"),
+        _ => None,
+    }
 }
 
 /// RFC822.SIZE for a set of UIDs in one round trip → `(uid, bytes)` pairs.
@@ -186,5 +233,36 @@ mod tests {
 
         let uids: Vec<i64> = filtered.iter().map(|h| h.uid).collect();
         assert_eq!(uids, vec![11, 12]);
+    }
+
+    #[test]
+    fn discovered_skips_unselectable_folders() {
+        assert_eq!(discovered("dovecot", &[NameAttribute::NoSelect]), None);
+    }
+
+    #[test]
+    fn discovered_maps_special_use_attributes_to_roles() {
+        let junk = discovered("Spam", &[NameAttribute::Junk]).unwrap();
+        assert_eq!(junk.role.as_deref(), Some("junk"));
+
+        let sent = discovered("Odoslané", &[NameAttribute::Sent]).unwrap();
+        assert_eq!(sent.role.as_deref(), Some("sent"));
+        assert_eq!(sent.name, "Odoslané");
+    }
+
+    #[test]
+    fn discovered_falls_back_to_well_known_names() {
+        // Servers without SPECIAL-USE only send generic attributes.
+        let trash = discovered("Trash", &[NameAttribute::Unmarked]).unwrap();
+        assert_eq!(trash.role.as_deref(), Some("trash"));
+
+        let spam = discovered("spam", &[]).unwrap();
+        assert_eq!(spam.role.as_deref(), Some("junk"));
+
+        assert_eq!(
+            discovered("INBOX", &[]).unwrap().role.as_deref(),
+            Some("inbox")
+        );
+        assert_eq!(discovered("Projects", &[]).unwrap().role, None);
     }
 }
