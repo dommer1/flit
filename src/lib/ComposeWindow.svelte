@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import {
     closeCompose,
     listAccounts,
@@ -8,14 +8,25 @@
   } from "./api";
   import type { Account } from "./types";
 
+  /** How long a send can still be undone before it really leaves. */
+  const UNDO_SECONDS = 8;
+  /** How long the "Message sent" confirmation stays before auto-close. */
+  const SENT_CLOSE_MS = 1200;
+
   let accounts = $state<Account[]>([]);
   let accountId = $state<number | null>(null);
   let to = $state("");
   let subject = $state("");
   let body = $state("");
 
-  let sending = $state(false);
+  // editing → countdown (undoable) → sending → sent; a failure or an undo
+  // drops back to editing with the draft intact.
+  let phase = $state<"editing" | "countdown" | "sending" | "sent">("editing");
+  let secondsLeft = $state(UNDO_SECONDS);
   let error = $state<string | null>(null);
+
+  let countdownTimer: ReturnType<typeof setInterval> | undefined;
+  onDestroy(() => clearInterval(countdownTimer));
 
   onMount(() => {
     void (async () => {
@@ -33,20 +44,40 @@
     })();
   });
 
-  async function submit(event: SubmitEvent) {
+  // why: submit only arms the countdown — nothing touches the network until
+  // it runs out, so Undo is a plain timer cancel, never a message recall.
+  function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (accountId === null) return;
-    sending = true;
+    if (phase !== "editing" || accountId === null) return;
     error = null;
+    phase = "countdown";
+    secondsLeft = UNDO_SECONDS;
+    countdownTimer = setInterval(() => {
+      secondsLeft -= 1;
+      if (secondsLeft <= 0) {
+        clearInterval(countdownTimer);
+        void send();
+      }
+    }, 1000);
+  }
+
+  function undoSend() {
+    clearInterval(countdownTimer);
+    phase = "editing";
+  }
+
+  async function send() {
+    if (accountId === null) return;
+    phase = "sending";
     try {
       await sendMessage({ accountId, to, subject, body });
-      // why: success is what closes the window; a rejection lands in catch
-      // and the draft stays open and editable.
-      await closeCompose();
+      // why: success is what closes the window — after a short confirmation
+      // beat; a rejection drops back to the editable draft.
+      phase = "sent";
+      setTimeout(() => void closeCompose(), SENT_CLOSE_MS);
     } catch (err) {
       error = String(err);
-    } finally {
-      sending = false;
+      phase = "editing";
     }
   }
 </script>
@@ -74,27 +105,33 @@
         <path d="M18 6 6 18M6 6l12 12" />
       </svg>
     </button>
-    <button
-      type="submit"
-      class="icon send"
-      aria-label={sending ? "Sending…" : "Send"}
-      title="Send"
-      disabled={sending || accountId === null}
-    >
-      <svg
-        viewBox="0 0 24 24"
-        width="18"
-        height="18"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.8"
-        stroke-linecap="round"
-        stroke-linejoin="round"
+    {#if phase === "countdown"}
+      <button type="button" class="undo" onclick={undoSend}>
+        Undo ({secondsLeft}s)
+      </button>
+    {:else}
+      <button
+        type="submit"
+        class="icon send"
+        aria-label={phase === "sending" ? "Sending…" : "Send"}
+        title="Send"
+        disabled={phase !== "editing" || accountId === null}
       >
-        <path d="M22 2 11 13" />
-        <path d="M22 2 15 22l-4-9-9-4z" />
-      </svg>
-    </button>
+        <svg
+          viewBox="0 0 24 24"
+          width="18"
+          height="18"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M22 2 11 13" />
+          <path d="M22 2 15 22l-4-9-9-4z" />
+        </svg>
+      </button>
+    {/if}
   </header>
 
   <!-- Canary-style envelope fields: quiet label + borderless input rows
@@ -105,12 +142,17 @@
       aria-label="To"
       bind:value={to}
       required
+      disabled={phase !== "editing"}
       placeholder="recipient@example.com"
     />
   </div>
   <div class="row">
     <span class="key" aria-hidden="true">From:</span>
-    <select aria-label="From" bind:value={accountId}>
+    <select
+      aria-label="From"
+      bind:value={accountId}
+      disabled={phase !== "editing"}
+    >
       {#each accounts as account (account.id)}
         <option value={account.id}>{account.email}</option>
       {/each}
@@ -122,6 +164,7 @@
       class="subject"
       aria-label="Subject"
       bind:value={subject}
+      disabled={phase !== "editing"}
       placeholder="Subject"
     />
   </div>
@@ -129,8 +172,15 @@
   {#if error}
     <p class="error" role="alert">{error}</p>
   {/if}
+  {#if phase === "sent"}
+    <p class="status" role="status">Message sent</p>
+  {/if}
 
-  <textarea aria-label="Message body" bind:value={body}></textarea>
+  <textarea
+    aria-label="Message body"
+    bind:value={body}
+    disabled={phase !== "editing"}
+  ></textarea>
 </form>
 
 <style>
@@ -176,6 +226,20 @@
   .icon:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+
+  /* The undo pill takes the send icon's spot while the countdown runs. */
+  .undo {
+    padding: 4px 12px;
+    border: none;
+    border-radius: 100px;
+    background: var(--accent);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent-text);
+    cursor: pointer;
   }
 
   .row {
@@ -245,6 +309,16 @@
     border-bottom: 1px solid var(--hairline);
     font-size: 12px;
     color: #d9302c;
+  }
+
+  .status {
+    flex-shrink: 0;
+    margin: 0;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--hairline);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
   }
 
   textarea {
