@@ -41,6 +41,20 @@
         if (message?.id === id) loading = false;
       });
   });
+
+  // The per-message "Load Images" click (policy "ask"): same body, re-rendered
+  // by the backend with remote images fetched and inlined. No spinner — the
+  // old body stays visible until the richer one arrives.
+  async function loadRemoteImages() {
+    if (message === null) return;
+    const id = message.id;
+    try {
+      const loaded = await getMessageBody(id, true);
+      if (message?.id === id) body = loaded;
+    } catch (err) {
+      if (message?.id === id) error = String(err);
+    }
+  }
 </script>
 
 <article>
@@ -76,6 +90,17 @@
         {/if}
       </div>
     </header>
+    {#if body?.canLoadRemote}
+      <div class="remote-banner">
+        <span>
+          {body.blockedImages === 1
+            ? "1 remote image was"
+            : `${body.blockedImages} remote images were`} blocked to protect
+          your privacy.
+        </span>
+        <button onclick={() => void loadRemoteImages()}>Load Images</button>
+      </div>
+    {/if}
     {#if loading}
       <p class="empty">Loading…</p>
     {:else if error}
@@ -194,6 +219,30 @@
 
   .actions button:hover {
     background: var(--bg-hover);
+  }
+
+  .remote-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-shrink: 0;
+    padding: 6px 20px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--bg-hover);
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .remote-banner button {
+    padding: 2px 10px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--bg-window);
+    font: inherit;
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
   }
 
   .body {

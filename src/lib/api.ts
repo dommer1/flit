@@ -69,9 +69,16 @@ export function searchMessages(
   return invoke<MessageHeader[]>("search_messages", { accountId, query });
 }
 
-/** Body from cache, lazily fetched from the server on first open. */
-export function getMessageBody(messageId: number): Promise<MessageBody> {
-  return invoke<MessageBody>("get_message_body", { messageId });
+/**
+ * Body from cache, lazily fetched from the server on first open.
+ * `loadRemote` is the per-message "Load Images" click; the backend honors
+ * it only under the "ask" policy.
+ */
+export function getMessageBody(
+  messageId: number,
+  loadRemote = false,
+): Promise<MessageBody> {
+  return invoke<MessageBody>("get_message_body", { messageId, loadRemote });
 }
 
 /** Fire-and-forget sync of one account: folder list + all folders' headers. */

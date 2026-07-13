@@ -60,6 +60,10 @@ export type RemoteImagePolicy = "block" | "ask" | "always";
 export interface MessageBody {
   html: string | null;
   text: string | null;
+  /** Remote images left blocked in `html`; 0 when none or all loaded. */
+  blockedImages: number;
+  /** Offer "Load Images" (policy is "ask" and this render blocked some). */
+  canLoadRemote: boolean;
 }
 
 /** One folder of one account, as shown in the sidebar. */

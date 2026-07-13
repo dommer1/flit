@@ -1,9 +1,24 @@
 import { expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import type { MessageHeader } from "./types";
+import type { MessageBody, MessageHeader } from "./types";
+
+function body(partial: Partial<MessageBody>): MessageBody {
+  return {
+    html: null,
+    text: null,
+    blockedImages: 0,
+    canLoadRemote: false,
+    ...partial,
+  };
+}
 
 vi.mock("./api", () => ({
-  getMessageBody: vi.fn(async () => ({ html: null, text: null })),
+  getMessageBody: vi.fn(async () => ({
+    html: null,
+    text: null,
+    blockedImages: 0,
+    canLoadRemote: false,
+  })),
 }));
 
 import * as api from "./api";
@@ -22,10 +37,9 @@ const message: MessageHeader = {
 };
 
 it("renders html bodies in a fully sandboxed iframe", async () => {
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce({
-    html: "<!doctype html><html><body><p>hi there</p></body></html>",
-    text: "hi there",
-  });
+  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
+    body({ html: "<!doctype html><html><body><p>hi there</p></body></html>", text: "hi there" }),
+  );
 
   const { container } = render(MessageView, { props: { message } });
 
@@ -42,10 +56,9 @@ it("renders html bodies in a fully sandboxed iframe", async () => {
 });
 
 it("renders text-only bodies as escaped text without an iframe", async () => {
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce({
-    html: null,
-    text: "plain <b>not html</b>",
-  });
+  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
+    body({ html: null, text: "plain <b>not html</b>" }),
+  );
 
   const { container } = render(MessageView, { props: { message } });
 
@@ -70,11 +83,51 @@ it("shows the empty state and fetches nothing without a message", () => {
   expect(api.getMessageBody).not.toHaveBeenCalled();
 });
 
-it("offers reply, reply all and forward with the loaded text", async () => {
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce({
-    html: null,
-    text: "hi there",
+it("offers to load remote images and re-renders with them", async () => {
+  vi.mocked(api.getMessageBody).mockClear();
+  vi.mocked(api.getMessageBody)
+    .mockResolvedValueOnce(
+      body({
+        html: "<!doctype html><html><body>no pics</body></html>",
+        blockedImages: 2,
+        canLoadRemote: true,
+      }),
+    )
+    .mockResolvedValueOnce(
+      body({ html: "<!doctype html><html><body>with pics</body></html>" }),
+    );
+
+  render(MessageView, { props: { message } });
+
+  await fireEvent.click(
+    await screen.findByRole("button", { name: "Load Images" }),
+  );
+
+  expect(api.getMessageBody).toHaveBeenLastCalledWith(1, true);
+  await waitFor(() => {
+    expect(
+      screen.queryByRole("button", { name: "Load Images" }),
+    ).not.toBeInTheDocument();
   });
+});
+
+it("shows no banner when nothing was blocked", async () => {
+  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
+    body({ html: "<!doctype html><html><body><p>clean</p></body></html>" }),
+  );
+
+  const { container } = render(MessageView, { props: { message } });
+
+  await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+  expect(
+    screen.queryByRole("button", { name: "Load Images" }),
+  ).not.toBeInTheDocument();
+});
+
+it("offers reply, reply all and forward with the loaded text", async () => {
+  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
+    body({ html: null, text: "hi there" }),
+  );
   const onDraft = vi.fn();
 
   render(MessageView, { props: { message, onDraft } });
