@@ -1,6 +1,7 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
+use crate::mail::parse::InlineImage;
 use crate::models::MessageHeader;
 
 /// Header data as it arrives from an IMAP fetch, before it has a row id.
@@ -144,6 +145,7 @@ pub async fn set_body(
     text: Option<&str>,
     html: Option<&str>,
     snippet: &str,
+    images: &[InlineImage],
 ) -> Result<(), AppError> {
     sqlx::query("UPDATE messages SET body_text = ?, body_html = ?, snippet = ? WHERE id = ?")
         .bind(text.unwrap_or(""))
@@ -152,7 +154,44 @@ pub async fn set_body(
         .bind(message_id)
         .execute(pool)
         .await?;
+    // why: images live inside set_body, not a separate call — one write path
+    // means a cached body can never drift apart from its cid images.
+    sqlx::query("DELETE FROM message_images WHERE message_id = ?")
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    for image in images {
+        sqlx::query(
+            "INSERT INTO message_images (message_id, content_id, content_type, data)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(message_id)
+        .bind(&image.content_id)
+        .bind(&image.content_type)
+        .bind(&image.data)
+        .execute(pool)
+        .await?;
+    }
     Ok(())
+}
+
+/// The cid: images cached for one message, for resolving `src="cid:..."`
+/// references at render time.
+pub async fn images(pool: &SqlitePool, message_id: i64) -> Result<Vec<InlineImage>, AppError> {
+    let rows: Vec<(String, String, Vec<u8>)> = sqlx::query_as(
+        "SELECT content_id, content_type, data FROM message_images WHERE message_id = ?",
+    )
+    .bind(message_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(content_id, content_type, data)| InlineImage {
+            content_id,
+            content_type,
+            data,
+        })
+        .collect())
 }
 
 /// The body-prefetch work-list: `(id, uid)` of messages with no cached body,
@@ -465,7 +504,7 @@ mod tests {
         let row_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
 
         // e.g. an attachment-only message: the parser yields no text or html.
-        set_body(&pool, row_id, None, None, "").await.unwrap();
+        set_body(&pool, row_id, None, None, "", &[]).await.unwrap();
 
         // Without this, the prefetcher would re-download it on every sync.
         assert!(!has_missing_bodies(&pool, id).await.unwrap());
@@ -492,7 +531,7 @@ mod tests {
         assert!(has_missing_bodies(&pool, id).await.unwrap());
 
         let row_id = list(&pool, Some(id), "Archive").await.unwrap()[0].id;
-        set_body(&pool, row_id, Some("text"), None, "text")
+        set_body(&pool, row_id, Some("text"), None, "text", &[])
             .await
             .unwrap();
         assert!(!has_missing_bodies(&pool, id).await.unwrap());
@@ -521,7 +560,7 @@ mod tests {
             .find(|m| m.subject == "Cached")
             .unwrap()
             .id;
-        set_body(&pool, cached_id, Some("text"), None, "text")
+        set_body(&pool, cached_id, Some("text"), None, "text", &[])
             .await
             .unwrap();
 
@@ -560,6 +599,7 @@ mod tests {
             Some("plain body"),
             Some("<p>html body</p>"),
             "plain body",
+            &[],
         )
         .await
         .unwrap();
@@ -569,6 +609,64 @@ mod tests {
         assert_eq!(after.body_html.as_deref(), Some("<p>html body</p>"));
         let headers = list(&pool, Some(id), "INBOX").await.unwrap();
         assert_eq!(headers[0].snippet, "plain body");
+    }
+
+    #[tokio::test]
+    async fn set_body_replaces_inline_images_and_delete_cascades() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "Pics", "2026-07-08T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        let message_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+
+        let photo = InlineImage {
+            content_id: "photo1".to_string(),
+            content_type: "image/png".to_string(),
+            data: b"\x89PNG".to_vec(),
+        };
+        set_body(&pool, message_id, None, Some("<img>"), "", &[photo])
+            .await
+            .unwrap();
+
+        let stored = images(&pool, message_id).await.unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].content_id, "photo1");
+        assert_eq!(stored[0].content_type, "image/png");
+        assert_eq!(stored[0].data, b"\x89PNG");
+
+        // A re-fetched body replaces its images instead of stacking them.
+        set_body(&pool, message_id, None, Some("<p>plain</p>"), "", &[])
+            .await
+            .unwrap();
+        assert_eq!(images(&pool, message_id).await.unwrap(), Vec::new());
+
+        // And deleting the message must not strand image blobs.
+        set_body(
+            &pool,
+            message_id,
+            None,
+            Some("<img>"),
+            "",
+            &[InlineImage {
+                content_id: "photo2".to_string(),
+                content_type: "image/jpeg".to_string(),
+                data: b"JJ".to_vec(),
+            }],
+        )
+        .await
+        .unwrap();
+        delete_by_id(&pool, message_id).await.unwrap();
+        let orphans: i64 = sqlx::query_scalar("SELECT count(*) FROM message_images")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(orphans, 0);
     }
 
     #[tokio::test]

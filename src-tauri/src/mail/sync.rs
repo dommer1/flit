@@ -202,6 +202,7 @@ pub async fn prefetch_bodies(
                 parsed.text.as_deref(),
                 parsed.html.as_deref(),
                 &parsed.snippet,
+                &parsed.images,
             )
             .await?;
             cached += 1;
@@ -243,6 +244,7 @@ pub async fn fetch_body_into_cache(
         parsed.text.as_deref(),
         parsed.html.as_deref(),
         &parsed.snippet,
+        &parsed.images,
     )
     .await?;
     Ok(parsed)
