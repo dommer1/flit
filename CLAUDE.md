@@ -17,10 +17,10 @@ A minimal, privacy-first desktop email client for macOS (multiplatform later), m
 
 ## Hard rules — never violate
 
-- **Email-body rendering is security-critical.** The webview that renders message HTML MUST have JavaScript disabled, MUST block remote resource loading by default (remote images = tracking pixels), and MUST sanitize the HTML. Render bodies in a sandboxed, isolated context (sandboxed iframe / restricted webview), never in the app's main frame. Treat any change to this path as a security change and flag it explicitly.
+- **Email-body rendering is security-critical.** The webview that renders message HTML MUST have JavaScript disabled, MUST block remote resource loading by default (remote images = tracking pixels), and MUST sanitize the HTML. Render bodies in a sandboxed, isolated context (sandboxed iframe / restricted webview), never in the app's main frame. Treat any change to this path as a security change and flag it explicitly. Decided 2026-07-13: the webview itself NEVER loads remote content — remote images the user opts into (policy "always"/"ask", see `mail/remote.rs`) are fetched by the Rust backend (TLS-only, no cookies/Referer, known trackers stripped) and inlined as `data:` URIs.
 - **Secrets never hit disk in plaintext.** Account passwords and OAuth tokens go in the macOS Keychain (`keyring` crate). Never write credentials or tokens to plaintext files, logs, or the SQLite DB.
 - **All network I/O over TLS.**
-- **No telemetry, no analytics, no external calls** other than the user's own mail servers and (later) the OAuth provider.
+- **No telemetry, no analytics, no external calls** other than the user's own mail servers, (later) the OAuth provider, and user-initiated remote-image loading (decided 2026-07-13; `mail/remote.rs`, default remains blocked/ask).
 
 ## Development workflow
 
