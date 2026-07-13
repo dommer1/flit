@@ -13,6 +13,8 @@ const message: MessageHeader = {
   id: 1,
   accountId: 1,
   from: "Alice <alice@example.com>",
+  to: "me@example.com",
+  cc: "",
   subject: "Weekend plans",
   snippet: "Hey",
   date: "2026-07-07T09:15:00Z",

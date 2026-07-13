@@ -72,6 +72,10 @@ export interface MessageHeader {
   id: number;
   accountId: number;
   from: string;
+  /** To recipients as displayed ("Name <addr>", comma-separated). */
+  to: string;
+  /** Cc recipients, same shape; empty when there were none. */
+  cc: string;
   subject: string;
   snippet: string;
   date: string;

@@ -129,6 +129,10 @@ pub struct MessageHeader {
     pub id: i64,
     pub account_id: i64,
     pub from: String,
+    /// To recipients as displayed ("Name <addr>", comma-separated).
+    pub to: String,
+    /// Cc recipients, same shape; empty when there were none.
+    pub cc: String,
     pub subject: String,
     pub snippet: String,
     // why: RFC3339 string for now — sorts chronologically as plain text and
