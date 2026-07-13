@@ -60,6 +60,18 @@ pub struct MessageBody {
     pub text: Option<String>,
 }
 
+/// One folder of one account, as shown in the sidebar.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct Mailbox {
+    pub id: i64,
+    pub account_id: i64,
+    /// Full IMAP name — also the value the messages.mailbox column carries.
+    pub name: String,
+    /// "inbox" | "drafts" | "sent" | "archive" | "junk" | "trash" | null.
+    pub role: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageHeader {
