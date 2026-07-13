@@ -135,13 +135,100 @@ pub async fn search_messages(
     storage::search::search(&state.pool, account_id, &parsed).await
 }
 
-/// Send a composed message through the sending account's SMTP server.
+// note: there is deliberately no direct send command — every outgoing
+// message goes through the undoable queue below.
+
+/// How long a queued message can still be undone before it really sends.
+const UNDO_WINDOW: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Payload of the send-queued / send-finished / send-undone events the main
+/// window renders as outbox badges.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SendEvent {
+    id: u64,
+    subject: String,
+    error: Option<String>,
+}
+
+/// Park a composed message for its undo window, then send it. Returns as
+/// soon as the message is queued; progress is broadcast as events.
 #[tauri::command]
-pub async fn send_message(
+pub async fn queue_send(
+    app: AppHandle,
     state: State<'_, AppState>,
     message: OutgoingMessage,
 ) -> Result<(), AppError> {
-    deliver(&state.pool, &message).await
+    // why: build the MIME now even though it is rebuilt at send time — an
+    // invalid address must surface in the compose window immediately, not
+    // as a failure badge eight seconds after the window closed.
+    let account = storage::accounts::get(&state.pool, message.account_id).await?;
+    mail::smtp::build_message(&account.email, &message)?;
+
+    static SEND_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = SEND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let subject = message.subject.clone();
+    state.park_send(id, message);
+    app.emit(
+        "send-queued",
+        SendEvent {
+            id,
+            subject: subject.clone(),
+            error: None,
+        },
+    )?;
+
+    let pool = state.pool.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(UNDO_WINDOW).await;
+        // why: take_send is the ownership handshake — None means undo won
+        // the race and this message must never leave the machine.
+        let Some(message) = app.state::<AppState>().take_send(id) else {
+            return;
+        };
+        let error = deliver(&pool, &message).await.err();
+        if let Some(err) = &error {
+            eprintln!("queued send {id} failed: {err}");
+            // why: a failed send must never destroy mail — the draft comes
+            // back as a fresh compose window while the badge shows the error.
+            if let Err(reopen) = open_compose_window(&app, message).await {
+                eprintln!("failed to reopen draft for send {id}: {reopen}");
+            }
+        }
+        let _ = app.emit(
+            "send-finished",
+            SendEvent {
+                id,
+                subject,
+                error: error.map(|e| e.to_string()),
+            },
+        );
+    });
+    Ok(())
+}
+
+/// Cancel a queued send inside its undo window: the draft reopens in a new
+/// compose window. A no-op when the timer already fired — the badge will
+/// resolve to sent/failed on its own.
+#[tauri::command]
+pub async fn undo_send(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u64,
+) -> Result<(), AppError> {
+    if let Some(draft) = state.take_send(id) {
+        let subject = draft.subject.clone();
+        open_compose_window(&app, draft).await?;
+        app.emit(
+            "send-undone",
+            SendEvent {
+                id,
+                subject,
+                error: None,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// The one SMTP delivery path: account row → MIME → keychain → send.
