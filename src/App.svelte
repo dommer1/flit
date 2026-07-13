@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import {
     listAccounts,
+    listMailboxes,
     listMessages,
     onAccountsChanged,
     onMessagesChanged,
@@ -11,7 +12,7 @@
   } from "./lib/api";
   import { debounce } from "./lib/debounce";
   import { replyDraft } from "./lib/draft";
-  import type { Account, MessageHeader } from "./lib/types";
+  import type { Account, Mailbox, MessageHeader } from "./lib/types";
   import {
     clampPaneWidth,
     loadPaneWidths,
@@ -24,8 +25,10 @@
   import MessageView from "./lib/MessageView.svelte";
 
   let accounts = $state<Account[]>([]);
+  let mailboxesByAccount = $state<Record<number, Mailbox[]>>({});
   let messages = $state<MessageHeader[]>([]);
   let selectedAccountId = $state<number | null>(null);
+  let selectedMailbox = $state("INBOX");
   let selectedMessageId = $state<number | null>(null);
 
   let selectedMessage = $derived(
@@ -35,7 +38,9 @@
   let listTitle = $derived(
     selectedAccountId === null
       ? "All Inboxes"
-      : (accounts.find((a) => a.id === selectedAccountId)?.name ?? "Inbox"),
+      : selectedMailbox !== "INBOX"
+        ? selectedMailbox
+        : (accounts.find((a) => a.id === selectedAccountId)?.name ?? "Inbox"),
   );
 
   let paneWidths = $state<PaneWidths>(loadPaneWidths(localStorage));
@@ -93,8 +98,9 @@
   // this only steers which query refreshMessages runs.
   let searchQuery = "";
 
-  async function selectAccount(accountId: number | null) {
+  async function selectMailbox(accountId: number | null, mailbox = "INBOX") {
     selectedAccountId = accountId;
+    selectedMailbox = mailbox;
     selectedMessageId = null;
     await refreshMessages();
     startSync(accountId === null ? accounts.map((a) => a.id) : [accountId]);
@@ -102,13 +108,25 @@
 
   // Re-query the current view without touching the selection — the derived
   // selectedMessage keeps pointing at the same id if it still exists. With a
-  // search active, "the current view" is the result list, so a sync landing
-  // mid-search refreshes the hits instead of yanking the full list back.
+  // search active, "the current view" is the result list (across all folders,
+  // like Gmail), so a sync landing mid-search refreshes the hits instead of
+  // yanking the full list back.
   async function refreshMessages() {
     const query = searchQuery.trim();
     messages = query
       ? await searchMessages(selectedAccountId, query)
-      : await listMessages(selectedAccountId);
+      : await listMessages(selectedAccountId, selectedMailbox);
+  }
+
+  // The sidebar's folder lists, mirrored per account. Refreshed alongside
+  // messages because folders first appear when an account's sync lands.
+  async function refreshMailboxes() {
+    const entries = await Promise.all(
+      accounts.map(
+        async (a) => [a.id, await listMailboxes(a.id)] as const,
+      ),
+    );
+    mailboxesByAccount = Object.fromEntries(entries);
   }
 
   // why 200ms: long enough to collapse a typing burst into one query, short
@@ -145,25 +163,29 @@
       if (added.length > 0) startSync(added.map((a) => a.id));
     }
     accountsLoaded = true;
+    await refreshMailboxes();
     // why: if the selected account was deleted in the settings window, fall
     // back to the unified inbox instead of filtering by a dead account.
     if (
       selectedAccountId !== null &&
       !accounts.some((a) => a.id === selectedAccountId)
     ) {
-      await selectAccount(null);
+      await selectMailbox(null);
     }
   }
 
   onMount(() => {
     void (async () => {
       await refreshAccounts();
-      await selectAccount(null);
+      await selectMailbox(null);
     })();
     // why: account CRUD lives in the settings window (its own JS context) —
     // this window finds out through the backend's accounts-changed event.
     const unlistenAccounts = onAccountsChanged(() => void refreshAccounts());
-    const unlistenMessages = onMessagesChanged(() => void refreshMessages());
+    const unlistenMessages = onMessagesChanged(() => {
+      void refreshMessages();
+      void refreshMailboxes();
+    });
     return () => {
       void unlistenAccounts.then((stop) => stop());
       void unlistenMessages.then((stop) => stop());
@@ -182,8 +204,10 @@
   <aside>
     <Sidebar
       {accounts}
-      selectedId={selectedAccountId}
-      onSelect={selectAccount}
+      mailboxes={mailboxesByAccount}
+      selectedAccountId={selectedAccountId}
+      selectedMailbox={selectedMailbox}
+      onSelect={selectMailbox}
     />
   </aside>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions

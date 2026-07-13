@@ -1,22 +1,48 @@
 <script lang="ts">
-  import type { Account } from "./types";
+  import type { Account, Mailbox } from "./types";
 
   let {
     accounts,
-    selectedId,
+    mailboxes,
+    selectedAccountId,
+    selectedMailbox,
     onSelect,
   }: {
     accounts: Account[];
-    selectedId: number | null;
-    onSelect: (id: number | null) => void;
+    mailboxes: Record<number, Mailbox[]>;
+    selectedAccountId: number | null;
+    selectedMailbox: string;
+    onSelect: (accountId: number | null, mailbox?: string) => void;
   } = $props();
+
+  const EXPANDED_KEY = "flit.sidebar.expanded";
+
+  function loadExpanded(): Record<number, boolean> {
+    try {
+      return JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "{}");
+    } catch {
+      return {};
+    }
+  }
+
+  let expanded = $state<Record<number, boolean>>(loadExpanded());
+
+  function toggle(accountId: number) {
+    expanded[accountId] = !expanded[accountId];
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify(expanded));
+  }
+
+  // The account row itself is the inbox, so the sublist holds the rest.
+  function folders(accountId: number): Mailbox[] {
+    return (mailboxes[accountId] ?? []).filter((m) => m.role !== "inbox");
+  }
 </script>
 
 <nav>
   <p class="section">Favorites</p>
   <button
     class="row"
-    class:active={selectedId === null}
+    class:active={selectedAccountId === null}
     onclick={() => onSelect(null)}
   >
     <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -36,35 +62,70 @@
   {/if}
 
   {#each accounts as account (account.id)}
-    <button
-      class="row"
-      class:active={selectedId === account.id}
-      onclick={() => onSelect(account.id)}
-    >
-      <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
-        <rect
-          x="1.75"
-          y="3.25"
-          width="12.5"
-          height="9.5"
-          rx="1.5"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.2"
-        />
-        <path
-          d="m2.5 4.5 5.5 4 5.5-4"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.2"
-          stroke-linejoin="round"
-        />
-      </svg>
-      <span class="label" title={account.email}>
-        <span class="name">{account.name}</span>
-        <span class="email">{account.email}</span>
-      </span>
-    </button>
+    <div class="account-row">
+      <button
+        class="row grow"
+        class:active={selectedAccountId === account.id &&
+          selectedMailbox === "INBOX"}
+        onclick={() => onSelect(account.id)}
+      >
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+          <rect
+            x="1.75"
+            y="3.25"
+            width="12.5"
+            height="9.5"
+            rx="1.5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.2"
+          />
+          <path
+            d="m2.5 4.5 5.5 4 5.5-4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.2"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <span class="label" title={account.email}>
+          <span class="name">{account.name}</span>
+          <span class="email">{account.email}</span>
+        </span>
+      </button>
+      {#if folders(account.id).length > 0}
+        <button
+          class="chevron"
+          class:open={expanded[account.id]}
+          aria-label={`Toggle folders for ${account.name}`}
+          aria-expanded={!!expanded[account.id]}
+          onclick={() => toggle(account.id)}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="m6 4 4 4-4 4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+      {/if}
+    </div>
+    {#if expanded[account.id]}
+      {#each folders(account.id) as mailbox (mailbox.id)}
+        <button
+          class="row folder"
+          class:active={selectedAccountId === account.id &&
+            selectedMailbox === mailbox.name}
+          onclick={() => onSelect(account.id, mailbox.name)}
+        >
+          <span class="label">{mailbox.name}</span>
+        </button>
+      {/each}
+    {/if}
   {/each}
 </nav>
 
@@ -88,6 +149,17 @@
     margin-top: 2px;
   }
 
+  .account-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .grow {
+    flex: 1;
+    min-width: 0;
+  }
+
   .row {
     display: flex;
     align-items: center;
@@ -109,6 +181,43 @@
 
   .row.active {
     background: var(--bg-selected-muted);
+  }
+
+  /* Indented under the account row, aligned with its label. */
+  .folder {
+    margin-left: 24px;
+    min-height: 26px;
+    padding: 2px 9px;
+    font-size: 12px;
+  }
+
+  .chevron {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 5px;
+    background: none;
+    color: var(--text-tertiary);
+    cursor: default;
+  }
+
+  .chevron:hover {
+    background: var(--bg-hover);
+  }
+
+  .chevron svg {
+    width: 12px;
+    height: 12px;
+    transition: transform 0.15s ease;
+  }
+
+  .chevron.open svg {
+    transform: rotate(90deg);
   }
 
   .icon {

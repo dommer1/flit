@@ -50,6 +50,19 @@ const allMessages: MessageHeader[] = [
   },
 ];
 
+// Lives in Personal's Archive folder — only listed when that folder is open.
+const archivedMessages: MessageHeader[] = [
+  {
+    id: 9,
+    accountId: 1,
+    from: "Old Friend <old@example.com>",
+    subject: "Archived note",
+    snippet: "Filed away long ago.",
+    date: "2026-06-01T00:00:00Z",
+    read: true,
+  },
+];
+
 // why: mutable + captured by the mock factory, so tests can simulate the
 // backend changing state and firing change events.
 let currentAccounts: Account[] = [];
@@ -59,11 +72,20 @@ let messagesChanged: (() => void) | undefined;
 
 vi.mock("./lib/api", () => ({
   listAccounts: vi.fn(async () => currentAccounts),
-  listMessages: vi.fn(async (accountId: number | null) =>
-    accountId === null
-      ? currentMessages
-      : currentMessages.filter((m) => m.accountId === accountId),
+  listMailboxes: vi.fn(async (accountId: number) =>
+    accountId === 1
+      ? [
+          { id: 1, accountId: 1, name: "INBOX", role: "inbox" },
+          { id: 2, accountId: 1, name: "Archive", role: "archive" },
+        ]
+      : [],
   ),
+  listMessages: vi.fn(async (accountId: number | null, mailbox = "INBOX") => {
+    const pool = mailbox === "Archive" ? archivedMessages : currentMessages;
+    return accountId === null
+      ? pool
+      : pool.filter((m) => m.accountId === accountId);
+  }),
   // why: a canned single-hit result — App tests only assert the wiring
   // (what was called with what); real matching is covered by Rust tests.
   searchMessages: vi.fn(async () => [currentMessages[1]]),
@@ -131,6 +153,32 @@ it("filters the list when an account is selected", async () => {
 
   expect(await screen.findByText("Re: Invoice")).toBeInTheDocument();
   expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
+});
+
+it("expands an account and opens one of its folders", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Toggle folders for Personal" }),
+  );
+  await fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+
+  expect(await screen.findByText("Archived note")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Archive" })).toBeInTheDocument();
+  expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
+});
+
+it("hides the folder toggle for accounts with no extra folders", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+
+  expect(
+    screen.getByRole("button", { name: "Toggle folders for Personal" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Toggle folders for Work" }),
+  ).not.toBeInTheDocument();
 });
 
 it("clears the selected message when switching accounts", async () => {
