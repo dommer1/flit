@@ -1,8 +1,59 @@
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::{Mutex, MutexGuard};
+
 use crate::error::AppError;
 
 // why: the Keychain "service" is the bundle identifier, so Flit's entries
 // group predictably under one name in Keychain Access.app.
 const SERVICE: &str = "sk.vocalio.flit";
+
+/// Session-only, in-memory cache of account passwords.
+///
+/// SECURITY: passwords stay in this process's memory for the app's lifetime
+/// and never touch disk (hard rule). The point is UX — every keychain read
+/// can raise a macOS ACL prompt (always, for unsigned dev builds, whose
+/// signature changes each rebuild), so the keychain is asked at most once
+/// per account per run instead of once per operation.
+#[derive(Default)]
+pub struct PasswordCache(Mutex<HashMap<i64, String>>);
+
+impl PasswordCache {
+    /// The cached password, or run `fetch` (a keychain read) and remember it.
+    pub async fn get_or_fetch<F, Fut>(&self, account_id: i64, fetch: F) -> Result<String, AppError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<String, AppError>>,
+    {
+        if let Some(hit) = self.lock().get(&account_id).cloned() {
+            return Ok(hit);
+        }
+        // why: the lock is released before awaiting — two concurrent first
+        // calls may both fetch, which is harmless (same value, one extra
+        // keychain read); holding a std Mutex across an await is not.
+        let password = fetch().await?;
+        self.lock().insert(account_id, password.clone());
+        Ok(password)
+    }
+
+    /// Seed the cache (e.g. right after add_account stored the secret).
+    pub fn insert(&self, account_id: i64, password: String) {
+        self.lock().insert(account_id, password);
+    }
+
+    /// Drop an entry (account deleted, or its credential went stale).
+    pub fn remove(&self, account_id: i64) {
+        self.lock().remove(&account_id);
+    }
+
+    // why unwrap_or_else(into_inner): a poisoned lock only means some thread
+    // panicked while holding it — the map itself is still coherent.
+    fn lock(&self) -> MutexGuard<'_, HashMap<i64, String>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
 
 /// Keychain user name for an account row id.
 ///
@@ -60,6 +111,36 @@ pub async fn delete_password(account_id: i64) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn cache_fetches_once_per_account() {
+        let cache = PasswordCache::default();
+        let fetches = AtomicUsize::new(0);
+        let fetch = || async {
+            fetches.fetch_add(1, Ordering::SeqCst);
+            Ok("tajné".to_string())
+        };
+
+        assert_eq!(cache.get_or_fetch(1, fetch).await.unwrap(), "tajné");
+        assert_eq!(cache.get_or_fetch(1, fetch).await.unwrap(), "tajné");
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cache_entries_are_per_account_and_removable() {
+        let cache = PasswordCache::default();
+        cache.insert(1, "prvé".to_string());
+        cache.insert(2, "druhé".to_string());
+
+        let untouched = || async { panic!("cached entry must not fetch") };
+        assert_eq!(cache.get_or_fetch(1, untouched).await.unwrap(), "prvé");
+        assert_eq!(cache.get_or_fetch(2, untouched).await.unwrap(), "druhé");
+
+        cache.remove(1);
+        let refetched = || async { Ok("nové".to_string()) };
+        assert_eq!(cache.get_or_fetch(1, refetched).await.unwrap(), "nové");
+    }
 
     #[test]
     fn keychain_user_embeds_account_id() {
