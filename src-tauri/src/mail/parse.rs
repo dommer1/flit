@@ -1,4 +1,4 @@
-use mail_parser::{Addr, Message, MessageParser};
+use mail_parser::{Addr, Message, MessageParser, MimeHeaders};
 
 /// Fields extracted from a message's headers.
 #[derive(Debug, Default, PartialEq)]
@@ -13,12 +13,26 @@ pub struct ParsedHeader {
     pub date: String,
 }
 
+/// An image embedded in the message itself and referenced from its HTML via
+/// `src="cid:..."` (RFC 2392). Part of the message — displaying it leaks
+/// nothing, unlike remote images.
+#[derive(Debug, PartialEq)]
+pub struct InlineImage {
+    /// Content-ID without the surrounding angle brackets, as cid: URLs use it.
+    pub content_id: String,
+    /// Full MIME type ("image/png") — becomes the data: URI media type.
+    pub content_type: String,
+    /// Decoded bytes (mail-parser undoes the transfer encoding).
+    pub data: Vec<u8>,
+}
+
 /// Bodies extracted from a full message.
 #[derive(Debug, Default, PartialEq)]
 pub struct ParsedBody {
     pub text: Option<String>,
     pub html: Option<String>,
     pub snippet: String,
+    pub images: Vec<InlineImage>,
 }
 
 /// Parse raw header bytes (from `BODY.PEEK[HEADER]`).
@@ -46,11 +60,37 @@ pub fn parse_body(raw: &[u8]) -> ParsedBody {
     let text = message.body_text(0).map(|t| t.into_owned());
     let html = message.body_html(0).map(|h| h.into_owned());
     let snippet = text.as_deref().map(snippet_of).unwrap_or_default();
+    let images = inline_images(&message);
     ParsedBody {
         text,
         html,
         snippet,
+        images,
     }
+}
+
+/// Every attachment that an `<img src="cid:...">` could reference: an image
+/// part carrying a Content-ID. Anything else (no id, not an image) can't
+/// render inline and is left for a future attachment list.
+fn inline_images(message: &Message) -> Vec<InlineImage> {
+    message
+        .attachments()
+        .filter_map(|part| {
+            let content_id = part.content_id()?;
+            let content_type = part.content_type()?;
+            if !content_type.ctype().eq_ignore_ascii_case("image") {
+                return None;
+            }
+            let subtype = content_type.subtype()?.to_ascii_lowercase();
+            Some(InlineImage {
+                // why: defensive trim — mail-parser strips the <> brackets,
+                // but a stray pair must never break cid lookup.
+                content_id: content_id.trim_matches(['<', '>']).to_string(),
+                content_type: format!("image/{subtype}"),
+                data: part.contents().to_vec(),
+            })
+        })
+        .collect()
 }
 
 /// "Name <addr>" like mail clients show it, degrading to whichever part exists.
@@ -174,6 +214,62 @@ mod tests {
         assert!(body.html.as_deref().unwrap().contains("Only html here"));
         assert!(body.text.as_deref().unwrap().contains("Only html here"));
         assert!(body.snippet.contains("Only html here"));
+    }
+
+    #[test]
+    fn extracts_inline_cid_images() {
+        let raw = b"From: a@example.com\r\n\
+                    Subject: Pics\r\n\
+                    MIME-Version: 1.0\r\n\
+                    Content-Type: multipart/related; boundary=\"b1\"\r\n\
+                    \r\n\
+                    --b1\r\n\
+                    Content-Type: text/html; charset=utf-8\r\n\
+                    \r\n\
+                    <p>Look: <img src=\"cid:photo1\"></p>\r\n\
+                    --b1\r\n\
+                    Content-Type: image/png\r\n\
+                    Content-Transfer-Encoding: base64\r\n\
+                    Content-ID: <photo1>\r\n\
+                    Content-Disposition: inline; filename=\"p.png\"\r\n\
+                    \r\n\
+                    iVBORw0KGgo=\r\n\
+                    --b1--\r\n";
+
+        let body = parse_body(raw);
+
+        assert_eq!(body.images.len(), 1);
+        assert_eq!(body.images[0].content_id, "photo1");
+        assert_eq!(body.images[0].content_type, "image/png");
+        // base64 of the 8-byte PNG signature, decoded by mail-parser.
+        assert_eq!(body.images[0].data, b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[test]
+    fn skips_attachments_that_are_not_referencable_images() {
+        let raw = b"From: a@example.com\r\n\
+                    Subject: Files\r\n\
+                    MIME-Version: 1.0\r\n\
+                    Content-Type: multipart/mixed; boundary=\"b1\"\r\n\
+                    \r\n\
+                    --b1\r\n\
+                    Content-Type: text/html; charset=utf-8\r\n\
+                    \r\n\
+                    <p>See attached</p>\r\n\
+                    --b1\r\n\
+                    Content-Type: application/pdf\r\n\
+                    Content-ID: <doc1>\r\n\
+                    \r\n\
+                    %PDF-fake\r\n\
+                    --b1\r\n\
+                    Content-Type: image/jpeg\r\n\
+                    \r\n\
+                    not-referencable-without-a-content-id\r\n\
+                    --b1--\r\n";
+
+        // A PDF can't render in an <img>; an image without a Content-ID can't
+        // be referenced by any cid: URL — neither belongs in `images`.
+        assert_eq!(parse_body(raw).images, Vec::new());
     }
 
     #[test]
