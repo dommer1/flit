@@ -50,3 +50,4 @@ lettre = { version = "0.11", default-features = false, features = [
 # why: NSVisualEffectView behind the webview — the translucent "glass"
 # sidebar of native macOS apps; pure decoration, no data access.
 window-vibrancy = "0.7.1"
+utf7-imap = "0.3.2"

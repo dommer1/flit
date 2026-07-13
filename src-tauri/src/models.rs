@@ -70,6 +70,11 @@ pub struct Mailbox {
     pub name: String,
     /// "inbox" | "drafts" | "sent" | "archive" | "junk" | "trash" | null.
     pub role: Option<String>,
+    /// Human-readable name for the UI: modified UTF-7 decoded, Gmail's
+    /// "[Gmail]/" container prefix stripped. Never send this back to the
+    /// server — IMAP commands need `name`.
+    #[sqlx(default)]
+    pub display_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]

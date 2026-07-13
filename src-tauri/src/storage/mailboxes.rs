@@ -40,10 +40,22 @@ pub async fn replace(
     Ok(())
 }
 
+/// Human-readable folder name: IMAP wire names carry non-ASCII characters
+/// in modified UTF-7 (RFC 3501 §5.1.3), so "Odoslan&AOk-" decodes to
+/// "Odoslané". Gmail's "[Gmail]/" container prefix is display noise and is
+/// dropped too.
+fn display_name(wire_name: &str) -> String {
+    let decoded = utf7_imap::decode_utf7_imap(wire_name.to_string());
+    decoded
+        .strip_prefix("[Gmail]/")
+        .unwrap_or(&decoded)
+        .to_string()
+}
+
 /// Folders of one account in sidebar order: special-use roles first
 /// (inbox, drafts, sent, archive, junk, trash), then customs alphabetically.
 pub async fn list(pool: &SqlitePool, account_id: i64) -> Result<Vec<Mailbox>, AppError> {
-    let rows = sqlx::query_as(
+    let rows: Vec<Mailbox> = sqlx::query_as(
         "SELECT id, account_id, name, role FROM mailboxes
          WHERE account_id = ?
          ORDER BY CASE role
@@ -60,7 +72,13 @@ pub async fn list(pool: &SqlitePool, account_id: i64) -> Result<Vec<Mailbox>, Ap
     .bind(account_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+    Ok(rows
+        .into_iter()
+        .map(|mut m| {
+            m.display_name = display_name(&m.name);
+            m
+        })
+        .collect())
 }
 
 /// Full IMAP name of the account's Sent folder, if discovery found one.
@@ -161,6 +179,48 @@ mod tests {
             names,
             vec!["INBOX", "Sent", "Archive", "Trash", "Alpha", "Zzz"]
         );
+    }
+
+    #[test]
+    fn display_name_decodes_modified_utf7() {
+        assert_eq!(display_name("Odoslan&AOk-"), "Odoslané");
+        assert_eq!(display_name("K&APQBYQ-"), "Kôš");
+        assert_eq!(display_name("INBOX"), "INBOX");
+    }
+
+    #[test]
+    fn display_name_strips_the_gmail_container_prefix() {
+        assert_eq!(
+            display_name("[Gmail]/V&AWE-etky spr&AOE-vy"),
+            "Všetky správy"
+        );
+        assert_eq!(display_name("[Gmail]/Spam"), "Spam");
+        // Only the prefix goes — a folder merely named like it stays intact.
+        assert_eq!(display_name("Gmail stuff"), "Gmail stuff");
+    }
+
+    #[tokio::test]
+    async fn list_fills_display_names() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(
+            &pool,
+            id,
+            &[
+                found("INBOX", Some("inbox")),
+                found("[Gmail]/Odoslan&AOk-", Some("sent")),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let folders = list(&pool, id).await.unwrap();
+        let sent = folders
+            .iter()
+            .find(|m| m.role.as_deref() == Some("sent"))
+            .unwrap();
+        assert_eq!(sent.name, "[Gmail]/Odoslan&AOk-");
+        assert_eq!(sent.display_name, "Odoslané");
     }
 
     #[tokio::test]
