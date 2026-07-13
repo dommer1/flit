@@ -321,7 +321,15 @@ pub async fn get_message_body(
 ) -> Result<MessageBody, AppError> {
     let row = storage::messages::get_body(&state.pool, message_id).await?;
     if row.body_text.is_some() || row.body_html.is_some() {
-        return Ok(sanitized_body(row.body_html, row.body_text));
+        let images = storage::messages::images(&state.pool, message_id).await?;
+        // why: bodies cached before message_images existed have cid:
+        // references but no stored images — fall through to a one-off
+        // refetch that backfills them instead of rendering blanks forever.
+        let backfill =
+            images.is_empty() && row.body_html.as_deref().is_some_and(|h| h.contains("cid:"));
+        if !backfill {
+            return Ok(sanitized_body(row.body_html, row.body_text, &images));
+        }
     }
 
     let account = storage::accounts::get(&state.pool, row.account_id).await?;
@@ -337,18 +345,20 @@ pub async fn get_message_body(
     .await?;
     // why: the snippet just became real — lists should refresh.
     app.emit("messages-changed", row.account_id)?;
-    Ok(sanitized_body(parsed.html, parsed.text))
+    Ok(sanitized_body(parsed.html, parsed.text, &parsed.images))
 }
 
 // SECURITY: the single place message HTML is prepared for the frontend —
 // everything goes through mail::sanitize::build_srcdoc, cached or fresh.
-fn sanitized_body(html: Option<String>, text: Option<String>) -> MessageBody {
+fn sanitized_body(
+    html: Option<String>,
+    text: Option<String>,
+    images: &[mail::parse::InlineImage],
+) -> MessageBody {
     MessageBody {
-        // Inline images are wired through in the next step; until then the
-        // sanitizer sees none and cid references simply stay blank.
         html: html
             .as_deref()
-            .map(|h| mail::sanitize::build_srcdoc(h, &[])),
+            .map(|h| mail::sanitize::build_srcdoc(h, images)),
         text,
     }
 }
