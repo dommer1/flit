@@ -344,7 +344,11 @@ pub async fn get_message_body(
 // everything goes through mail::sanitize::build_srcdoc, cached or fresh.
 fn sanitized_body(html: Option<String>, text: Option<String>) -> MessageBody {
     MessageBody {
-        html: html.as_deref().map(mail::sanitize::build_srcdoc),
+        // Inline images are wired through in the next step; until then the
+        // sanitizer sees none and cid references simply stay blank.
+        html: html
+            .as_deref()
+            .map(|h| mail::sanitize::build_srcdoc(h, &[])),
         text,
     }
 }

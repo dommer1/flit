@@ -1290,6 +1290,7 @@ dependencies = [
  "ammonia",
  "async-imap",
  "async-native-tls",
+ "base64 0.22.1",
  "futures",
  "keyring",
  "lettre",
