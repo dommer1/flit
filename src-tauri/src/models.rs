@@ -104,6 +104,12 @@ impl RemoteImagePolicy {
 pub struct MessageBody {
     pub html: Option<String>,
     pub text: Option<String>,
+    /// Remote images left blocked in `html` — 0 when there were none or
+    /// they all loaded.
+    pub blocked_images: usize,
+    /// Whether the viewer should offer "Load images" (policy is Ask and
+    /// this render still blocked something).
+    pub can_load_remote: bool,
 }
 
 /// One folder of one account, as shown in the sidebar.

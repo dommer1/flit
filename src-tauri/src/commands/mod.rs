@@ -315,56 +315,90 @@ pub async fn test_connection(account: NewAccount, password: String) -> Result<()
 }
 
 /// Body for the viewer — served from cache, lazily fetched on first open.
+/// `load_remote` is the per-message "Load images" click; it only has an
+/// effect under the Ask policy (Block ignores it, Always needs no click).
 #[tauri::command]
 pub async fn get_message_body(
     app: AppHandle,
     state: State<'_, AppState>,
     message_id: i64,
+    load_remote: Option<bool>,
 ) -> Result<MessageBody, AppError> {
     let row = storage::messages::get_body(&state.pool, message_id).await?;
-    if row.body_text.is_some() || row.body_html.is_some() {
-        let images = storage::messages::images(&state.pool, message_id).await?;
-        // why: bodies cached before message_images existed have cid:
-        // references but no stored images — fall through to a one-off
-        // refetch that backfills them instead of rendering blanks forever.
-        let backfill =
-            images.is_empty() && row.body_html.as_deref().is_some_and(|h| h.contains("cid:"));
-        if !backfill {
-            return Ok(sanitized_body(row.body_html, row.body_text, &images));
-        }
-    }
 
-    let account = storage::accounts::get(&state.pool, row.account_id).await?;
-    let password = state.password(account.id).await?;
-    let parsed = mail::sync::fetch_body_into_cache(
-        &state.pool,
-        &account,
-        &password,
-        message_id,
-        &row.mailbox,
-        row.uid,
-    )
-    .await?;
-    // why: the snippet just became real — lists should refresh.
-    app.emit("messages-changed", row.account_id)?;
-    Ok(sanitized_body(parsed.html, parsed.text, &parsed.images))
+    let cached = row.body_text.is_some() || row.body_html.is_some();
+    // why: bodies cached before message_images existed have cid: references
+    // but no stored images — a one-off refetch backfills them instead of
+    // rendering blanks forever.
+    let backfill = cached
+        && row.body_html.as_deref().is_some_and(|h| h.contains("cid:"))
+        && storage::messages::images(&state.pool, message_id)
+            .await?
+            .is_empty();
+
+    let (html, text, images) = if cached && !backfill {
+        let images = storage::messages::images(&state.pool, message_id).await?;
+        (row.body_html, row.body_text, images)
+    } else {
+        let account = storage::accounts::get(&state.pool, row.account_id).await?;
+        let password = state.password(account.id).await?;
+        let parsed = mail::sync::fetch_body_into_cache(
+            &state.pool,
+            &account,
+            &password,
+            message_id,
+            &row.mailbox,
+            row.uid,
+        )
+        .await?;
+        // why: the snippet just became real — lists should refresh.
+        app.emit("messages-changed", row.account_id)?;
+        (parsed.html, parsed.text, parsed.images)
+    };
+
+    let policy = storage::settings::remote_image_policy(&state.pool).await?;
+    sanitized_body(&state.pool, html, text, &images, policy, load_remote).await
 }
 
 // SECURITY: the single place message HTML is prepared for the frontend —
 // everything goes through mail::sanitize::build_srcdoc, cached or fresh.
-fn sanitized_body(
+// Remote images load only under policy Always or an explicit Ask-click;
+// under Block a stray load_remote from the frontend changes nothing.
+async fn sanitized_body(
+    pool: &sqlx::SqlitePool,
     html: Option<String>,
     text: Option<String>,
     images: &[mail::parse::InlineImage],
-) -> MessageBody {
-    MessageBody {
-        // Remote loading is wired through in the next step — an empty map
-        // keeps every remote image blocked, exactly as before.
-        html: html.as_deref().map(|h| {
-            mail::sanitize::build_srcdoc(h, images, &std::collections::HashMap::new()).html
-        }),
+    policy: RemoteImagePolicy,
+    load_remote: Option<bool>,
+) -> Result<MessageBody, AppError> {
+    let load = policy == RemoteImagePolicy::Always
+        || (policy == RemoteImagePolicy::Ask && load_remote.unwrap_or(false));
+
+    let mut blocked_images = 0;
+    let rendered = match html.as_deref() {
+        Some(h) => {
+            let remote = if load {
+                let urls = mail::sanitize::remote_image_urls(h);
+                mail::remote::load_images(pool, &urls).await
+            } else {
+                std::collections::HashMap::new()
+            };
+            let body = mail::sanitize::build_srcdoc(h, images, &remote);
+            blocked_images = body.blocked_remote;
+            Some(body.html)
+        }
+        None => None,
+    };
+
+    Ok(MessageBody {
+        html: rendered,
         text,
-    }
+        blocked_images,
+        // why: !load, not just Ask — after the click the banner disappears
+        // even when some images failed to fetch (no endless "load" loop).
+        can_load_remote: policy == RemoteImagePolicy::Ask && !load && blocked_images > 0,
+    })
 }
 
 /// Open a native compose window seeded with `draft`. Every call opens its
