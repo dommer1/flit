@@ -34,8 +34,8 @@ const allMessages: MessageHeader[] = [
     id: 1,
     accountId: 1,
     from: "Alice <alice@example.com>",
-    to: "hello@vocalio.sk",
-    cc: "",
+    to: "domco@example.com, Bob <bob@example.com>",
+    cc: "carol@example.com",
     subject: "Weekend plans",
     snippet: "Are we still on for Saturday?",
     date: "2026-07-07T09:15:00Z",
@@ -278,6 +278,45 @@ it("opens a reply draft from the account the message arrived on", async () => {
       to: "alice@example.com",
       subject: "Re: Weekend plans",
       body: expect.stringContaining("> body text"),
+    }),
+  );
+});
+
+it("opens a reply-all draft without the receiving account's address", async () => {
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  await screen.findByRole("heading", { name: "Weekend plans" });
+  await screen.findByText("body text");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Reply All" }));
+
+  // Message 1 arrived on account 1 (domco@example.com) — that address
+  // must vanish while Bob and the Cc line survive.
+  await waitFor(() =>
+    expect(api.openCompose).toHaveBeenCalledWith({
+      accountId: 1,
+      to: "Alice <alice@example.com>, Bob <bob@example.com>",
+      cc: "carol@example.com",
+      subject: "Re: Weekend plans",
+      body: expect.stringContaining("> body text"),
+    }),
+  );
+});
+
+it("opens a forward draft with the original below a header block", async () => {
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  await screen.findByRole("heading", { name: "Weekend plans" });
+  await screen.findByText("body text");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+
+  await waitFor(() =>
+    expect(api.openCompose).toHaveBeenCalledWith({
+      accountId: 1,
+      to: "",
+      subject: "Fwd: Weekend plans",
+      body: expect.stringContaining("---------- Forwarded message ----------"),
     }),
   );
 });

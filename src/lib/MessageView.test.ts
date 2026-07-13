@@ -70,17 +70,22 @@ it("shows the empty state and fetches nothing without a message", () => {
   expect(api.getMessageBody).not.toHaveBeenCalled();
 });
 
-it("replies with the message and its loaded text", async () => {
+it("offers reply, reply all and forward with the loaded text", async () => {
   vi.mocked(api.getMessageBody).mockResolvedValueOnce({
     html: null,
     text: "hi there",
   });
-  const onReply = vi.fn();
+  const onDraft = vi.fn();
 
-  render(MessageView, { props: { message, onReply } });
+  render(MessageView, { props: { message, onDraft } });
   await screen.findByText("hi there");
 
   await fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  expect(onDraft).toHaveBeenCalledWith("reply", message, "hi there");
 
-  expect(onReply).toHaveBeenCalledWith(message, "hi there");
+  await fireEvent.click(screen.getByRole("button", { name: "Reply All" }));
+  expect(onDraft).toHaveBeenCalledWith("reply-all", message, "hi there");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+  expect(onDraft).toHaveBeenCalledWith("forward", message, "hi there");
 });

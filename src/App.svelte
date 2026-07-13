@@ -15,7 +15,12 @@
     undoSend,
   } from "./lib/api";
   import { debounce } from "./lib/debounce";
-  import { replyDraft } from "./lib/draft";
+  import {
+    forwardDraft,
+    replyAllDraft,
+    replyDraft,
+    type DraftKind,
+  } from "./lib/draft";
   import type { Account, Mailbox, MessageHeader } from "./lib/types";
   import {
     clampPaneWidth,
@@ -97,9 +102,23 @@
     }).catch((err: unknown) => console.error("failed to open compose:", err));
   }
 
-  function openReply(message: MessageHeader, bodyText: string | null) {
-    void openCompose(replyDraft(message, bodyText)).catch((err: unknown) =>
-      console.error("failed to open reply:", err),
+  function openDraft(
+    kind: DraftKind,
+    message: MessageHeader,
+    bodyText: string | null,
+  ) {
+    // why: reply-all must not echo mail back to the mailbox it landed in —
+    // the receiving account's address is the one to drop from recipients.
+    const ownEmail =
+      accounts.find((a) => a.id === message.accountId)?.email ?? "";
+    const draft =
+      kind === "reply"
+        ? replyDraft(message, bodyText)
+        : kind === "reply-all"
+          ? replyAllDraft(message, bodyText, ownEmail)
+          : forwardDraft(message, bodyText);
+    void openCompose(draft).catch((err: unknown) =>
+      console.error(`failed to open ${kind}:`, err),
     );
   }
 
@@ -307,7 +326,7 @@
       onkeydown={(e) => nudgePane("list", e)}
     ></div>
     <section class="view">
-      <MessageView message={selectedMessage} onReply={openReply} />
+      <MessageView message={selectedMessage} onDraft={openDraft} />
     </section>
   </main>
 </div>

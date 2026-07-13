@@ -1,16 +1,21 @@
 <script lang="ts">
   import { getMessageBody } from "./api";
+  import type { DraftKind } from "./draft";
   import { formatFullDate, senderInitials, senderName } from "./format";
   import type { MessageBody, MessageHeader } from "./types";
 
   let {
     message,
-    onReply,
+    onDraft,
   }: {
     message: MessageHeader | null;
-    // why: bodyText rides along so the reply can quote what is on screen
+    // why: bodyText rides along so the draft can quote what is on screen
     // without the parent re-fetching the body it never held.
-    onReply?: (message: MessageHeader, bodyText: string | null) => void;
+    onDraft?: (
+      kind: DraftKind,
+      message: MessageHeader,
+      bodyText: string | null,
+    ) => void;
   } = $props();
 
   let body = $state<MessageBody | null>(null);
@@ -52,11 +57,22 @@
       </div>
       <div class="meta">
         <span class="date">{formatFullDate(message.date)}</span>
-        {#if onReply}
+        {#if onDraft}
           {@const current = message}
-          <button class="reply" onclick={() => onReply(current, body?.text ?? null)}>
-            Reply
-          </button>
+          {@const open = onDraft}
+          <div class="actions">
+            <button onclick={() => open("reply", current, body?.text ?? null)}>
+              Reply
+            </button>
+            <button
+              onclick={() => open("reply-all", current, body?.text ?? null)}
+            >
+              Reply All
+            </button>
+            <button onclick={() => open("forward", current, body?.text ?? null)}>
+              Forward
+            </button>
+          </div>
         {/if}
       </div>
     </header>
@@ -160,14 +176,24 @@
     color: var(--text-secondary);
   }
 
-  .reply {
+  .actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .actions button {
     padding: 3px 10px;
     border: 1px solid var(--hairline);
     border-radius: 6px;
     background: var(--bg-window);
     font: inherit;
     font-size: 12px;
+    white-space: nowrap;
     cursor: pointer;
+  }
+
+  .actions button:hover {
+    background: var(--bg-hover);
   }
 
   .body {
