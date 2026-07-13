@@ -133,6 +133,11 @@ pub async fn get_body(pool: &SqlitePool, message_id: i64) -> Result<BodyRow, App
 }
 
 /// Store a freshly fetched body; the snippet becomes real now that text exists.
+///
+/// why text coalesces to "": NULL in both body columns means "never fetched"
+/// (see uids_missing_body). A message whose download parsed to nothing —
+/// attachment-only mail, unparsable MIME — must still count as cached, or
+/// the prefetcher would re-download it on every sync forever.
 pub async fn set_body(
     pool: &SqlitePool,
     message_id: i64,
@@ -141,7 +146,7 @@ pub async fn set_body(
     snippet: &str,
 ) -> Result<(), AppError> {
     sqlx::query("UPDATE messages SET body_text = ?, body_html = ?, snippet = ? WHERE id = ?")
-        .bind(text)
+        .bind(text.unwrap_or(""))
         .bind(html)
         .bind(snippet)
         .bind(message_id)
@@ -443,6 +448,31 @@ mod tests {
             .map(|m| m.subject)
             .collect();
         assert_eq!(unified, vec!["Archived"]);
+    }
+
+    #[tokio::test]
+    async fn set_body_with_nothing_parseable_still_counts_as_cached() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "Weird", "2026-07-01T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        let row_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+
+        // e.g. an attachment-only message: the parser yields no text or html.
+        set_body(&pool, row_id, None, None, "").await.unwrap();
+
+        // Without this, the prefetcher would re-download it on every sync.
+        assert!(!has_missing_bodies(&pool, id).await.unwrap());
+        assert_eq!(
+            uids_missing_body(&pool, id, "INBOX", 10).await.unwrap(),
+            Vec::<(i64, i64)>::new()
+        );
     }
 
     #[tokio::test]
