@@ -68,7 +68,7 @@ vi.mock("./lib/api", () => ({
   // (what was called with what); real matching is covered by Rust tests.
   searchMessages: vi.fn(async () => [currentMessages[1]]),
   getMessageBody: vi.fn(async () => ({ html: null, text: "body text" })),
-  syncInbox: vi.fn(async () => undefined),
+  syncAccount: vi.fn(async () => undefined),
   openCompose: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async (callback: () => void) => {
     accountsChanged = callback;
@@ -186,8 +186,8 @@ it("starts a sync for every account on launch", async () => {
   await screen.findByText("Weekend plans");
 
   await waitFor(() => {
-    expect(api.syncInbox).toHaveBeenCalledWith(1);
-    expect(api.syncInbox).toHaveBeenCalledWith(2);
+    expect(api.syncAccount).toHaveBeenCalledWith(1);
+    expect(api.syncAccount).toHaveBeenCalledWith(2);
   });
 });
 
@@ -201,7 +201,7 @@ it("syncs accounts in parallel, not one after another", async () => {
     started.push(id);
     await gate;
   };
-  vi.mocked(api.syncInbox)
+  vi.mocked(api.syncAccount)
     .mockImplementationOnce(gatedSync)
     .mockImplementationOnce(gatedSync);
 
@@ -313,7 +313,7 @@ it("syncs a newly added account immediately", async () => {
   accountsChanged?.();
   await screen.findByText("Third");
 
-  await waitFor(() => expect(api.syncInbox).toHaveBeenCalledWith(3));
+  await waitFor(() => expect(api.syncAccount).toHaveBeenCalledWith(3));
 });
 
 // why MouseEvent: jsdom has no PointerEvent constructor; a MouseEvent with a

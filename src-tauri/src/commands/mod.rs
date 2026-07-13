@@ -47,9 +47,10 @@ pub async fn delete_account(
     Ok(())
 }
 
-/// Sync one account's INBOX headers into the local cache.
+/// Sync one account into the local cache: folder list + every folder's
+/// headers.
 #[tauri::command]
-pub async fn sync_inbox(
+pub async fn sync_account(
     app: AppHandle,
     state: State<'_, AppState>,
     account_id: i64,
@@ -59,7 +60,7 @@ pub async fn sync_inbox(
     // on this task's stack — never in state, events, or logs.
     let result = async {
         let password = auth::get_password(account_id).await?;
-        mail::sync::sync_inbox(&state.pool, &account, &password).await
+        mail::sync::sync_account(&state.pool, &account, &password).await
     }
     .await;
 

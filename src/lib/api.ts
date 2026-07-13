@@ -66,9 +66,9 @@ export function getMessageBody(messageId: number): Promise<MessageBody> {
   return invoke<MessageBody>("get_message_body", { messageId });
 }
 
-/** Fire-and-forget header sync for one account's inbox. */
-export function syncInbox(accountId: number): Promise<void> {
-  return invoke<void>("sync_inbox", { accountId });
+/** Fire-and-forget sync of one account: folder list + all folders' headers. */
+export function syncAccount(accountId: number): Promise<void> {
+  return invoke<void>("sync_account", { accountId });
 }
 
 /** Send a composed message via the sending account's SMTP server. */

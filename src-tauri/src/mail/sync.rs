@@ -39,8 +39,10 @@ pub fn plan(stored_validity: Option<i64>, server_validity: i64, last_uid: Option
     }
 }
 
-/// One full sync pass for an account's INBOX: connect, decide, fetch, upsert.
-pub async fn sync_inbox(
+/// One full sync pass for an account: discover folders, mirror them into
+/// the mailboxes table, then sync each folder over the same connection.
+/// Folders run in sidebar order, so INBOX is fresh before slower ones.
+pub async fn sync_account(
     pool: &SqlitePool,
     account: &Account,
     password: &str,
@@ -52,31 +54,48 @@ pub async fn sync_inbox(
         password,
     )
     .await?;
-    let mailbox = session
-        .select(MAILBOX)
-        .await
-        .map_err(|e| AppError::Imap(format!("select {MAILBOX}: {e}")))?;
-    let server_validity = i64::from(mailbox.uid_validity.unwrap_or(0));
 
-    let stored = messages::stored_uid_validity(pool, account.id, MAILBOX).await?;
-    let last_uid = messages::max_uid(pool, account.id, MAILBOX).await?;
+    let found = imap::list_mailboxes(&mut session).await?;
+    crate::storage::mailboxes::replace(pool, account.id, &found).await?;
+
+    for mailbox in crate::storage::mailboxes::list(pool, account.id).await? {
+        sync_mailbox(pool, account.id, &mut session, &mailbox.name).await?;
+    }
+    let _ = session.logout().await;
+    Ok(())
+}
+
+/// Sync one folder on an already-open session: decide, fetch, upsert.
+async fn sync_mailbox(
+    pool: &SqlitePool,
+    account_id: i64,
+    session: &mut imap::ImapSession,
+    mailbox: &str,
+) -> Result<(), AppError> {
+    let selected = session
+        .select(mailbox)
+        .await
+        .map_err(|e| AppError::Imap(format!("select {mailbox}: {e}")))?;
+    let server_validity = i64::from(selected.uid_validity.unwrap_or(0));
+
+    let stored = messages::stored_uid_validity(pool, account_id, mailbox).await?;
+    let last_uid = messages::max_uid(pool, account_id, mailbox).await?;
 
     let raw = match plan(stored, server_validity, last_uid) {
         SyncPlan::ResetThenInitial => {
-            messages::clear_mailbox(pool, account.id, MAILBOX).await?;
-            initial_fetch(&mut session, mailbox.exists).await?
+            messages::clear_mailbox(pool, account_id, mailbox).await?;
+            initial_fetch(session, selected.exists).await?
         }
-        SyncPlan::Initial => initial_fetch(&mut session, mailbox.exists).await?,
+        SyncPlan::Initial => initial_fetch(session, selected.exists).await?,
         SyncPlan::Incremental { last_uid } => {
             let fetched =
-                imap::fetch_headers_by_uid(&mut session, &format!("{}:*", last_uid + 1)).await?;
+                imap::fetch_headers_by_uid(session, &format!("{}:*", last_uid + 1)).await?;
             imap::new_uids_only(fetched, last_uid)
         }
     };
-    let _ = session.logout().await;
 
     let headers: Vec<FetchedHeader> = raw.iter().map(|r| to_fetched(r, server_validity)).collect();
-    messages::upsert_headers(pool, account.id, MAILBOX, &headers).await
+    messages::upsert_headers(pool, account_id, mailbox, &headers).await
 }
 
 /// Cross the prefetch work-list with the sizes the server reported: keep

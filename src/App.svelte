@@ -7,7 +7,7 @@
     onMessagesChanged,
     openCompose,
     searchMessages,
-    syncInbox,
+    syncAccount,
   } from "./lib/api";
   import { debounce } from "./lib/debounce";
   import { replyDraft } from "./lib/draft";
@@ -125,8 +125,8 @@
   // messages-changed event lands. One slow server never delays the others.
   function startSync(accountIds: number[]) {
     for (const id of accountIds) {
-      syncInbox(id).catch((err: unknown) => {
-        console.error(`inbox sync failed for account ${id}:`, err);
+      syncAccount(id).catch((err: unknown) => {
+        console.error(`account sync failed for account ${id}:`, err);
       });
     }
   }
