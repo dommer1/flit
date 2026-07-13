@@ -8,6 +8,7 @@ import type {
   MessageHeader,
   NewAccount,
   OutgoingMessage,
+  RemoteImagePolicy,
   SendEvent,
 } from "./types";
 
@@ -131,6 +132,22 @@ export function closeCompose(): Promise<void> {
 /** Fires whenever the message cache changes (any account, any window). */
 export function onMessagesChanged(callback: () => void): Promise<UnlistenFn> {
   return listen("messages-changed", callback);
+}
+
+/** Current remote-image policy ("ask" until the user picks otherwise). */
+export function getRemoteImagePolicy(): Promise<RemoteImagePolicy> {
+  return invoke<RemoteImagePolicy>("get_remote_image_policy");
+}
+
+export function setRemoteImagePolicy(
+  policy: RemoteImagePolicy,
+): Promise<void> {
+  return invoke<void>("set_remote_image_policy", { policy });
+}
+
+/** Fires whenever any window changes an app-wide setting. */
+export function onSettingsChanged(callback: () => void): Promise<UnlistenFn> {
+  return listen("settings-changed", callback);
 }
 
 export function openSettings(): Promise<void> {

@@ -40,6 +40,8 @@ vi.mock("./api", () => ({
   confirmAccountDeletion: vi.fn(async () => true),
   closeSettings: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async () => () => {}),
+  getRemoteImagePolicy: vi.fn(async () => "ask"),
+  setRemoteImagePolicy: vi.fn(async () => undefined),
 }));
 
 import * as api from "./api";
@@ -156,6 +158,28 @@ it("shows an error and keeps the form open when adding fails", async () => {
     "keychain says no",
   );
   expect(screen.getByRole("button", { name: "Verify & Save" })).toBeInTheDocument();
+});
+
+it("shows the stored remote-image policy on the privacy tab", async () => {
+  render(SettingsWindow);
+  await screen.findByText("imap.example.com:993");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Privacy" }));
+
+  expect(await screen.findByLabelText("Ask for each message")).toBeChecked();
+  expect(screen.getByLabelText("Never load")).not.toBeChecked();
+  // the accounts pane is gone while the privacy tab is active
+  expect(screen.queryByText("imap.example.com:993")).not.toBeInTheDocument();
+});
+
+it("saves a remote-image policy change", async () => {
+  render(SettingsWindow);
+  await fireEvent.click(screen.getByRole("button", { name: "Privacy" }));
+  await screen.findByLabelText("Always load");
+
+  await fireEvent.click(screen.getByLabelText("Always load"));
+
+  expect(api.setRemoteImagePolicy).toHaveBeenCalledWith("always");
 });
 
 it("closes the window on escape", async () => {

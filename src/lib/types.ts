@@ -50,6 +50,12 @@ export interface SendEvent {
   undoMs: number;
 }
 
+/**
+ * How remote (http/https) images in mail bodies are treated. Inline cid:
+ * images always render — they are part of the message itself.
+ */
+export type RemoteImagePolicy = "block" | "ask" | "always";
+
 /** `html`, when present, is a full sanitized srcdoc document from the backend. */
 export interface MessageBody {
   html: string | null;

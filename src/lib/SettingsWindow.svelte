@@ -5,15 +5,38 @@
     closeSettings,
     confirmAccountDeletion,
     deleteAccount,
+    getRemoteImagePolicy,
     listAccounts,
     onAccountsChanged,
+    setRemoteImagePolicy,
     testConnection,
   } from "./api";
-  import type { Account, NewAccount } from "./types";
+  import type { Account, NewAccount, RemoteImagePolicy } from "./types";
   import AccountsPane from "./AccountsPane.svelte";
+
+  const POLICIES: { value: RemoteImagePolicy; label: string; hint: string }[] =
+    [
+      {
+        value: "block",
+        label: "Never load",
+        hint: "Messages show without their remote images.",
+      },
+      {
+        value: "ask",
+        label: "Ask for each message",
+        hint: "A banner offers to load them, one message at a time.",
+      },
+      {
+        value: "always",
+        label: "Always load",
+        hint: "Senders may learn when you open their mail.",
+      },
+    ];
 
   let accounts = $state<Account[]>([]);
   let lastError = $state<string | null>(null);
+  let tab = $state<"accounts" | "privacy">("accounts");
+  let policy = $state<RemoteImagePolicy>("ask");
 
   async function refresh() {
     accounts = await listAccounts();
@@ -48,12 +71,26 @@
     }
   }
 
+  async function selectPolicy(next: RemoteImagePolicy) {
+    lastError = null;
+    const previous = policy;
+    policy = next;
+    try {
+      await setRemoteImagePolicy(next);
+    } catch (err) {
+      // why: the radio must not lie — a failed save rolls the dot back.
+      policy = previous;
+      lastError = String(err);
+    }
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") void closeSettings();
   }
 
   onMount(() => {
     void refresh();
+    void getRemoteImagePolicy().then((stored) => (policy = stored));
     // why: refreshes also cover changes made elsewhere (a future main-window
     // action, another settings session) — the backend broadcasts the event.
     const unlisten = onAccountsChanged(() => void refresh());
@@ -67,10 +104,52 @@
 
 <div class="window">
   <header>
-    <button class="tab active">Accounts</button>
+    <button
+      class="tab"
+      class:active={tab === "accounts"}
+      onclick={() => (tab = "accounts")}
+    >
+      Accounts
+    </button>
+    <button
+      class="tab"
+      class:active={tab === "privacy"}
+      onclick={() => (tab = "privacy")}
+    >
+      Privacy
+    </button>
   </header>
 
-  <AccountsPane {accounts} onAdd={handleAdd} onDelete={handleDelete} />
+  {#if tab === "accounts"}
+    <AccountsPane {accounts} onAdd={handleAdd} onDelete={handleDelete} />
+  {:else}
+    <section class="privacy">
+      <fieldset>
+        <legend>Remote images in messages</legend>
+        <p class="explain">
+          Remote images can tell the sender when, where and on what device a
+          message was opened. Known tracking images are always removed.
+          Images attached inside the message always show.
+        </p>
+        {#each POLICIES as option (option.value)}
+          <div class="choice">
+            <input
+              type="radio"
+              id="policy-{option.value}"
+              name="remote-images"
+              value={option.value}
+              checked={policy === option.value}
+              onchange={() => void selectPolicy(option.value)}
+            />
+            <span>
+              <label for="policy-{option.value}">{option.label}</label>
+              <small>{option.hint}</small>
+            </span>
+          </div>
+        {/each}
+      </fieldset>
+    </section>
+  {/if}
 </div>
 
 {#if lastError}
@@ -108,6 +187,46 @@
   .tab.active {
     background: rgba(0, 0, 0, 0.08);
     font-weight: 600;
+  }
+
+  .privacy {
+    padding: 1rem 1.25rem;
+    overflow-y: auto;
+  }
+
+  fieldset {
+    margin: 0;
+    padding: 0;
+    border: none;
+  }
+
+  legend {
+    padding: 0;
+    font-weight: 600;
+  }
+
+  .explain {
+    margin: 0.375rem 0 0.75rem;
+    max-width: 34rem;
+    font-size: 0.8125rem;
+    color: #6e6e73;
+  }
+
+  .choice {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+  }
+
+  .choice label {
+    cursor: pointer;
+  }
+
+  .choice small {
+    display: block;
+    font-size: 0.75rem;
+    color: #6e6e73;
   }
 
   .error-banner {
