@@ -42,6 +42,8 @@ export interface SendEvent {
   subject: string;
   /** Set only on send-finished when the delivery failed. */
   error: string | null;
+  /** Undo window length in ms; only meaningful on send-queued, 0 elsewhere. */
+  undoMs: number;
 }
 
 /** `html`, when present, is a full sanitized srcdoc document from the backend. */

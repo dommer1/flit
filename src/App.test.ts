@@ -473,14 +473,14 @@ it("shows a sending badge whose undo hands the message back", async () => {
   render(App);
   await screen.findByText("Weekend plans");
 
-  sendQueued?.({ id: 4, subject: "Ahoj", error: null });
+  sendQueued?.({ id: 4, subject: "Ahoj", error: null, undoMs: 8000 });
   expect(await screen.findByText("Sending: Ahoj")).toBeInTheDocument();
 
   await fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   expect(api.undoSend).toHaveBeenCalledWith(4);
 
   // the badge leaves on the backend's confirmation, not on the click
-  sendUndone?.({ id: 4, subject: "Ahoj", error: null });
+  sendUndone?.({ id: 4, subject: "Ahoj", error: null, undoMs: 0 });
   await waitFor(() =>
     expect(screen.queryByText("Sending: Ahoj")).not.toBeInTheDocument(),
   );
@@ -489,11 +489,11 @@ it("shows a sending badge whose undo hands the message back", async () => {
 it("confirms a delivered send and hides the badge on its own", async () => {
   render(App);
   await screen.findByText("Weekend plans");
-  sendQueued?.({ id: 5, subject: "Ahoj", error: null });
+  sendQueued?.({ id: 5, subject: "Ahoj", error: null, undoMs: 8000 });
   await screen.findByText("Sending: Ahoj");
 
   vi.useFakeTimers();
-  sendFinished?.({ id: 5, subject: "Ahoj", error: null });
+  sendFinished?.({ id: 5, subject: "Ahoj", error: null, undoMs: 0 });
   await vi.advanceTimersByTimeAsync(0);
   expect(screen.getByText("Sent: Ahoj")).toBeInTheDocument();
 
@@ -506,11 +506,11 @@ it("confirms a delivered send and hides the badge on its own", async () => {
 it("shows a failure badge with the delivery error", async () => {
   render(App);
   await screen.findByText("Weekend plans");
-  sendQueued?.({ id: 6, subject: "Ahoj", error: null });
+  sendQueued?.({ id: 6, subject: "Ahoj", error: null, undoMs: 8000 });
   await screen.findByText("Sending: Ahoj");
 
   vi.useFakeTimers();
-  sendFinished?.({ id: 6, subject: "Ahoj", error: "smtp error: relay refused" });
+  sendFinished?.({ id: 6, subject: "Ahoj", error: "smtp error: relay refused", undoMs: 0 });
   await vi.advanceTimersByTimeAsync(0);
   vi.useRealTimers();
 

@@ -8,6 +8,7 @@ function entry(overrides: Partial<OutboxEntry> = {}): OutboxEntry {
     subject: "Ahoj",
     status: "sending",
     error: null,
+    undoMs: 8000,
     ...overrides,
   };
 }
@@ -23,11 +24,28 @@ it("shows a sending badge whose undo reports the entry id", async () => {
   expect(onUndo).toHaveBeenCalledWith(7);
 });
 
-it("shows a sent badge without an undo", () => {
-  render(Outbox, { entries: [entry({ status: "sent" })], onUndo: vi.fn() });
+it("animates a countdown donut over the undo window", () => {
+  const { container } = render(Outbox, {
+    entries: [entry()],
+    onUndo: vi.fn(),
+  });
+
+  const fill = container.querySelector(".donut .fill");
+  expect(fill).not.toBeNull();
+  expect(fill!.getAttribute("style")).toContain("animation-duration: 8000ms");
+  expect(container.querySelector(".check")).toBeNull();
+});
+
+it("shows a sent badge with a check instead of the donut", () => {
+  const { container } = render(Outbox, {
+    entries: [entry({ status: "sent" })],
+    onUndo: vi.fn(),
+  });
 
   expect(screen.getByText("Sent: Ahoj")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  expect(container.querySelector(".check")).not.toBeNull();
+  expect(container.querySelector(".donut")).toBeNull();
 });
 
 it("shows the error on a failed badge", () => {

@@ -56,8 +56,8 @@
   const SENT_BADGE_MS = 2500;
   const FAILED_BADGE_MS = 6000;
 
-  function badgeQueued(id: number, subject: string) {
-    outbox = [...outbox, { id, subject, status: "sending", error: null }];
+  function badgeQueued(id: number, subject: string, undoMs: number) {
+    outbox = [...outbox, { id, subject, status: "sending", error: null, undoMs }];
   }
 
   function badgeFinished(id: number, error: string | null) {
@@ -225,7 +225,9 @@
     });
     // why: compose windows queue sends in the backend; this window only
     // mirrors the send-* events into badges.
-    const unlistenQueued = onSendQueued((e) => badgeQueued(e.id, e.subject));
+    const unlistenQueued = onSendQueued((e) =>
+      badgeQueued(e.id, e.subject, e.undoMs),
+    );
     const unlistenFinished = onSendFinished((e) => badgeFinished(e.id, e.error));
     const unlistenUndone = onSendUndone((e) => badgeUndone(e.id));
     return () => {

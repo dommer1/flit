@@ -5,6 +5,8 @@
     subject: string;
     status: "sending" | "sent" | "failed";
     error: string | null;
+    /** Undo window length — the countdown donut fills over exactly this. */
+    undoMs: number;
   }
 </script>
 
@@ -35,7 +37,32 @@
   <div class="outbox">
     {#each entries as entry (entry.id)}
       <div class="badge" class:failed={entry.status === "failed"} role="status">
-        <span class="dot {entry.status}" aria-hidden="true"></span>
+        <span class="indicator" aria-hidden="true">
+          {#if entry.status === "sending"}
+            <!-- Countdown donut: the ring fills over the undo window, then
+                 holds full (blue) while the SMTP delivery is in flight. -->
+            <svg class="donut" viewBox="0 0 20 20">
+              <circle class="track" cx="10" cy="10" r="8" />
+              <circle
+                class="fill"
+                cx="10"
+                cy="10"
+                r="8"
+                style="animation-duration: {entry.undoMs}ms"
+              />
+            </svg>
+          {:else if entry.status === "sent"}
+            <svg class="check" viewBox="0 0 20 20">
+              <circle cx="10" cy="10" r="9" />
+              <path d="M6 10.5l2.6 2.6L14 7.5" />
+            </svg>
+          {:else}
+            <svg class="fail" viewBox="0 0 20 20">
+              <circle cx="10" cy="10" r="9" />
+              <path d="M7 7l6 6M13 7l-6 6" />
+            </svg>
+          {/if}
+        </span>
         <span class="text">
           {label(entry)}
           {#if entry.status === "failed" && entry.error}
@@ -78,31 +105,64 @@
     pointer-events: auto;
   }
 
-  .dot {
+  .indicator {
     flex-shrink: 0;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
+    width: 16px;
+    height: 16px;
   }
 
-  .dot.sending {
-    background: var(--accent);
-    /* A quiet pulse says "still cancellable" without a spinner. */
-    animation: pulse 1.2s ease-in-out infinite;
+  .indicator svg {
+    display: block;
+    width: 100%;
+    height: 100%;
   }
 
-  .dot.sent {
-    background: #28a745;
+  .donut .track {
+    fill: none;
+    stroke: var(--divider);
+    stroke-width: 3;
   }
 
-  .dot.failed {
-    background: #d9302c;
+  .donut .fill {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 3;
+    stroke-linecap: round;
+    /* 2π·r for r=8 — the full ring; the animation walks the offset to 0. */
+    stroke-dasharray: 50.27;
+    stroke-dashoffset: 50.27;
+    /* start at 12 o'clock, not 3 */
+    transform: rotate(-90deg);
+    transform-origin: center;
+    animation: donut-fill linear forwards;
   }
 
-  @keyframes pulse {
-    50% {
-      opacity: 0.35;
+  @keyframes donut-fill {
+    to {
+      stroke-dashoffset: 0;
     }
+  }
+
+  .check circle {
+    fill: #28a745;
+  }
+
+  .check path {
+    fill: none;
+    stroke: #ffffff;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .fail circle {
+    fill: #d9302c;
+  }
+
+  .fail path {
+    stroke: #ffffff;
+    stroke-width: 2;
+    stroke-linecap: round;
   }
 
   .text {
