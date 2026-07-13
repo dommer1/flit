@@ -358,9 +358,11 @@ fn sanitized_body(
     images: &[mail::parse::InlineImage],
 ) -> MessageBody {
     MessageBody {
-        html: html
-            .as_deref()
-            .map(|h| mail::sanitize::build_srcdoc(h, images)),
+        // Remote loading is wired through in the next step — an empty map
+        // keeps every remote image blocked, exactly as before.
+        html: html.as_deref().map(|h| {
+            mail::sanitize::build_srcdoc(h, images, &std::collections::HashMap::new()).html
+        }),
         text,
     }
 }
