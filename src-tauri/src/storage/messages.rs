@@ -11,6 +11,7 @@ pub struct FetchedHeader {
     pub uid_validity: i64,
     pub from: String,
     pub to: String,
+    pub cc: String,
     pub subject: String,
     pub date: String,
     pub snippet: String,
@@ -28,8 +29,8 @@ pub async fn upsert_headers(
     for header in headers {
         sqlx::query(
             "INSERT INTO messages
-               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, subject, date, snippet, read)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, cc_addr, subject, date, snippet, read)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (account_id, mailbox, uid) DO UPDATE SET read = excluded.read",
         )
         .bind(account_id)
@@ -38,6 +39,7 @@ pub async fn upsert_headers(
         .bind(header.uid_validity)
         .bind(&header.from)
         .bind(&header.to)
+        .bind(&header.cc)
         .bind(&header.subject)
         .bind(&header.date)
         .bind(&header.snippet)
@@ -312,6 +314,7 @@ mod tests {
             uid_validity: 7,
             from: "Alice <alice@example.com>".to_string(),
             to: "Bob <bob@example.com>".to_string(),
+            cc: "Cara <cara@example.com>".to_string(),
             subject: subject.to_string(),
             date: date.to_string(),
             snippet: format!("snippet of {subject}"),
@@ -332,11 +335,13 @@ mod tests {
         .await
         .unwrap();
 
-        let to: String = sqlx::query_scalar("SELECT to_addr FROM messages WHERE uid = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let (to, cc): (String, String) =
+            sqlx::query_as("SELECT to_addr, cc_addr FROM messages WHERE uid = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(to, "Bob <bob@example.com>");
+        assert_eq!(cc, "Cara <cara@example.com>");
     }
 
     #[tokio::test]

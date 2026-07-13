@@ -107,7 +107,8 @@ pub async fn search(
            FROM messages
            WHERE (?1 IS NULL OR account_id = ?1)
              AND (?2 IS NULL OR from_addr LIKE '%' || ?2 || '%' ESCAPE '\')
-             AND (?3 IS NULL OR to_addr LIKE '%' || ?3 || '%' ESCAPE '\')
+             AND (?3 IS NULL OR to_addr LIKE '%' || ?3 || '%' ESCAPE '\'
+                            OR cc_addr LIKE '%' || ?3 || '%' ESCAPE '\')
              AND (?4 IS NULL OR subject LIKE '%' || ?4 || '%' ESCAPE '\')
              AND (?5 IS NULL OR read = ?5)
              AND (?6 IS NULL OR date >= ?6)
@@ -236,6 +237,33 @@ mod tests {
             .into_iter()
             .map(|m| m.subject)
             .collect()
+    }
+
+    #[tokio::test]
+    async fn to_operator_and_free_text_also_match_cc_recipients() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Personal").await;
+        sqlx::query(
+            "INSERT INTO messages
+               (account_id, uid, uid_validity, from_addr, to_addr, cc_addr, subject, date, read)
+             VALUES (?, 1, 1, 'a@example.com', 'bob@example.com',
+                     'Dana Malá <dana@example.com>', 'Zápisnica', '2026-07-01T00:00:00Z', 0)",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Structured operator reaches the new column…
+        assert_eq!(
+            subjects_for(&pool, Some(id), "to:dana").await,
+            vec!["Zápisnica"]
+        );
+        // …and so does the rebuilt FTS index (with diacritics folded).
+        assert_eq!(
+            subjects_for(&pool, Some(id), "mala").await,
+            vec!["Zápisnica"]
+        );
     }
 
     #[tokio::test]
