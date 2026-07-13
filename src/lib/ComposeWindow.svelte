@@ -1,17 +1,12 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onMount } from "svelte";
   import {
     closeCompose,
     listAccounts,
-    sendMessage,
+    queueSend,
     takeComposeDraft,
   } from "./api";
   import type { Account } from "./types";
-
-  /** How long a send can still be undone before it really leaves. */
-  const UNDO_SECONDS = 8;
-  /** How long the "Message sent" confirmation stays before auto-close. */
-  const SENT_CLOSE_MS = 1200;
 
   let accounts = $state<Account[]>([]);
   let accountId = $state<number | null>(null);
@@ -19,14 +14,8 @@
   let subject = $state("");
   let body = $state("");
 
-  // editing → countdown (undoable) → sending → sent; a failure or an undo
-  // drops back to editing with the draft intact.
-  let phase = $state<"editing" | "countdown" | "sending" | "sent">("editing");
-  let secondsLeft = $state(UNDO_SECONDS);
+  let queueing = $state(false);
   let error = $state<string | null>(null);
-
-  let countdownTimer: ReturnType<typeof setInterval> | undefined;
-  onDestroy(() => clearInterval(countdownTimer));
 
   onMount(() => {
     void (async () => {
@@ -44,94 +33,51 @@
     })();
   });
 
-  // why: submit only arms the countdown — nothing touches the network until
-  // it runs out, so Undo is a plain timer cancel, never a message recall.
-  function submit(event: SubmitEvent) {
+  // why: the backend queue owns the undo window — this window only hands
+  // the message over (which validates addresses) and closes. The undo badge
+  // lives in the main window from here on.
+  async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (phase !== "editing" || accountId === null) return;
+    if (queueing || accountId === null) return;
+    queueing = true;
     error = null;
-    phase = "countdown";
-    secondsLeft = UNDO_SECONDS;
-    countdownTimer = setInterval(() => {
-      secondsLeft -= 1;
-      if (secondsLeft <= 0) {
-        clearInterval(countdownTimer);
-        void send();
-      }
-    }, 1000);
-  }
-
-  function undoSend() {
-    clearInterval(countdownTimer);
-    phase = "editing";
-  }
-
-  async function send() {
-    if (accountId === null) return;
-    phase = "sending";
     try {
-      await sendMessage({ accountId, to, subject, body });
-      // why: success is what closes the window — after a short confirmation
-      // beat; a rejection drops back to the editable draft.
-      phase = "sent";
-      setTimeout(() => void closeCompose(), SENT_CLOSE_MS);
+      await queueSend({ accountId, to, subject, body });
+      await closeCompose();
     } catch (err) {
       error = String(err);
-      phase = "editing";
+    } finally {
+      queueing = false;
     }
   }
 </script>
 
 <form class="window" aria-label="Compose message" onsubmit={submit}>
   <!-- Canary-style toolbar: a tinted strip that hosts the native traffic
-       lights (title bar overlay) and doubles as the window drag handle. -->
+       lights (title bar overlay) and doubles as the window drag handle.
+       Closing goes through the red traffic light — no extra ✕ here. -->
   <header class="toolbar" data-tauri-drag-region>
     <button
-      type="button"
-      class="icon"
-      aria-label="Cancel"
-      title="Cancel"
-      onclick={() => void closeCompose()}
+      type="submit"
+      class="icon send"
+      aria-label="Send"
+      title="Send"
+      disabled={queueing || accountId === null}
     >
       <svg
         viewBox="0 0 24 24"
-        width="17"
-        height="17"
+        width="18"
+        height="18"
         fill="none"
         stroke="currentColor"
         stroke-width="1.8"
         stroke-linecap="round"
+        stroke-linejoin="round"
       >
-        <path d="M18 6 6 18M6 6l12 12" />
+        <path d="M22 2 11 13" />
+        <path d="M22 2 15 22l-4-9-9-4z" />
       </svg>
     </button>
-    {#if phase === "countdown"}
-      <button type="button" class="undo" onclick={undoSend}>
-        Undo ({secondsLeft}s)
-      </button>
-    {:else}
-      <button
-        type="submit"
-        class="icon send"
-        aria-label={phase === "sending" ? "Sending…" : "Send"}
-        title="Send"
-        disabled={phase !== "editing" || accountId === null}
-      >
-        <svg
-          viewBox="0 0 24 24"
-          width="18"
-          height="18"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M22 2 11 13" />
-          <path d="M22 2 15 22l-4-9-9-4z" />
-        </svg>
-      </button>
-    {/if}
   </header>
 
   <!-- Canary-style envelope fields: quiet label + borderless input rows
@@ -142,7 +88,7 @@
       aria-label="To"
       bind:value={to}
       required
-      disabled={phase !== "editing"}
+      disabled={queueing}
       placeholder="recipient@example.com"
     />
   </div>
@@ -151,7 +97,7 @@
     <select
       aria-label="From"
       bind:value={accountId}
-      disabled={phase !== "editing"}
+      disabled={queueing}
     >
       {#each accounts as account (account.id)}
         <option value={account.id}>{account.email}</option>
@@ -164,7 +110,7 @@
       class="subject"
       aria-label="Subject"
       bind:value={subject}
-      disabled={phase !== "editing"}
+      disabled={queueing}
       placeholder="Subject"
     />
   </div>
@@ -172,14 +118,11 @@
   {#if error}
     <p class="error" role="alert">{error}</p>
   {/if}
-  {#if phase === "sent"}
-    <p class="status" role="status">Message sent</p>
-  {/if}
 
   <textarea
     aria-label="Message body"
     bind:value={body}
-    disabled={phase !== "editing"}
+    disabled={queueing}
   ></textarea>
 </form>
 
@@ -194,11 +137,12 @@
   .toolbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     flex-shrink: 0;
-    /* why the left padding: the title bar is an overlay, so the macOS
-       traffic lights sit on this strip — the ✕ must clear them. */
-    padding: 10px 14px 10px 84px;
+    /* why 38px: matches --titlebar-inset, so the send icon centers on the
+       same axis as the overlay traffic lights on the left. */
+    min-height: 38px;
+    padding: 0 14px;
     /* Canary's pale periwinkle strip, derived from the accent so it holds
        up in dark mode too. */
     background: color-mix(in srgb, var(--accent) 16%, var(--bg-window));
@@ -226,20 +170,6 @@
   .icon:disabled {
     opacity: 0.45;
     cursor: default;
-  }
-
-  /* The undo pill takes the send icon's spot while the countdown runs. */
-  .undo {
-    padding: 4px 12px;
-    border: none;
-    border-radius: 100px;
-    background: var(--accent);
-    font: inherit;
-    font-size: 12px;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    color: var(--accent-text);
-    cursor: pointer;
   }
 
   .row {
@@ -309,16 +239,6 @@
     border-bottom: 1px solid var(--hairline);
     font-size: 12px;
     color: #d9302c;
-  }
-
-  .status {
-    flex-shrink: 0;
-    margin: 0;
-    padding: 8px 20px;
-    border-bottom: 1px solid var(--hairline);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--accent);
   }
 
   textarea {

@@ -32,7 +32,7 @@ const accounts: Account[] = [
 vi.mock("./api", () => ({
   listAccounts: vi.fn(async () => accounts),
   takeComposeDraft: vi.fn(async (): Promise<OutgoingMessage | null> => null),
-  sendMessage: vi.fn(async (): Promise<void> => undefined),
+  queueSend: vi.fn(async (): Promise<void> => undefined),
   closeCompose: vi.fn(async (): Promise<void> => undefined),
 }));
 
@@ -71,8 +71,6 @@ it("falls back to an empty draft from the first account", async () => {
   expect(screen.getByLabelText("Subject")).toHaveValue("");
 });
 
-// why fake timers mid-test: the initial load must run on real timers
-// (waitFor polls with them), only the undo window itself is faked.
 async function renderLoaded() {
   render(ComposeWindow);
   await waitFor(() => expect(screen.getByLabelText("From")).toHaveValue("1"));
@@ -81,84 +79,37 @@ async function renderLoaded() {
   });
 }
 
-it("holds the send behind an undo countdown", async () => {
+it("queues the send and closes the window immediately", async () => {
   await renderLoaded();
 
-  vi.useFakeTimers();
-  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
-
-  // nothing left the machine yet — the countdown is the whole point
-  expect(api.sendMessage).not.toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: /Undo/ })).toBeInTheDocument();
-  expect(screen.getByLabelText("To")).toBeDisabled();
-
-  await vi.advanceTimersByTimeAsync(8000);
-  vi.useRealTimers();
-
-  expect(api.sendMessage).toHaveBeenCalledWith({
-    accountId: 1,
-    to: "bob@example.com",
-    subject: "",
-    body: "",
+  await fireEvent.input(screen.getByLabelText("Subject"), {
+    target: { value: "Hello" },
   });
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith({
+      accountId: 1,
+      to: "bob@example.com",
+      subject: "Hello",
+      body: "",
+    }),
+  );
+  await waitFor(() => expect(api.closeCompose).toHaveBeenCalled());
 });
 
-it("undo aborts the send and unlocks the draft", async () => {
+it("shows the failure and stays open when queueing fails", async () => {
+  vi.mocked(api.queueSend).mockRejectedValueOnce(
+    "smtp error: invalid recipient",
+  );
   await renderLoaded();
 
-  vi.useFakeTimers();
   await fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  await vi.advanceTimersByTimeAsync(3000);
-  await fireEvent.click(screen.getByRole("button", { name: /Undo/ }));
-  await vi.advanceTimersByTimeAsync(30000);
-  vi.useRealTimers();
-
-  expect(api.sendMessage).not.toHaveBeenCalled();
-  expect(api.closeCompose).not.toHaveBeenCalled();
-  expect(screen.getByLabelText("To")).toBeEnabled();
-  expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
-});
-
-it("confirms the sent message before closing the window", async () => {
-  await renderLoaded();
-
-  vi.useFakeTimers();
-  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  await vi.advanceTimersByTimeAsync(8000);
-
-  expect(api.sendMessage).toHaveBeenCalled();
-  expect(screen.getByRole("status")).toHaveTextContent("Message sent");
-  expect(api.closeCompose).not.toHaveBeenCalled();
-
-  await vi.advanceTimersByTimeAsync(1500);
-  vi.useRealTimers();
-
-  expect(api.closeCompose).toHaveBeenCalled();
-});
-
-it("shows the failure and stays open when sending fails", async () => {
-  vi.mocked(api.sendMessage).mockRejectedValueOnce("smtp error: relay refused");
-  await renderLoaded();
-
-  vi.useFakeTimers();
-  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  await vi.advanceTimersByTimeAsync(8000);
-  vi.useRealTimers();
 
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "smtp error: relay refused",
+    "smtp error: invalid recipient",
   );
   expect(api.closeCompose).not.toHaveBeenCalled();
   expect(screen.getByLabelText("To")).toBeEnabled();
   expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
-});
-
-it("cancels without sending", async () => {
-  render(ComposeWindow);
-  await waitFor(() => expect(screen.getByLabelText("From")).toHaveValue("1"));
-
-  await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
-  expect(api.closeCompose).toHaveBeenCalled();
-  expect(api.sendMessage).not.toHaveBeenCalled();
 });

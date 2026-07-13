@@ -36,6 +36,14 @@ export interface OutgoingMessage {
   body: string;
 }
 
+/** Payload of send-queued / send-finished / send-undone events. */
+export interface SendEvent {
+  id: number;
+  subject: string;
+  /** Set only on send-finished when the delivery failed. */
+  error: string | null;
+}
+
 /** `html`, when present, is a full sanitized srcdoc document from the backend. */
 export interface MessageBody {
   html: string | null;

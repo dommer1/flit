@@ -8,6 +8,7 @@ import type {
   MessageHeader,
   NewAccount,
   OutgoingMessage,
+  SendEvent,
 } from "./types";
 
 export function listAccounts(): Promise<Account[]> {
@@ -77,9 +78,39 @@ export function syncAccount(accountId: number): Promise<void> {
   return invoke<void>("sync_account", { accountId });
 }
 
-/** Send a composed message via the sending account's SMTP server. */
-export function sendMessage(message: OutgoingMessage): Promise<void> {
-  return invoke<void>("send_message", { message });
+/**
+ * Queue a message for sending after its undo window. Resolves as soon as
+ * the message is validated and queued; progress arrives via onSendQueued /
+ * onSendFinished / onSendUndone.
+ */
+export function queueSend(message: OutgoingMessage): Promise<void> {
+  return invoke<void>("queue_send", { message });
+}
+
+/** Cancel a queued send — the draft reopens in a new compose window. */
+export function undoSend(id: number): Promise<void> {
+  return invoke<void>("undo_send", { id });
+}
+
+/** A message entered its undo window. */
+export function onSendQueued(
+  callback: (event: SendEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SendEvent>("send-queued", (e) => callback(e.payload));
+}
+
+/** A queued message finished: delivered when `error` is null, failed otherwise. */
+export function onSendFinished(
+  callback: (event: SendEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SendEvent>("send-finished", (e) => callback(e.payload));
+}
+
+/** A queued message was undone and handed back to a compose window. */
+export function onSendUndone(
+  callback: (event: SendEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SendEvent>("send-undone", (e) => callback(e.payload));
 }
 
 /** Open a native compose window seeded with the draft. */
