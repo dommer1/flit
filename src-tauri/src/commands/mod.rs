@@ -1,7 +1,9 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
-use crate::models::{Account, Mailbox, MessageBody, MessageHeader, NewAccount, OutgoingMessage};
+use crate::models::{
+    Account, Mailbox, MessageBody, MessageHeader, NewAccount, OutgoingMessage, RemoteImagePolicy,
+};
 use crate::state::AppState;
 use crate::{auth, mail, storage};
 
@@ -425,6 +427,26 @@ pub fn take_compose_draft(
 #[tauri::command]
 pub async fn close_compose(window: tauri::WebviewWindow) -> Result<(), AppError> {
     window.close()?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_remote_image_policy(
+    state: State<'_, AppState>,
+) -> Result<RemoteImagePolicy, AppError> {
+    storage::settings::remote_image_policy(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_remote_image_policy(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    policy: RemoteImagePolicy,
+) -> Result<(), AppError> {
+    storage::settings::set_remote_image_policy(&state.pool, policy).await?;
+    // why: the settings window mutates, the main window's open message view
+    // listens and re-renders with the new policy.
+    app.emit("settings-changed", ())?;
     Ok(())
 }
 

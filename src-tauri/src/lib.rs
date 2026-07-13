@@ -88,7 +88,9 @@ pub fn run() {
             commands::take_compose_draft,
             commands::close_compose,
             commands::open_settings,
-            commands::close_settings
+            commands::close_settings,
+            commands::get_remote_image_policy,
+            commands::set_remote_image_policy
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
