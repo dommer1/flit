@@ -141,8 +141,13 @@ pub async fn send_message(
     state: State<'_, AppState>,
     message: OutgoingMessage,
 ) -> Result<(), AppError> {
-    let account = storage::accounts::get(&state.pool, message.account_id).await?;
-    let mime = mail::smtp::build_message(&account.email, &message)?;
+    deliver(&state.pool, &message).await
+}
+
+/// The one SMTP delivery path: account row → MIME → keychain → send.
+async fn deliver(pool: &sqlx::SqlitePool, message: &OutgoingMessage) -> Result<(), AppError> {
+    let account = storage::accounts::get(pool, message.account_id).await?;
+    let mime = mail::smtp::build_message(&account.email, message)?;
     // why: the password is read from the keychain at call time and lives only
     // on this task's stack — never in state, events, or logs.
     let password = auth::get_password(message.account_id).await?;
@@ -219,9 +224,13 @@ fn sanitized_body(html: Option<String>, text: Option<String>) -> MessageBody {
 /// Open a native compose window seeded with `draft`. Every call opens its
 /// own window (unique label), so several drafts can be in flight at once.
 #[tauri::command]
-pub async fn open_compose(
-    app: AppHandle,
-    state: State<'_, AppState>,
+pub async fn open_compose(app: AppHandle, draft: OutgoingMessage) -> Result<(), AppError> {
+    open_compose_window(&app, draft).await
+}
+
+/// Shared with the send queue, which reopens a draft on undo or failure.
+pub(crate) async fn open_compose_window(
+    app: &AppHandle,
     draft: OutgoingMessage,
 ) -> Result<(), AppError> {
     // why: a process-wide counter, not "count of open windows" — labels of
@@ -237,10 +246,10 @@ pub async fn open_compose(
     } else {
         draft.subject.clone()
     };
-    state.park_draft(&label, draft);
+    app.state::<AppState>().park_draft(&label, draft);
 
     let builder = tauri::WebviewWindowBuilder::new(
-        &app,
+        app,
         &label,
         // why: all windows serve the same bundle — main.ts picks the root
         // component from the window label.
