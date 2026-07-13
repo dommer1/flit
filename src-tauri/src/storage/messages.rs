@@ -47,11 +47,12 @@ pub async fn upsert_headers(
     Ok(())
 }
 
-/// Headers for one account, or the unified inbox when `account_id` is `None` —
-/// the same query with the filter dropped, newest first.
+/// Headers of one mailbox for one account — or across all accounts when
+/// `account_id` is `None` (the "All Inboxes" view), newest first.
 pub async fn list(
     pool: &SqlitePool,
     account_id: Option<i64>,
+    mailbox: &str,
 ) -> Result<Vec<MessageHeader>, AppError> {
     // why: sqlx 0.9 rejects runtime-built SQL strings (SqlSafeStr), so the
     // column list is spelled out twice instead of shared via format!().
@@ -59,17 +60,19 @@ pub async fn list(
         Some(id) => {
             sqlx::query_as(
                 r#"SELECT id, account_id, from_addr AS "from", subject, snippet, date, read
-                   FROM messages WHERE account_id = ? ORDER BY date DESC"#,
+                   FROM messages WHERE account_id = ? AND mailbox = ? ORDER BY date DESC"#,
             )
             .bind(id)
+            .bind(mailbox)
             .fetch_all(pool)
             .await?
         }
         None => {
             sqlx::query_as(
                 r#"SELECT id, account_id, from_addr AS "from", subject, snippet, date, read
-                   FROM messages ORDER BY date DESC"#,
+                   FROM messages WHERE mailbox = ? ORDER BY date DESC"#,
             )
+            .bind(mailbox)
             .fetch_all(pool)
             .await?
         }
@@ -264,7 +267,7 @@ mod tests {
         .await
         .unwrap();
 
-        let all = list(&pool, None).await.unwrap();
+        let all = list(&pool, None, "INBOX").await.unwrap();
 
         let subjects: Vec<&str> = all.iter().map(|m| m.subject.as_str()).collect();
         assert_eq!(subjects, vec!["New", "Old"]);
@@ -293,11 +296,11 @@ mod tests {
         .await
         .unwrap();
 
-        let mine = list(&pool, Some(first)).await.unwrap();
+        let mine = list(&pool, Some(first), "INBOX").await.unwrap();
 
         assert_eq!(mine.len(), 1);
         assert_eq!(mine[0].subject, "Mine");
-        assert!(list(&pool, Some(999)).await.unwrap().is_empty());
+        assert!(list(&pool, Some(999), "INBOX").await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -322,7 +325,7 @@ mod tests {
         .await
         .unwrap();
 
-        let all = list(&pool, Some(id)).await.unwrap();
+        let all = list(&pool, Some(id), "INBOX").await.unwrap();
         assert_eq!(all.len(), 1);
         assert!(all[0].read);
     }
@@ -355,6 +358,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_shows_only_the_requested_mailbox() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "In inbox", "2026-07-01T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "Archive",
+            &[header(1, "Archived", "2026-07-02T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+
+        let inbox: Vec<String> = list(&pool, Some(id), "INBOX")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.subject)
+            .collect();
+        assert_eq!(inbox, vec!["In inbox"]);
+
+        let unified: Vec<String> = list(&pool, None, "Archive")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.subject)
+            .collect();
+        assert_eq!(unified, vec!["Archived"]);
+    }
+
+    #[tokio::test]
     async fn missing_body_lists_newest_first_and_skips_cached() {
         let pool = test_pool().await;
         let id = account(&pool, "Personal").await;
@@ -370,7 +411,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let cached_id = list(&pool, Some(id))
+        let cached_id = list(&pool, Some(id), "INBOX")
             .await
             .unwrap()
             .iter()
@@ -402,7 +443,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let message_id = list(&pool, Some(id)).await.unwrap()[0].id;
+        let message_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
 
         let before = get_body(&pool, message_id).await.unwrap();
         assert_eq!(before.body_text, None);
@@ -423,7 +464,7 @@ mod tests {
         let after = get_body(&pool, message_id).await.unwrap();
         assert_eq!(after.body_text.as_deref(), Some("plain body"));
         assert_eq!(after.body_html.as_deref(), Some("<p>html body</p>"));
-        let headers = list(&pool, Some(id)).await.unwrap();
+        let headers = list(&pool, Some(id), "INBOX").await.unwrap();
         assert_eq!(headers[0].snippet, "plain body");
     }
 
@@ -450,7 +491,8 @@ mod tests {
 
         clear_mailbox(&pool, id, "INBOX").await.unwrap();
 
-        let remaining = list(&pool, Some(id)).await.unwrap();
+        assert!(list(&pool, Some(id), "INBOX").await.unwrap().is_empty());
+        let remaining = list(&pool, Some(id), "Archive").await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].subject, "Archived");
     }

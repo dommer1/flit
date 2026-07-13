@@ -107,8 +107,10 @@ fn now_epoch() -> i64 {
 pub async fn list_messages(
     state: State<'_, AppState>,
     account_id: Option<i64>,
+    mailbox: Option<String>,
 ) -> Result<Vec<MessageHeader>, AppError> {
-    storage::messages::list(&state.pool, account_id).await
+    let mailbox = mailbox.as_deref().unwrap_or("INBOX");
+    storage::messages::list(&state.pool, account_id, mailbox).await
 }
 
 /// Search the local cache with a gmail-style query ("from:x is:unread text").

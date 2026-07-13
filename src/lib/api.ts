@@ -42,9 +42,12 @@ export function confirmAccountDeletion(account: Account): Promise<boolean> {
   );
 }
 
-/** `accountId: null` = unified inbox across all accounts. */
-export function listMessages(accountId: number | null): Promise<MessageHeader[]> {
-  return invoke<MessageHeader[]>("list_messages", { accountId });
+/** `accountId: null` = the given mailbox across all accounts. */
+export function listMessages(
+  accountId: number | null,
+  mailbox = "INBOX",
+): Promise<MessageHeader[]> {
+  return invoke<MessageHeader[]>("list_messages", { accountId, mailbox });
 }
 
 /**
