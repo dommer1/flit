@@ -46,6 +46,15 @@ pub struct OutgoingMessage {
     pub account_id: i64,
     /// One or more recipients, comma-separated.
     pub to: String,
+    /// Cc recipients, comma-separated; empty = none.
+    // why serde(default): drafts and payloads written before these fields
+    // existed must keep deserializing as "no cc/bcc".
+    #[serde(default)]
+    pub cc: String,
+    /// Bcc recipients, comma-separated; empty = none. Bcc travels only in
+    /// the SMTP envelope — it never becomes a transmitted header.
+    #[serde(default)]
+    pub bcc: String,
     pub subject: String,
     /// Plain text only for now — no HTML composing.
     pub body: String,

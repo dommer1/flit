@@ -93,6 +93,8 @@ mod tests {
         OutgoingMessage {
             account_id: 1,
             to: "alice@example.com".to_string(),
+            cc: String::new(),
+            bcc: String::new(),
             subject: subject.to_string(),
             body: "hi".to_string(),
         }

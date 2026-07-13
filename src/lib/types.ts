@@ -31,6 +31,10 @@ export interface OutgoingMessage {
   accountId: number;
   /** One or more recipients, comma-separated. */
   to: string;
+  /** Cc recipients, comma-separated; empty/absent = none. */
+  cc?: string;
+  /** Bcc recipients — SMTP envelope only, never a visible header. */
+  bcc?: string;
   subject: string;
   /** Plain text only for now. */
   body: string;
