@@ -3,6 +3,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use sqlx::SqlitePool;
 
+use crate::auth::{self, PasswordCache};
+use crate::error::AppError;
 use crate::models::OutgoingMessage;
 
 /// Shared app state managed by Tauri; commands receive it via `tauri::State`.
@@ -21,6 +23,8 @@ pub struct AppState {
     /// One-shot by design: whoever takes the entry owns the outcome — the
     /// timer task sends it, or undo hands it back to a compose window.
     pending_sends: Mutex<HashMap<u64, OutgoingMessage>>,
+    /// Session cache of account passwords (see auth::PasswordCache).
+    pub passwords: PasswordCache,
 }
 
 impl AppState {
@@ -29,7 +33,17 @@ impl AppState {
             pool,
             pending_drafts: Mutex::new(HashMap::new()),
             pending_sends: Mutex::new(HashMap::new()),
+            passwords: PasswordCache::default(),
         }
+    }
+
+    /// Account password via the session cache: the keychain — and with it a
+    /// possible macOS ACL prompt — is consulted at most once per account
+    /// per app run.
+    pub async fn password(&self, account_id: i64) -> Result<String, AppError> {
+        self.passwords
+            .get_or_fetch(account_id, || auth::get_password(account_id))
+            .await
     }
 
     /// Park a draft for the compose window `label` to pick up after it loads.

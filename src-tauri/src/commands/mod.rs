@@ -23,10 +23,13 @@ pub async fn add_account(
     let inserted = storage::accounts::insert(&state.pool, &account).await?;
     // why: the keychain write can fail (locked keychain, denied prompt) — roll
     // the row back so no account can exist without a stored credential.
-    if let Err(err) = auth::set_password(inserted.id, password).await {
+    if let Err(err) = auth::set_password(inserted.id, password.clone()).await {
         storage::accounts::delete(&state.pool, inserted.id).await?;
         return Err(err);
     }
+    // why: seed the session cache — the first sync then needs no keychain
+    // read (and no macOS prompt) at all.
+    state.passwords.insert(inserted.id, password);
     // why: broadcast to every window — the settings window mutates accounts,
     // the main window listens and refetches its sidebar list.
     app.emit("accounts-changed", ())?;
@@ -42,6 +45,7 @@ pub async fn delete_account(
     // why: keychain first — if it fails the account stays intact; the reverse
     // order could strand a secret in the keychain with no owning account row.
     auth::delete_password(id).await?;
+    state.passwords.remove(id);
     storage::accounts::delete(&state.pool, id).await?;
     app.emit("accounts-changed", ())?;
     Ok(())
@@ -56,11 +60,13 @@ pub async fn sync_account(
     account_id: i64,
 ) -> Result<(), AppError> {
     let account = storage::accounts::get(&state.pool, account_id).await?;
-    // why: the password is read from the keychain at call time and lives only
-    // on this task's stack — never in state, events, or logs.
+    // why: the password comes from the session cache (one keychain read per
+    // account per run) and is handed on to the prefetch task below — never
+    // written to state beyond the cache, events, or logs.
     let result = async {
-        let password = auth::get_password(account_id).await?;
-        mail::sync::sync_account(&state.pool, &account, &password).await
+        let password = state.password(account_id).await?;
+        mail::sync::sync_account(&state.pool, &account, &password).await?;
+        Ok::<String, AppError>(password)
     }
     .await;
 
@@ -71,21 +77,15 @@ pub async fn sync_account(
         .await?;
     app.emit("accounts-changed", ())?;
 
-    result?;
+    let password = result?;
     app.emit("messages-changed", account_id)?;
 
     // why: bodies download in the background AFTER the command returns — the
     // header list is already usable, and each cached body feeds the FTS index
-    // so search covers unopened mail. The password is re-read from the
-    // keychain inside the task instead of being captured across the await.
+    // so search covers unopened mail.
     let pool = state.pool.clone();
     tauri::async_runtime::spawn(async move {
-        let prefetched = async {
-            let password = auth::get_password(account_id).await?;
-            mail::sync::prefetch_bodies(&pool, &account, &password).await
-        }
-        .await;
-        match prefetched {
+        match mail::sync::prefetch_bodies(&pool, &account, &password).await {
             // why: snippets just became real — lists and searches should see them.
             Ok(cached) if cached > 0 => {
                 let _ = app.emit("messages-changed", account_id);
@@ -178,7 +178,6 @@ pub async fn queue_send(
         },
     )?;
 
-    let pool = state.pool.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(UNDO_WINDOW).await;
         // why: take_send is the ownership handshake — None means undo won
@@ -186,7 +185,7 @@ pub async fn queue_send(
         let Some(message) = app.state::<AppState>().take_send(id) else {
             return;
         };
-        let error = deliver(&pool, &message).await.err();
+        let error = deliver(&app.state::<AppState>(), &message).await.err();
         if let Some(err) = &error {
             eprintln!("queued send {id} failed: {err}");
             // why: a failed send must never destroy mail — the draft comes
@@ -231,13 +230,13 @@ pub async fn undo_send(
     Ok(())
 }
 
-/// The one SMTP delivery path: account row → MIME → keychain → send.
-async fn deliver(pool: &sqlx::SqlitePool, message: &OutgoingMessage) -> Result<(), AppError> {
-    let account = storage::accounts::get(pool, message.account_id).await?;
+/// The one SMTP delivery path: account row → MIME → session cache → send.
+async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppError> {
+    let account = storage::accounts::get(&state.pool, message.account_id).await?;
     let mime = mail::smtp::build_message(&account.email, message)?;
-    // why: the password is read from the keychain at call time and lives only
-    // on this task's stack — never in state, events, or logs.
-    let password = auth::get_password(message.account_id).await?;
+    // why: the session cache reads the keychain at most once per account per
+    // run; the password never reaches events or logs.
+    let password = state.password(message.account_id).await?;
     mail::smtp::send(
         &account.smtp_host,
         account.smtp_port,
@@ -284,7 +283,7 @@ pub async fn get_message_body(
     }
 
     let account = storage::accounts::get(&state.pool, row.account_id).await?;
-    let password = auth::get_password(account.id).await?;
+    let password = state.password(account.id).await?;
     let parsed = mail::sync::fetch_body_into_cache(
         &state.pool,
         &account,
