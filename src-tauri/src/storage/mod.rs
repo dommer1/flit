@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod mailboxes;
 pub mod messages;
 pub mod search;
+pub mod settings;
 
 use std::path::Path;
 use std::time::Duration;

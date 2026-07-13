@@ -60,6 +60,43 @@ pub struct OutgoingMessage {
     pub body: String,
 }
 
+/// How the viewer treats remote (http/https) images in mail bodies.
+/// Inline cid: images always render — they are part of the message and
+/// loading them touches no network. Remote images are the tracking vector.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteImagePolicy {
+    /// Never load; no banner either.
+    Block,
+    /// Default: banner per message, load only on an explicit click.
+    #[default]
+    Ask,
+    /// Load automatically. Known trackers are still stripped.
+    Always,
+}
+
+impl RemoteImagePolicy {
+    /// The wire/storage form — matches the serde `lowercase` names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RemoteImagePolicy::Block => "block",
+            RemoteImagePolicy::Ask => "ask",
+            RemoteImagePolicy::Always => "always",
+        }
+    }
+
+    /// why: unknown strings fall back to Ask (the default) — Ask never
+    /// touches the network without an explicit click, so a corrupt or
+    /// future value can't silently enable auto-loading.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "block" => RemoteImagePolicy::Block,
+            "always" => RemoteImagePolicy::Always,
+            _ => RemoteImagePolicy::Ask,
+        }
+    }
+}
+
 /// Body payload for the message viewer. `html`, when present, is already a
 /// full sanitized srcdoc document (mail::sanitize) — never raw mail HTML.
 #[derive(Debug, Clone, Serialize)]
