@@ -63,6 +63,16 @@ pub async fn list(pool: &SqlitePool, account_id: i64) -> Result<Vec<Mailbox>, Ap
     Ok(rows)
 }
 
+/// Full IMAP name of the account's Sent folder, if discovery found one.
+pub async fn sent_name(pool: &SqlitePool, account_id: i64) -> Result<Option<String>, AppError> {
+    let name =
+        sqlx::query_scalar("SELECT name FROM mailboxes WHERE account_id = ? AND role = 'sent'")
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +161,38 @@ mod tests {
             names,
             vec!["INBOX", "Sent", "Archive", "Trash", "Alpha", "Zzz"]
         );
+    }
+
+    #[tokio::test]
+    async fn sent_name_returns_the_sent_role_folder() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(
+            &pool,
+            id,
+            &[
+                found("INBOX", Some("inbox")),
+                found("Odoslané", Some("sent")),
+            ],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            sent_name(&pool, id).await.unwrap(),
+            Some("Odoslané".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn sent_name_is_none_when_no_sent_folder_was_discovered() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(&pool, id, &[found("INBOX", Some("inbox"))])
+            .await
+            .unwrap();
+
+        assert_eq!(sent_name(&pool, id).await.unwrap(), None);
     }
 
     #[tokio::test]
