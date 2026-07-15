@@ -223,6 +223,42 @@ fn sanitize(
         // and any @rule, is dropped.
         .add_generic_attributes(&["style"])
         .filter_style_properties(STYLE_PROPERTIES.iter().copied().collect::<HashSet<_>>())
+        // Legacy presentational HTML that older mail (and many ESP templates)
+        // still relies on. `<font>` plus per-tag layout attributes — none can
+        // reference a URL. The url-bearing `background` attribute is pointedly
+        // NOT here: it is the attribute twin of CSS background-image.
+        .add_tags(&["font", "center"])
+        .add_tag_attributes("font", &["color", "face", "size"])
+        .add_tag_attributes(
+            "table",
+            &[
+                "bgcolor",
+                "width",
+                "height",
+                "cellpadding",
+                "cellspacing",
+                "border",
+                "align",
+                "valign",
+            ],
+        )
+        .add_tag_attributes("tr", &["bgcolor", "align", "valign"])
+        .add_tag_attributes(
+            "td",
+            &[
+                "bgcolor", "width", "height", "align", "valign", "colspan", "rowspan", "nowrap",
+            ],
+        )
+        .add_tag_attributes(
+            "th",
+            &[
+                "bgcolor", "width", "height", "align", "valign", "colspan", "rowspan", "nowrap",
+            ],
+        )
+        .add_tag_attributes(
+            "img",
+            &["width", "height", "align", "border", "hspace", "vspace"],
+        )
         .attribute_filter(move |element, attribute, value| {
             if element == "img" && attribute == "src" {
                 return img_src(value, &data_uris, &remote, &counter);
@@ -577,5 +613,48 @@ mod tests {
         assert!(!doc.to_lowercase().contains("position"));
         assert!(!doc.contains("absolute"));
         assert!(doc.contains("hi"));
+    }
+
+    #[test]
+    fn keeps_presentational_table_attributes() {
+        // The legacy table-layout vocabulary of HTML email — none of it can
+        // reference a URL, all of it is layout.
+        let doc = srcdoc(
+            r##"<table bgcolor="#eeeeee" width="600" cellpadding="10" cellspacing="0" border="0" align="center">
+                <tr valign="top"><td width="50%" height="40" colspan="2" nowrap="nowrap">hi</td></tr></table>"##,
+            &[],
+        );
+
+        assert!(doc.contains(r##"bgcolor="#eeeeee""##));
+        assert!(doc.contains(r#"width="600""#));
+        assert!(doc.contains(r#"cellpadding="10""#));
+        assert!(doc.contains(r#"valign="top""#));
+        assert!(doc.contains(r#"height="40""#));
+        assert!(doc.contains(r#"colspan="2""#));
+    }
+
+    #[test]
+    fn keeps_legacy_font_tag() {
+        let doc = srcdoc(
+            r##"<font color="#333333" face="Arial" size="4">hi</font>"##,
+            &[],
+        );
+
+        assert!(doc.contains("<font"));
+        assert!(doc.contains(r##"color="#333333""##));
+        assert!(doc.contains(r#"face="Arial""#));
+    }
+
+    #[test]
+    fn strips_url_bearing_background_attribute() {
+        // `background="url"` on a table/cell is the attribute-level twin of
+        // CSS background-image — a remote load, so it must never survive.
+        let doc = srcdoc(
+            r#"<table background="https://t.example/bg.png"><tr><td>hi</td></tr></table>"#,
+            &[],
+        );
+
+        assert!(!doc.contains("background="));
+        assert!(!doc.contains("t.example"));
     }
 }
