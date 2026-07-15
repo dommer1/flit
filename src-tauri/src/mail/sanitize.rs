@@ -19,9 +19,10 @@ use crate::mail::parse::InlineImage;
 const BODY_CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline'";
 
 /// Base styling for the message document — our own trusted CSS, the reason
-/// style-src 'unsafe-inline' is allowed above. Untrusted `style` attributes
-/// survive only through the STYLE_PROPERTIES allowlist below; <style> tags
-/// are still stripped whole (ammonia default).
+/// style-src 'unsafe-inline' is allowed above. Untrusted CSS is admitted only
+/// through the STYLE_PROPERTIES allowlist: inline `style` attributes via
+/// ammonia's filter, and `<style>` blocks via mail::css (parsed, filtered and
+/// re-serialised, then injected right after this base).
 const BODY_STYLE: &str = "body{font-family:system-ui,sans-serif;font-size:0.875rem;color:#1a1a1a;\
      margin:0.5rem;word-wrap:break-word}img{max-width:100%}";
 
@@ -158,6 +159,12 @@ const STYLE_PROPERTIES: &[&str] = &[
     "order",
 ];
 
+/// The allowlist as a set — shared by the inline-`style` filter and the
+/// `<style>`-block sanitizer (mail::css) so both honour the same policy.
+fn style_property_set() -> HashSet<&'static str> {
+    STYLE_PROPERTIES.iter().copied().collect()
+}
+
 /// What `build_srcdoc` hands back: the locked-down document plus how many
 /// loadable remote images stayed blocked (drives the "Load images" banner).
 #[derive(Debug)]
@@ -184,12 +191,18 @@ pub fn build_srcdoc(
     remote: &HashMap<String, String>,
 ) -> SanitizedBody {
     let (clean, blocked_remote) = sanitize(untrusted_html, images, remote);
+    // Message <style> blocks: sanitized separately (mail::css parses and
+    // re-serialises them under the same property allowlist) and injected as
+    // our own trusted <style>, AFTER BODY_STYLE so the message overrides our
+    // base. The css module returns text already safe to embed here.
+    let message_css =
+        crate::mail::css::sanitize_style_blocks(untrusted_html, &style_property_set());
     SanitizedBody {
         html: format!(
             "<!doctype html><html><head>\
              <meta charset=\"utf-8\">\
              <meta http-equiv=\"Content-Security-Policy\" content=\"{BODY_CSP}\">\
-             <style>{BODY_STYLE}</style>\
+             <style>{BODY_STYLE}{message_css}</style>\
              </head><body>{clean}</body></html>"
         ),
         blocked_remote,
@@ -222,7 +235,10 @@ fn sanitize(
         // (no url-bearing, no positioning) with a valid value — the rest,
         // and any @rule, is dropped.
         .add_generic_attributes(&["style"])
-        .filter_style_properties(STYLE_PROPERTIES.iter().copied().collect::<HashSet<_>>())
+        .filter_style_properties(style_property_set())
+        // `class`/`id` are the hooks the injected <style> selectors match on
+        // (mail::css). Neither can reference a URL or run script.
+        .add_generic_attributes(&["class", "id"])
         // Legacy presentational HTML that older mail (and many ESP templates)
         // still relies on. `<font>` plus per-tag layout attributes — none can
         // reference a URL. The url-bearing `background` attribute is pointedly
@@ -656,5 +672,46 @@ mod tests {
 
         assert!(!doc.contains("background="));
         assert!(!doc.contains("t.example"));
+    }
+
+    #[test]
+    fn hides_a_class_based_preheader_via_injected_style() {
+        // The reported bug: preview text hidden by a <style> class showed in
+        // the body because we stripped <style>. Now the sanitized rule is
+        // injected into the head and the element keeps its class to match.
+        let doc = srcdoc(
+            r#"<style>.preheader{display:none}</style><span class="preheader">Preview</span><p>Body</p>"#,
+            &[],
+        );
+
+        let (head, body) = doc.split_once("<body>").unwrap();
+        assert!(head.contains(".preheader"));
+        assert!(head.contains("display: none"));
+        assert!(body.contains(r#"class="preheader""#));
+        // The original <style> must not leak into the body as text.
+        assert!(!body.contains("<style"));
+    }
+
+    #[test]
+    fn keeps_class_and_id_for_stylesheet_selectors() {
+        let doc = srcdoc(r#"<div class="col" id="hero">hi</div>"#, &[]);
+
+        assert!(doc.contains(r#"class="col""#));
+        assert!(doc.contains(r#"id="hero""#));
+    }
+
+    #[test]
+    fn sanitizes_injected_stylesheets_like_inline_styles() {
+        let doc = srcdoc(
+            r#"<style>@import url(https://t.example/x.css);
+               .a{color:red;background-image:url(https://t.example/p.png);position:fixed}</style>
+               <p class="a">x</p>"#,
+            &[],
+        );
+
+        assert!(!doc.contains("@import"));
+        assert!(!doc.contains("t.example"));
+        assert!(!doc.to_lowercase().contains("position:fixed"));
+        assert!(doc.contains("color: red"));
     }
 }
