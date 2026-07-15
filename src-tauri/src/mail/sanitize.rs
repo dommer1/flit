@@ -31,16 +31,20 @@ const BODY_STYLE: &str = "body{font-family:system-ui,sans-serif;font-size:0.875r
 /// declarations and @rules, so only these property names — with a valid
 /// value — reach the webview.
 ///
-/// Two whole classes are deliberately absent:
-/// - **URL-bearing** (`background`, `background-image`, `list-style-image`,
-///   `cursor`, `content`, `border-image`, `mask`): the CSS
-///   network/tracking vector. CSP (`img-src data:`) would block the load,
-///   but the sanitizer must hold on its own — so they never survive here.
-///   `background-color` (colour only) stands in for solid backgrounds.
-/// - **Positioning** (`position`, `z-index`, `top`/`left`/…): fixed/absolute
-///   overlays let a message paint fake UI over the app. The sandbox already
-///   contains the message, but overlay spoofing isn't a network problem, so
-///   CSP doesn't help — the allowlist is the only guard.
+/// One whole class is deliberately absent: **URL-bearing** properties
+/// (`background`, `background-image`, `list-style-image`, `cursor`, `content`,
+/// `border-image`, `mask`) — the CSS network/tracking vector. CSP
+/// (`img-src data:`) would block the load, but the sanitizer must hold on its
+/// own, so they never survive here. `background-color` (colour only) stands in
+/// for solid backgrounds.
+///
+/// why positioning IS allowed: senders hide preheader/preview text with
+/// `position:absolute;left:-9999px` and the sr-only pattern, so stripping
+/// `position` made that hidden text render in normal flow. It is safe because
+/// the message renders in a fully sandboxed iframe — `position:fixed`/absolute
+/// resolve against the iframe's own viewport (the message pane), so a message
+/// still cannot paint over the app's real chrome. (ProtonMail keeps position
+/// for the same reason.)
 const STYLE_PROPERTIES: &[&str] = &[
     // Text & fonts
     "color",
@@ -126,7 +130,7 @@ const STYLE_PROPERTIES: &[&str] = &[
     "max-height",
     "min-width",
     "min-height",
-    // Flow & display (no positioning)
+    // Flow & display
     "display",
     "visibility",
     "overflow",
@@ -134,6 +138,15 @@ const STYLE_PROPERTIES: &[&str] = &[
     "overflow-y",
     "float",
     "clear",
+    // Positioning — safe inside the sandboxed iframe (see the type docs),
+    // and needed so off-screen/sr-only hidden preheaders stay hidden.
+    "position",
+    "top",
+    "right",
+    "bottom",
+    "left",
+    "z-index",
+    "clip",
     // Tables
     "table-layout",
     "caption-side",
@@ -237,8 +250,9 @@ fn sanitize(
         .add_generic_attributes(&["style"])
         .filter_style_properties(style_property_set())
         // `class`/`id` are the hooks the injected <style> selectors match on
-        // (mail::css). Neither can reference a URL or run script.
-        .add_generic_attributes(&["class", "id"])
+        // (mail::css). `hidden` is another way senders hide preheader text.
+        // None can reference a URL or run script.
+        .add_generic_attributes(&["class", "id", "hidden"])
         // Legacy presentational HTML that older mail (and many ESP templates)
         // still relies on. `<font>` plus per-tag layout attributes — none can
         // reference a URL. The url-bearing `background` attribute is pointedly
@@ -574,18 +588,17 @@ mod tests {
     }
 
     #[test]
-    fn strips_positioning_that_enables_overlay_spoofing() {
-        // position:fixed/absolute over the whole viewport is how a message
-        // could paint fake UI on top of the app — never allowed, even though
-        // the sandbox already contains it.
+    fn keeps_positioning_so_offscreen_preheaders_stay_hidden() {
+        // The common off-screen hide: without position/left this text would
+        // render in normal flow. Safe because the sandboxed iframe confines
+        // positioning to the message pane.
         let doc = srcdoc(
-            r#"<div style="position:fixed;top:0;left:0;color:red">x</div>"#,
+            r#"<div style="position:absolute;left:-9999px;top:-9999px">Preview text</div>"#,
             &[],
         );
 
-        assert!(doc.contains("color:red"));
-        assert!(!doc.to_lowercase().contains("position"));
-        assert!(!doc.contains("fixed"));
+        assert!(doc.contains("position:absolute"));
+        assert!(doc.contains("left:-9999px"));
     }
 
     #[test]
@@ -624,10 +637,13 @@ mod tests {
     fn empties_the_style_attribute_when_nothing_survives() {
         // ammonia leaves an inert style="" rather than removing the attribute
         // — what matters is that the forbidden declaration is gone.
-        let doc = srcdoc(r#"<p style="position:absolute">hi</p>"#, &[]);
+        let doc = srcdoc(
+            r#"<p style="background-image:url(https://t/x.png)">hi</p>"#,
+            &[],
+        );
 
-        assert!(!doc.to_lowercase().contains("position"));
-        assert!(!doc.contains("absolute"));
+        assert!(!doc.to_lowercase().contains("url("));
+        assert!(!doc.contains("t/x.png"));
         assert!(doc.contains("hi"));
     }
 
