@@ -1,7 +1,7 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::mail::parse::InlineImage;
+use crate::mail::parse::{snippet_of, InlineImage};
 use crate::models::MessageHeader;
 
 /// Header data as it arrives from an IMAP fetch, before it has a row id.
@@ -48,6 +48,33 @@ pub async fn upsert_headers(
         .await?;
     }
     Ok(())
+}
+
+/// Recompute stored snippets that still carry a URL, using the current
+/// `snippet_of` rules. Runs once at startup: rows already cached by an older
+/// build kept the raw URL the parser now strips, and a re-fetch would never
+/// touch them (their body is present). The `LIKE '%http%'` filter is both the
+/// work-list and the idempotency guard — a corrected snippet no longer matches,
+/// so a second startup finds nothing to do.
+pub async fn backfill_url_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
+    let stale: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, body_text FROM messages
+         WHERE body_text IS NOT NULL AND snippet LIKE '%http%'",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut fixed = 0;
+    for (id, body_text) in stale {
+        let snippet = snippet_of(&body_text);
+        sqlx::query("UPDATE messages SET snippet = ? WHERE id = ?")
+            .bind(&snippet)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        fixed += 1;
+    }
+    Ok(fixed)
 }
 
 /// Headers of one mailbox for one account — or across all accounts when
@@ -707,6 +734,68 @@ mod tests {
         let remaining = uid_flags(&pool, id, "INBOX").await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].1, 2);
+    }
+
+    #[tokio::test]
+    async fn backfill_rewrites_only_url_snippets_and_is_idempotent() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(1, "Freelo", "2026-07-01T00:00:00Z", false),
+                header(2, "Clean", "2026-07-02T00:00:00Z", false),
+                header(3, "NoBody", "2026-07-03T00:00:00Z", false),
+            ],
+        )
+        .await
+        .unwrap();
+        let rows = list(&pool, Some(id), "INBOX").await.unwrap();
+        let stale = rows.iter().find(|m| m.subject == "Freelo").unwrap().id;
+        let clean = rows.iter().find(|m| m.subject == "Clean").unwrap().id;
+
+        // Simulate a body cached by the OLD build: snippet still holds the URL.
+        let body = "<https://app.freelo.io/dashboard/?utm_source=x> Assigned you to a task";
+        sqlx::query("UPDATE messages SET body_text = ?, snippet = ? WHERE id = ?")
+            .bind(body)
+            .bind(body) // old snippet == raw body prefix, URL and all
+            .bind(stale)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // A row whose snippet has no URL must be left untouched.
+        set_body(
+            &pool,
+            clean,
+            Some("Just prose here"),
+            None,
+            "Just prose here",
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let fixed = backfill_url_snippets(&pool).await.unwrap();
+        assert_eq!(fixed, 1);
+
+        let after = list(&pool, Some(id), "INBOX").await.unwrap();
+        let snip = |subject: &str| {
+            after
+                .iter()
+                .find(|m| m.subject == subject)
+                .unwrap()
+                .snippet
+                .clone()
+        };
+        assert_eq!(snip("Freelo"), "Assigned you to a task");
+        assert_eq!(snip("Clean"), "Just prose here");
+        // The body-less row was never a candidate (body_text IS NULL).
+        assert_eq!(snip("NoBody"), "snippet of NoBody");
+
+        // Second run finds nothing left to fix.
+        assert_eq!(backfill_url_snippets(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]

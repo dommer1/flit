@@ -38,6 +38,15 @@ pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
         .await?;
 
     MIGRATOR.run(&pool).await?;
+
+    // why: data fix, not a schema change — migrations are pure SQL but the
+    // snippet rules live in Rust, so a one-time backfill corrects previews
+    // cached by older builds (idempotent; see backfill_url_snippets).
+    let fixed = messages::backfill_url_snippets(&pool).await?;
+    if fixed > 0 {
+        eprintln!("backfilled {fixed} message snippet(s) to strip leading URLs");
+    }
+
     Ok(pool)
 }
 
