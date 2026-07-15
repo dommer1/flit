@@ -243,6 +243,16 @@ fn sanitize(
         // through raw: the filter below resolves or removes every cid:, and
         // confines data: to img src.
         .add_url_schemes(&["cid", "data"])
+        // mail-parser hands us the FULL document, <head> and all. ammonia
+        // unwraps non-whitelisted tags (keeping their text), which would leak
+        // the <title> as the body's first line — the actual cause of "PTUF6C |
+        // …" / "$bifrost_…$" showing. clean_content_tags drops these tags AND
+        // their text; script/style stay (this call replaces the default set).
+        .clean_content_tags(
+            ["script", "style", "title", "noscript"]
+                .into_iter()
+                .collect(),
+        )
         // Inline styles carry newsletter layout. `style` is allowed on every
         // element, but filter_style_properties keeps only STYLE_PROPERTIES
         // (no url-bearing, no positioning) with a valid value — the rest,
@@ -585,6 +595,23 @@ mod tests {
         assert!(doc.contains("padding:16px"));
         assert!(doc.contains("font-family:Arial"));
         assert!(doc.contains("width:600px"));
+    }
+
+    #[test]
+    fn drops_head_title_text_instead_of_leaking_it_into_the_body() {
+        // mail-parser hands us the whole document, <head> included. ammonia
+        // unwraps <title> by default and keeps its text — so the title
+        // rendered as the first line of the body (the real Ryanair/HBO bug,
+        // and most "preheader" sightings). Its content must be dropped whole.
+        let doc = srcdoc(
+            r#"<html><head><title>PTUF6C | Barcelona sale</title></head><body><p>Real content</p></body></html>"#,
+            &[],
+        );
+
+        let body = doc.split_once("<body>").unwrap().1;
+        assert!(!body.contains("PTUF6C"));
+        assert!(!body.contains("Barcelona"));
+        assert!(body.contains("Real content"));
     }
 
     #[test]
