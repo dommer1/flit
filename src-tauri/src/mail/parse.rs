@@ -124,9 +124,24 @@ fn format_addr(addr: &Addr) -> String {
 }
 
 /// First ~120 chars of the text with whitespace collapsed.
+///
+/// why: transactional mail often leads with a bare URL (a "view in browser"
+/// or logo link), frequently wrapped in `<...>`. Left in, the preview shows a
+/// wall of tracking query params instead of prose, so URL tokens are dropped.
 pub fn snippet_of(text: &str) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let collapsed = text
+        .split_whitespace()
+        .filter(|word| !is_url_token(word))
+        .collect::<Vec<_>>()
+        .join(" ");
     collapsed.chars().take(120).collect()
+}
+
+/// A whitespace-delimited token that is just a URL, optionally wrapped in the
+/// RFC 3676 angle brackets senders use to delimit bare links in plain text.
+fn is_url_token(word: &str) -> bool {
+    let unwrapped = word.trim_start_matches('<').trim_end_matches('>');
+    unwrapped.starts_with("http://") || unwrapped.starts_with("https://")
 }
 
 #[cfg(test)]
@@ -284,5 +299,17 @@ mod tests {
 
         assert!(snippet.starts_with("a b c x"));
         assert_eq!(snippet.chars().count(), 120);
+    }
+
+    #[test]
+    fn snippet_drops_bare_and_bracketed_urls() {
+        // A Freelo-style transactional body: a leading "open it" link (wrapped
+        // in <...>) followed by the human-readable prose we actually want.
+        let text = "<https://app.freelo.io/dashboard/?utm_source=transactional&utm_medium=email> \
+                    Pavlo assigned you to a task. Open here: https://app.freelo.io/task/42";
+
+        let snippet = snippet_of(text);
+
+        assert_eq!(snippet, "Pavlo assigned you to a task. Open here:");
     }
 }
