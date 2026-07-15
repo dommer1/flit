@@ -4,7 +4,7 @@
 //! rendered exclusively inside a fully sandboxed iframe (MessageView.svelte).
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -19,10 +19,144 @@ use crate::mail::parse::InlineImage;
 const BODY_CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline'";
 
 /// Base styling for the message document — our own trusted CSS, the reason
-/// style-src 'unsafe-inline' is allowed above. Untrusted styles don't exist
-/// at this point: ammonia strips style attributes and <style> tags.
+/// style-src 'unsafe-inline' is allowed above. Untrusted `style` attributes
+/// survive only through the STYLE_PROPERTIES allowlist below; <style> tags
+/// are still stripped whole (ammonia default).
 const BODY_STYLE: &str = "body{font-family:system-ui,sans-serif;font-size:0.875rem;color:#1a1a1a;\
      margin:0.5rem;word-wrap:break-word}img{max-width:100%}";
+
+/// CSS properties permitted inside `style` attributes. ammonia's
+/// `filter_style_properties` normalises every value and drops invalid
+/// declarations and @rules, so only these property names — with a valid
+/// value — reach the webview.
+///
+/// Two whole classes are deliberately absent:
+/// - **URL-bearing** (`background`, `background-image`, `list-style-image`,
+///   `cursor`, `content`, `border-image`, `mask`): the CSS
+///   network/tracking vector. CSP (`img-src data:`) would block the load,
+///   but the sanitizer must hold on its own — so they never survive here.
+///   `background-color` (colour only) stands in for solid backgrounds.
+/// - **Positioning** (`position`, `z-index`, `top`/`left`/…): fixed/absolute
+///   overlays let a message paint fake UI over the app. The sandbox already
+///   contains the message, but overlay spoofing isn't a network problem, so
+///   CSP doesn't help — the allowlist is the only guard.
+const STYLE_PROPERTIES: &[&str] = &[
+    // Text & fonts
+    "color",
+    "font",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+    "font-variant",
+    "font-stretch",
+    "line-height",
+    "letter-spacing",
+    "word-spacing",
+    "text-align",
+    "text-align-last",
+    "text-decoration",
+    "text-decoration-color",
+    "text-decoration-line",
+    "text-decoration-style",
+    "text-transform",
+    "text-indent",
+    "text-overflow",
+    "text-shadow",
+    "white-space",
+    "vertical-align",
+    "direction",
+    "unicode-bidi",
+    "word-break",
+    "word-wrap",
+    "overflow-wrap",
+    "writing-mode",
+    // Colour (no url)
+    "background-color",
+    "opacity",
+    // Box model
+    "margin",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
+    "padding",
+    "padding-top",
+    "padding-right",
+    "padding-bottom",
+    "padding-left",
+    "border",
+    "border-width",
+    "border-style",
+    "border-color",
+    "border-top",
+    "border-right",
+    "border-bottom",
+    "border-left",
+    "border-top-width",
+    "border-top-style",
+    "border-top-color",
+    "border-right-width",
+    "border-right-style",
+    "border-right-color",
+    "border-bottom-width",
+    "border-bottom-style",
+    "border-bottom-color",
+    "border-left-width",
+    "border-left-style",
+    "border-left-color",
+    "border-radius",
+    "border-top-left-radius",
+    "border-top-right-radius",
+    "border-bottom-left-radius",
+    "border-bottom-right-radius",
+    "border-collapse",
+    "border-spacing",
+    "box-sizing",
+    "box-shadow",
+    "outline",
+    "outline-color",
+    "outline-style",
+    "outline-width",
+    // Sizing
+    "width",
+    "height",
+    "max-width",
+    "max-height",
+    "min-width",
+    "min-height",
+    // Flow & display (no positioning)
+    "display",
+    "visibility",
+    "overflow",
+    "overflow-x",
+    "overflow-y",
+    "float",
+    "clear",
+    // Tables
+    "table-layout",
+    "caption-side",
+    "empty-cells",
+    // Lists (type/position only — list-style-image is url-bearing)
+    "list-style-type",
+    "list-style-position",
+    // Flexbox
+    "flex",
+    "flex-direction",
+    "flex-wrap",
+    "flex-flow",
+    "flex-grow",
+    "flex-shrink",
+    "flex-basis",
+    "justify-content",
+    "align-items",
+    "align-content",
+    "align-self",
+    "gap",
+    "row-gap",
+    "column-gap",
+    "order",
+];
 
 /// What `build_srcdoc` hands back: the locked-down document plus how many
 /// loadable remote images stayed blocked (drives the "Load images" banner).
@@ -83,14 +217,21 @@ fn sanitize(
         // through raw: the filter below resolves or removes every cid:, and
         // confines data: to img src.
         .add_url_schemes(&["cid", "data"])
+        // Inline styles carry newsletter layout. `style` is allowed on every
+        // element, but filter_style_properties keeps only STYLE_PROPERTIES
+        // (no url-bearing, no positioning) with a valid value — the rest,
+        // and any @rule, is dropped.
+        .add_generic_attributes(&["style"])
+        .filter_style_properties(STYLE_PROPERTIES.iter().copied().collect::<HashSet<_>>())
         .attribute_filter(move |element, attribute, value| {
             if element == "img" && attribute == "src" {
                 return img_src(value, &data_uris, &remote, &counter);
             }
             // Everywhere else (a href, blockquote cite, …) data: and cid:
             // are removed — a data: link in the sandbox is still a webview
-            // navigation and has no legitimate use in mail.
-            if scheme_is(value, "data") || scheme_is(value, "cid") {
+            // navigation and has no legitimate use in mail. `style` is left
+            // for filter_style_properties (it runs after this filter).
+            if attribute != "style" && (scheme_is(value, "data") || scheme_is(value, "cid")) {
                 return None;
             }
             Some(value.into())
@@ -361,5 +502,80 @@ mod tests {
 
         assert!(!doc.contains("href="));
         assert!(doc.contains("img"));
+    }
+
+    #[test]
+    fn keeps_safe_inline_style_properties() {
+        // The everyday newsletter vocabulary: colors, fonts, spacing, borders,
+        // table sizing — the reason bodies looked broken without it. Wrapped
+        // in a real table so ammonia's tree normalisation keeps the <td>.
+        let doc = srcdoc(
+            r#"<table><tr><td style="background-color:#f4f4f4;color:#333;padding:16px;font-family:Arial;font-size:14px;border:1px solid #ccc;width:600px">hi</td></tr></table>"#,
+            &[],
+        );
+
+        assert!(doc.contains("background-color:#f4f4f4"));
+        assert!(doc.contains("color:#333"));
+        assert!(doc.contains("padding:16px"));
+        assert!(doc.contains("font-family:Arial"));
+        assert!(doc.contains("width:600px"));
+    }
+
+    #[test]
+    fn strips_positioning_that_enables_overlay_spoofing() {
+        // position:fixed/absolute over the whole viewport is how a message
+        // could paint fake UI on top of the app — never allowed, even though
+        // the sandbox already contains it.
+        let doc = srcdoc(
+            r#"<div style="position:fixed;top:0;left:0;color:red">x</div>"#,
+            &[],
+        );
+
+        assert!(doc.contains("color:red"));
+        assert!(!doc.to_lowercase().contains("position"));
+        assert!(!doc.contains("fixed"));
+    }
+
+    #[test]
+    fn strips_url_bearing_style_properties() {
+        // Every CSS property that can reach the network is dropped by the
+        // allowlist — CSP would block the load too, but the sanitizer must
+        // hold on its own. background-color (no url) still survives.
+        let doc = srcdoc(
+            r#"<div style="background-image:url(https://t.example/p.png);
+               background:url(https://t.example/q.png);
+               list-style-image:url(https://t.example/r.png);
+               cursor:url(https://t.example/c.cur),auto;
+               background-color:#fff">x</div>"#,
+            &[],
+        );
+
+        assert!(!doc.to_lowercase().contains("url("));
+        assert!(!doc.contains("t.example"));
+        assert!(doc.contains("background-color:#fff"));
+    }
+
+    #[test]
+    fn strips_encoded_url_in_style() {
+        // A CSS-escaped "url(" must not slip a remote load past the filter.
+        // background-image isn't in the allowlist, so the whole declaration
+        // goes regardless of how the url token is spelled.
+        let doc = srcdoc(
+            r#"<div style="background-image:\75rl(https://t.example/p.png)">x</div>"#,
+            &[],
+        );
+
+        assert!(!doc.contains("t.example"));
+    }
+
+    #[test]
+    fn empties_the_style_attribute_when_nothing_survives() {
+        // ammonia leaves an inert style="" rather than removing the attribute
+        // — what matters is that the forbidden declaration is gone.
+        let doc = srcdoc(r#"<p style="position:absolute">hi</p>"#, &[]);
+
+        assert!(!doc.to_lowercase().contains("position"));
+        assert!(!doc.contains("absolute"));
+        assert!(doc.contains("hi"));
     }
 }
