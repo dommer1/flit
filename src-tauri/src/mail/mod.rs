@@ -1,3 +1,4 @@
+pub mod css;
 pub mod imap;
 pub mod parse;
 pub mod remote;
