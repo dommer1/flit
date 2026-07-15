@@ -12,6 +12,11 @@
 //! - The stylesheet is PARSED and RE-SERIALISED by lightningcss. The original
 //!   `<style>` text never reaches the output, which closes the classic
 //!   `</style>`-smuggling hole (a sanitizer/parser boundary mismatch).
+//! - The re-serialised output is finally made safe to embed in a `<style>`
+//!   element: lightningcss can still emit a literal `</style` (e.g. from an
+//!   attribute selector `[x="\3c/style"]` it unescapes), so every `</` is
+//!   escaped to `<\/` — identical CSS, but no byte sequence can end the host
+//!   `<style>` element early.
 
 use std::collections::HashSet;
 
@@ -31,7 +36,19 @@ pub fn sanitize_style_blocks(html: &str, allowed: &HashSet<&str>) -> String {
             css.push_str(&clean);
         }
     }
-    css
+    embed_safe(css)
+}
+
+/// Neutralise any `</` so the CSS cannot terminate the `<style>` element it
+/// gets embedded in. `<\/` is an identical `/` inside a CSS string (the only
+/// place `</` can occur in valid serialised CSS), so this changes bytes, not
+/// meaning.
+fn embed_safe(css: String) -> String {
+    if css.contains("</") {
+        css.replace("</", "<\\/")
+    } else {
+        css
+    }
 }
 
 /// The raw CSS text inside each `<style>…</style>` element, in order.
@@ -239,5 +256,17 @@ mod tests {
 
         assert!(css.contains(".a"));
         assert!(css.contains(".c"));
+    }
+
+    #[test]
+    fn escapes_style_close_sequence_that_the_parser_reintroduces() {
+        // lightningcss unescapes \3c/style into a literal </style> in an
+        // attribute selector — which would break out of the host <style>.
+        // The output must never carry that byte sequence.
+        let css = clean(r#"<style>[data-x="\3c/style\3e"]{color:red}</style>"#);
+
+        assert!(!css.to_lowercase().contains("</style"));
+        // The rule is still there, just embed-safe.
+        assert!(css.contains("color: red"));
     }
 }
