@@ -83,6 +83,21 @@ export interface MessageBody {
   blockedImages: number;
   /** Offer "Load Images" (policy is "ask" and this render blocked some). */
   canLoadRemote: boolean;
+  /** Attachments — metadata only; saving re-fetches bytes from the server. */
+  attachments: MessageAttachment[];
+}
+
+/** One attachment of a received message, as cached metadata. */
+export interface MessageAttachment {
+  id: number;
+  messageId: number;
+  /** MIME part index used by the backend to re-extract the bytes. */
+  partIndex: number;
+  filename: string;
+  /** Full MIME type ("application/pdf"). */
+  contentType: string;
+  /** Decoded size in bytes, for display. */
+  size: number;
 }
 
 /** One folder of one account, as shown in the sidebar. */

@@ -576,13 +576,15 @@ pub async fn get_message_body(
 
     let cached = row.body_text.is_some() || row.body_html.is_some();
     // why: bodies cached before message_images existed have cid: references
-    // but no stored images — a one-off refetch backfills them instead of
-    // rendering blanks forever.
+    // but no stored images, and bodies cached before message_attachments
+    // existed were never scanned for attachments — a one-off refetch
+    // backfills either instead of rendering blanks/nothing forever.
     let backfill = cached
-        && row.body_html.as_deref().is_some_and(|h| h.contains("cid:"))
-        && storage::messages::images(&state.pool, message_id)
-            .await?
-            .is_empty();
+        && (!row.attachments_scanned
+            || (row.body_html.as_deref().is_some_and(|h| h.contains("cid:"))
+                && storage::messages::images(&state.pool, message_id)
+                    .await?
+                    .is_empty()));
 
     let (html, text, images) = if cached && !backfill {
         let images = storage::messages::images(&state.pool, message_id).await?;
@@ -605,7 +607,103 @@ pub async fn get_message_body(
     };
 
     let policy = storage::settings::remote_image_policy(&state.pool).await?;
-    sanitized_body(&state.pool, html, text, &images, policy, load_remote).await
+    let mut body = sanitized_body(&state.pool, html, text, &images, policy, load_remote).await?;
+    // why from the DB, not the parse result: both branches above have already
+    // written the metadata (set_body), so one read serves cached and fresh.
+    body.attachments = storage::messages::attachments(&state.pool, message_id).await?;
+    Ok(body)
+}
+
+/// Download the raw RFC822 bytes of one cached message from its server.
+async fn fetch_raw_message(
+    state: &AppState,
+    loc: &storage::messages::MessageLocation,
+) -> Result<Vec<u8>, AppError> {
+    let account = storage::accounts::get(&state.pool, loc.account_id).await?;
+    let password = state.password(loc.account_id).await?;
+    let mut session = mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        &password,
+    )
+    .await?;
+    session
+        .select(&loc.mailbox)
+        .await
+        .map_err(|e| AppError::Imap(format!("select {}: {e}", loc.mailbox)))?;
+    let raw = mail::imap::fetch_body(&mut session, loc.uid).await;
+    let _ = session.logout().await;
+    raw?.ok_or_else(|| AppError::Imap("message no longer on the server".to_string()))
+}
+
+/// Save one attachment to `path` (a native save-dialog pick, which already
+/// confirmed any overwrite). The bytes are re-fetched from the server and
+/// re-extracted by part index — they never touch the local DB.
+#[tauri::command]
+pub async fn save_attachment(
+    state: State<'_, AppState>,
+    attachment_id: i64,
+    path: String,
+) -> Result<(), AppError> {
+    let meta = storage::messages::attachment(&state.pool, attachment_id).await?;
+    let loc = storage::messages::location(&state.pool, meta.message_id).await?;
+    let raw = fetch_raw_message(&state, &loc).await?;
+    let data = mail::parse::attachment_data(&raw, meta.part_index).ok_or_else(|| {
+        AppError::Imap(format!(
+            "attachment {} not found in the message",
+            meta.filename
+        ))
+    })?;
+    tokio::fs::write(&path, data).await?;
+    Ok(())
+}
+
+/// Save every attachment of a message into `dir` (a native folder pick):
+/// one server fetch, each part written under its sanitized filename.
+#[tauri::command]
+pub async fn save_all_attachments(
+    state: State<'_, AppState>,
+    message_id: i64,
+    dir: String,
+) -> Result<(), AppError> {
+    let attachments = storage::messages::attachments(&state.pool, message_id).await?;
+    if attachments.is_empty() {
+        return Ok(());
+    }
+    let loc = storage::messages::location(&state.pool, message_id).await?;
+    let raw = fetch_raw_message(&state, &loc).await?;
+    for meta in attachments {
+        let data = mail::parse::attachment_data(&raw, meta.part_index).ok_or_else(|| {
+            AppError::Imap(format!(
+                "attachment {} not found in the message",
+                meta.filename
+            ))
+        })?;
+        let path = unique_path(
+            std::path::Path::new(&dir),
+            &mail::parse::safe_filename(&meta.filename),
+        );
+        tokio::fs::write(&path, data).await?;
+    }
+    Ok(())
+}
+
+/// `dir/name`, with " (n)" inserted before the extension while taken —
+/// Save All picks only a directory, so it must not silently overwrite.
+fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let candidate = dir.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
+        _ => (name.to_string(), String::new()),
+    };
+    (2..)
+        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
+        .find(|p| !p.exists())
+        .expect("unbounded counter always finds a free name")
 }
 
 // SECURITY: the single place message HTML is prepared for the frontend —
@@ -646,6 +744,8 @@ async fn sanitized_body(
         // why: !load, not just Ask — after the click the banner disappears
         // even when some images failed to fetch (no endless "load" loop).
         can_load_remote: policy == RemoteImagePolicy::Ask && !load && blocked_images > 0,
+        // Filled by get_message_body from the DB — sanitization has no say.
+        attachments: Vec::new(),
     })
 }
 

@@ -138,6 +138,19 @@ pub fn attachment_data(raw: &[u8], part_index: i64) -> Option<Vec<u8>> {
     Some(part.contents().to_vec())
 }
 
+/// A filename from mail headers made safe to create inside a chosen
+/// directory: path separators neutralized, dot-only names replaced. Save All
+/// writes `dir/<this>`, so a crafted name must never escape `dir`.
+pub fn safe_filename(name: &str) -> String {
+    let cleaned = name.replace(['/', '\\'], "_");
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        "attachment".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Every attachment that an `<img src="cid:...">` could reference: an image
 /// part carrying a Content-ID. Anything else (no id, not an image) can't
 /// render inline and is left for a future attachment list.
@@ -453,6 +466,17 @@ mod tests {
         assert_eq!(body.attachments.len(), 1);
         assert_eq!(body.attachments[0].filename, "attachment");
         assert!(!body.attachments[0].content_type.is_empty());
+    }
+
+    #[test]
+    fn safe_filename_neutralizes_paths_and_dot_names() {
+        assert_eq!(safe_filename("report.pdf"), "report.pdf");
+        assert_eq!(safe_filename("../../etc/passwd"), ".._.._etc_passwd");
+        assert_eq!(safe_filename("C:\\boot.ini"), "C:_boot.ini");
+        assert_eq!(safe_filename(".."), "attachment");
+        assert_eq!(safe_filename("."), "attachment");
+        assert_eq!(safe_filename("  "), "attachment");
+        assert_eq!(safe_filename(""), "attachment");
     }
 
     #[test]

@@ -206,6 +206,9 @@ pub struct MessageBody {
     /// Whether the viewer should offer "Load images" (policy is Ask and
     /// this render still blocked something).
     pub can_load_remote: bool,
+    /// Attachments of this message — metadata only; saving re-fetches the
+    /// bytes from the server.
+    pub attachments: Vec<MessageAttachment>,
 }
 
 /// One folder of one account, as shown in the sidebar.

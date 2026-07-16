@@ -8,6 +8,7 @@ function body(partial: Partial<MessageBody>): MessageBody {
     text: null,
     blockedImages: 0,
     canLoadRemote: false,
+    attachments: [],
     ...partial,
   };
 }
@@ -18,7 +19,10 @@ vi.mock("./api", () => ({
     text: null,
     blockedImages: 0,
     canLoadRemote: false,
+    attachments: [],
   })),
+  saveAttachment: vi.fn(async () => {}),
+  saveAllAttachments: vi.fn(async () => {}),
 }));
 
 import * as api from "./api";

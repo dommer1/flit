@@ -87,6 +87,8 @@ pub fn run() {
             commands::move_message,
             commands::get_message_body,
             commands::inspect_attachments,
+            commands::save_attachment,
+            commands::save_all_attachments,
             commands::queue_send,
             commands::undo_send,
             commands::save_draft,
