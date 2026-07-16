@@ -14,8 +14,8 @@
     "windows": [
       {
         "title": "Flit",
-        "width": 900,
-        "height": 640,
+        "width": 1280,
+        "height": 768,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "transparent": true
