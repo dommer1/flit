@@ -328,6 +328,10 @@ pub async fn inspect_attachments(
 /// How long a queued message can still be undone before it really sends.
 const UNDO_WINDOW: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// One id sequence for every send-* badge event, whichever path emits it
+/// (undo queue, scheduler) — the outbox keys badges by this id.
+static SEND_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Payload of the send-queued / send-finished / send-undone events the main
 /// window renders as outbox badges.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -355,7 +359,6 @@ pub async fn queue_send(
     let account = storage::accounts::get(&state.pool, message.account_id).await?;
     mail::smtp::build_message(&account.email, &message).await?;
 
-    static SEND_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let id = SEND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let subject = message.subject.clone();
     state.park_send(id, message);
