@@ -73,14 +73,12 @@
     signatureId = next?.id ?? null;
   }
 
-  function onSignaturePicked(event: Event) {
+  let showSignatureMenu = $state(false);
+
+  function pickSignature(sig: Signature | null) {
     signatureTouched = true;
-    const raw = (event.currentTarget as HTMLSelectElement).value;
-    applySignature(
-      raw === ""
-        ? null
-        : (signatures.find((sig) => sig.id === Number(raw)) ?? null),
-    );
+    applySignature(sig);
+    showSignatureMenu = false;
   }
 
   function onFromPicked(event: Event) {
@@ -462,7 +460,7 @@
       <RecipientField label="Bcc" bind:value={bcc} disabled={queueing} />
     </div>
   {/if}
-  <div class="row">
+  <div class="row from-row">
     <span class="key" aria-hidden="true">From:</span>
     <select
       aria-label="From"
@@ -475,24 +473,62 @@
       {/each}
     </select>
     <span class="chevron" aria-hidden="true">⌄</span>
-  </div>
-  {#if signatures.length > 0}
-    <div class="row">
-      <span class="key" aria-hidden="true">Signature:</span>
-      <select
+    {#if signatures.length > 0}
+      <!-- Signature lives as a quiet icon at the row's right edge — the
+           menu it opens swaps the block inside the body. -->
+      <button
+        type="button"
+        class="sig-toggle"
+        class:active={showSignatureMenu}
         aria-label="Signature"
-        value={signatureId ?? ""}
-        onchange={onSignaturePicked}
+        title="Signature"
+        onclick={() => (showSignatureMenu = !showSignatureMenu)}
         disabled={queueing}
       >
-        <option value="">None</option>
-        {#each signatures as sig (sig.id)}
-          <option value={sig.id}>{sig.name}</option>
-        {/each}
-      </select>
-      <span class="chevron" aria-hidden="true">⌄</span>
-    </div>
-  {/if}
+        <svg
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M12 20h9" />
+          <path
+            d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
+          />
+        </svg>
+      </button>
+      {#if showSignatureMenu}
+        <div
+          class="signature-menu"
+          role="dialog"
+          aria-label="Choose signature"
+        >
+          <button
+            type="button"
+            class="sig-item"
+            class:active={signatureId === null}
+            onclick={() => pickSignature(null)}
+          >
+            None
+          </button>
+          {#each signatures as sig (sig.id)}
+            <button
+              type="button"
+              class="sig-item"
+              class:active={signatureId === sig.id}
+              onclick={() => pickSignature(sig)}
+            >
+              {sig.name}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    {/if}
+  </div>
   <div class="row subject-row">
     <input
       class="subject"
@@ -751,6 +787,72 @@
   .subject {
     font-weight: 600;
     font-size: 14px;
+  }
+
+  /* why relative: anchors the signature popover to this row. */
+  .from-row {
+    position: relative;
+  }
+
+  .sig-toggle {
+    display: grid;
+    place-items: center;
+    margin-left: auto;
+    padding: 3px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .sig-toggle:hover,
+  .sig-toggle.active {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .sig-toggle:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  /* Same floating-panel treatment as the send-later popover. */
+  .signature-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 140px;
+    padding: 6px;
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    background: var(--bg-window);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  }
+
+  .sig-item {
+    padding: 5px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .sig-item:hover {
+    background: var(--bg-hover);
+  }
+
+  .sig-item.active {
+    font-weight: 600;
+    color: var(--accent);
   }
 
   /* Dashed accent frame over the whole window while a file drag hovers.

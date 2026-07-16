@@ -548,7 +548,13 @@ it("inserts the From account's default signature into a new message", async () =
   const box = await renderWithSignatures();
 
   expect(box).toHaveTextContent("— Dominik");
-  expect(screen.getByLabelText("Signature")).toHaveValue("7");
+  // The icon opens a menu where the active signature is marked.
+  await fireEvent.click(screen.getByRole("button", { name: "Signature" }));
+  expect(screen.getByRole("button", { name: "Personal" })).toHaveClass(
+    "active",
+  );
+  await fireEvent.click(screen.getByRole("button", { name: "Signature" }));
+  expect(screen.queryByRole("button", { name: "Personal" })).toBeNull();
 
   await fireEvent.input(screen.getByLabelText("To"), {
     target: { value: "bob@example.com" },
@@ -568,20 +574,20 @@ it("inserts the From account's default signature into a new message", async () =
 it("swaps the inserted block when another signature is picked", async () => {
   const box = await renderWithSignatures();
 
-  await fireEvent.change(screen.getByLabelText("Signature"), {
-    target: { value: "8" },
-  });
+  await fireEvent.click(screen.getByRole("button", { name: "Signature" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Vocalio" }));
 
   expect(box).toHaveTextContent("Vocalio tím");
   expect(box).not.toHaveTextContent("— Dominik");
+  // Picking closes the menu.
+  expect(screen.queryByRole("button", { name: "None" })).toBeNull();
 });
 
 it("removes the signature when None is picked", async () => {
   const box = await renderWithSignatures();
 
-  await fireEvent.change(screen.getByLabelText("Signature"), {
-    target: { value: "" },
-  });
+  await fireEvent.click(screen.getByRole("button", { name: "Signature" }));
+  await fireEvent.click(screen.getByRole("button", { name: "None" }));
 
   expect(box).not.toHaveTextContent("— Dominik");
 });
@@ -597,9 +603,8 @@ it("follows the From account's default until touched by hand", async () => {
   expect(box).not.toHaveTextContent("— Dominik");
 
   // …but once the user picked one explicitly, From changes leave it alone.
-  await fireEvent.change(screen.getByLabelText("Signature"), {
-    target: { value: "7" },
-  });
+  await fireEvent.click(screen.getByRole("button", { name: "Signature" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Personal" }));
   await fireEvent.change(screen.getByLabelText("From"), {
     target: { value: "1" },
   });
