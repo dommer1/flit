@@ -149,33 +149,45 @@ pub async fn move_to_trash(
     state: State<'_, AppState>,
     message_id: i64,
 ) -> Result<(), AppError> {
-    move_to_role_folder(&app, &state, message_id, "trash").await
+    move_to_special_folder(&app, &state, message_id, &["trash"], "trash").await
 }
 
 /// Archive one message: move it to the account's Archive folder, then drop it
 /// from the local cache. Same server-confirmed path as trashing.
+///
+/// why the "all" fallback: Gmail has no \Archive folder — archiving means
+/// removing the Inbox label, which over IMAP is a move into "All Mail" (\All).
 #[tauri::command]
 pub async fn archive_message(
     app: AppHandle,
     state: State<'_, AppState>,
     message_id: i64,
 ) -> Result<(), AppError> {
-    move_to_role_folder(&app, &state, message_id, "archive").await
+    move_to_special_folder(&app, &state, message_id, &["archive", "all"], "archive").await
 }
 
-/// Move a message to the account's folder for `role` (trash/archive), then
-/// drop it from the local cache. Unlike the read flag this waits on the
-/// server — the row must not vanish from the list if the move failed.
-async fn move_to_role_folder(
+/// Move a message to the account's folder for the first matching special-use
+/// `role`, then drop it from the local cache. Unlike the read flag this waits
+/// on the server — the row must not vanish from the list if the move failed.
+async fn move_to_special_folder(
     app: &AppHandle,
     state: &AppState,
     message_id: i64,
-    role: &str,
+    roles: &[&str],
+    label: &str,
 ) -> Result<(), AppError> {
     let loc = storage::messages::location(&state.pool, message_id).await?;
-    let Some(dest) = storage::mailboxes::name_for_role(&state.pool, loc.account_id, role).await?
-    else {
-        return Err(AppError::Imap(format!("no {role} folder discovered yet")));
+    let mut dest = None;
+    for role in roles {
+        if let Some(name) =
+            storage::mailboxes::name_for_role(&state.pool, loc.account_id, role).await?
+        {
+            dest = Some(name);
+            break;
+        }
+    }
+    let Some(dest) = dest else {
+        return Err(AppError::Imap(format!("no {label} folder discovered yet")));
     };
     // why: moving a message into the folder it already lives in is a no-op
     // (and some servers error on it) — just leave it be.

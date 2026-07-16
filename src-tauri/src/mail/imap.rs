@@ -105,6 +105,9 @@ fn discovered(name: &str, attributes: &[NameAttribute]) -> Option<DiscoveredMail
             NameAttribute::Drafts => Some("drafts"),
             NameAttribute::Sent => Some("sent"),
             NameAttribute::Archive => Some("archive"),
+            // why: Gmail has no \Archive folder — its "All Mail" (\All) is the
+            // archive target, so moving there removes the Inbox label.
+            NameAttribute::All => Some("all"),
             NameAttribute::Junk => Some("junk"),
             NameAttribute::Trash => Some("trash"),
             _ => None,
@@ -337,6 +340,10 @@ mod tests {
         let sent = discovered("Odoslané", &[NameAttribute::Sent]).unwrap();
         assert_eq!(sent.role.as_deref(), Some("sent"));
         assert_eq!(sent.name, "Odoslané");
+
+        // Gmail's localized "All Mail" carries \All, not \Archive.
+        let all = discovered("[Gmail]/Všetky správy", &[NameAttribute::All]).unwrap();
+        assert_eq!(all.role.as_deref(), Some("all"));
     }
 
     #[test]
