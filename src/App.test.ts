@@ -95,6 +95,7 @@ let sendQueued: ((e: SendEvent) => void) | undefined;
 let sendFinished: ((e: SendEvent) => void) | undefined;
 let sendUndone: ((e: SendEvent) => void) | undefined;
 let scheduledMissed: (() => void) | undefined;
+let scheduledChanged: (() => void) | undefined;
 
 vi.mock("./lib/api", () => ({
   listAccounts: vi.fn(async () => currentAccounts),
@@ -159,6 +160,10 @@ vi.mock("./lib/api", () => ({
     scheduledMissed = callback;
     return () => {};
   }),
+  onScheduledChanged: vi.fn(async (callback: () => void) => {
+    scheduledChanged = callback;
+    return () => {};
+  }),
 }));
 
 import * as api from "./lib/api";
@@ -175,6 +180,7 @@ beforeEach(() => {
   sendFinished = undefined;
   sendUndone = undefined;
   scheduledMissed = undefined;
+  scheduledChanged = undefined;
   localStorage.clear();
   vi.clearAllMocks();
 });
@@ -819,4 +825,39 @@ it("opens a drafts-folder message in compose instead of the viewer", async () =>
   expect(
     screen.queryByRole("heading", { name: "Rozpísaný návrh" }),
   ).not.toBeInTheDocument();
+});
+
+it("lists pending scheduled sends in the sidebar and cancels one", async () => {
+  currentScheduled = [
+    missedEntry({ id: 7, subject: "Later today", status: "pending" }),
+  ];
+  render(App);
+
+  const section = await screen.findByRole("list", {
+    name: "Scheduled messages",
+  });
+  expect(section).toBeInTheDocument();
+  expect(screen.getByText("Later today")).toBeInTheDocument();
+  // pending rows belong to the sidebar, not the missed dialog
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Cancel scheduled Later today" }),
+  );
+
+  expect(api.cancelScheduled).toHaveBeenCalledWith(7);
+  expect(screen.queryByText("Later today")).not.toBeInTheDocument();
+});
+
+it("refreshes the scheduled section when the backend broadcasts a change", async () => {
+  render(App);
+  await screen.findByRole("button", { name: "All Inboxes" });
+  expect(screen.queryByText("Scheduled")).not.toBeInTheDocument();
+
+  currentScheduled = [
+    missedEntry({ id: 8, subject: "Tomorrow 8:00 mail", status: "pending" }),
+  ];
+  scheduledChanged!();
+
+  expect(await screen.findByText("Tomorrow 8:00 mail")).toBeInTheDocument();
 });

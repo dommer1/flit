@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Account, Mailbox } from "./types";
+  import type { Account, Mailbox, ScheduledMessage } from "./types";
 
   let {
     accounts,
@@ -7,12 +7,17 @@
     selectedAccountId,
     selectedMailbox,
     onSelect,
+    scheduled,
+    onCancelScheduled,
   }: {
     accounts: Account[];
     mailboxes: Record<number, Mailbox[]>;
     selectedAccountId: number | null;
     selectedMailbox: string;
     onSelect: (accountId: number | null, mailbox?: string) => void;
+    /** Pending send-later messages; the section hides when empty. */
+    scheduled: ScheduledMessage[];
+    onCancelScheduled: (id: number) => void;
   } = $props();
 
   const EXPANDED_KEY = "flit.sidebar.expanded";
@@ -35,6 +40,21 @@
   // The account row itself is the inbox, so the sublist holds the rest.
   function folders(accountId: number): Mailbox[] {
     return (mailboxes[accountId] ?? []).filter((m) => m.role !== "inbox");
+  }
+
+  function scheduledTitle(entry: ScheduledMessage): string {
+    const subject = entry.subject.trim();
+    return subject === "" ? "(No subject)" : subject;
+  }
+
+  function scheduledWhen(entry: ScheduledMessage): string {
+    return new Date(entry.scheduledAt * 1000).toLocaleString(undefined, {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
 </script>
 
@@ -132,6 +152,30 @@
       {/each}
     {/if}
   {/each}
+
+  {#if scheduled.length > 0}
+    <!-- Send-later messages waiting in the local schedule. Not a folder —
+         the rows live only in SQLite until the scheduler delivers them. -->
+    <p class="section">Scheduled</p>
+    <ul class="scheduled" aria-label="Scheduled messages">
+      {#each scheduled as entry (entry.id)}
+        <li class="row">
+          <span class="label">
+            <span class="name">{scheduledTitle(entry)}</span>
+            <span class="email">{scheduledWhen(entry)}</span>
+          </span>
+          <button
+            class="cancel"
+            aria-label={`Cancel scheduled ${scheduledTitle(entry)}`}
+            title="Cancel — reopens as a draft"
+            onclick={() => onCancelScheduled(entry.id)}
+          >
+            ×
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
 </nav>
 
 <style>
@@ -247,5 +291,44 @@
   .email {
     font-size: 11px;
     color: var(--text-secondary);
+  }
+
+  .scheduled {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .scheduled .label {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .cancel {
+    flex-shrink: 0;
+    display: none;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 5px;
+    background: none;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--text-secondary);
+    cursor: default;
+  }
+
+  .scheduled .row:hover .cancel {
+    display: grid;
+  }
+
+  .cancel:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
   }
 </style>

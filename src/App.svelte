@@ -11,6 +11,7 @@
     moveToTrash,
     onAccountsChanged,
     onMessagesChanged,
+    onScheduledChanged,
     onScheduledMissed,
     onSendFinished,
     onSendQueued,
@@ -208,13 +209,22 @@
     );
   }
 
-  // Scheduled sends whose time passed while the app was off (or asleep past
-  // the grace window). They are never auto-sent — the dialog asks per message.
+  // Send-later messages parked in the backend: pending ones feed the
+  // sidebar's Scheduled section; missed ones (due while the app was off or
+  // asleep past the grace window) are never auto-sent — the catch-up dialog
+  // asks per message.
+  let scheduledSends = $state<ScheduledMessage[]>([]);
   let missedSends = $state<ScheduledMessage[]>([]);
+  // "Decide later" hides these ids until the next launch; the rows stay
+  // missed in the DB, so a restart asks again.
+  const dismissedMissed = new Set<number>();
 
-  async function refreshMissedSends() {
+  async function refreshScheduled() {
     const scheduled = await listScheduled();
-    missedSends = scheduled.filter((m) => m.status === "missed");
+    scheduledSends = scheduled.filter((m) => m.status === "pending");
+    missedSends = scheduled.filter(
+      (m) => m.status === "missed" && !dismissedMissed.has(m.id),
+    );
   }
 
   // why remove-first: the row is gone from the DB either way (take() is the
@@ -233,10 +243,18 @@
     );
   }
 
-  // "Decide later": rows stay missed in the DB, so the dialog returns on the
-  // next launch (or the next scheduled-missed event).
   function missedDismiss() {
+    for (const entry of missedSends) dismissedMissed.add(entry.id);
     missedSends = [];
+  }
+
+  // why remove-first: like the dialog's actions, the row is already claimed
+  // in the backend; the scheduled-changed event re-syncs the list after.
+  function handleCancelScheduled(id: number) {
+    scheduledSends = scheduledSends.filter((m) => m.id !== id);
+    void cancelScheduled(id).catch((err: unknown) =>
+      console.error("cancel scheduled failed:", err),
+    );
   }
 
   function openNewMessage() {
@@ -387,17 +405,15 @@
       await refreshAccounts();
       await selectMailbox(null);
     })();
-    // why separate: missed sends must surface even if account sync fails —
-    // they are local rows, not server state.
-    void refreshMissedSends().catch((err: unknown) =>
-      console.error("failed to load missed sends:", err),
-    );
-    const unlistenMissed = onScheduledMissed(
-      () =>
-        void refreshMissedSends().catch((err: unknown) =>
-          console.error("failed to load missed sends:", err),
-        ),
-    );
+    // why separate: scheduled/missed sends must surface even if account sync
+    // fails — they are local rows, not server state.
+    const refreshScheduledLogged = () =>
+      void refreshScheduled().catch((err: unknown) =>
+        console.error("failed to load scheduled sends:", err),
+      );
+    refreshScheduledLogged();
+    const unlistenMissed = onScheduledMissed(refreshScheduledLogged);
+    const unlistenScheduled = onScheduledChanged(refreshScheduledLogged);
     // why: account CRUD lives in the settings window (its own JS context) —
     // this window finds out through the backend's accounts-changed event.
     const unlistenAccounts = onAccountsChanged(() => void refreshAccounts());
@@ -419,6 +435,7 @@
       void unlistenFinished.then((stop) => stop());
       void unlistenUndone.then((stop) => stop());
       void unlistenMissed.then((stop) => stop());
+      void unlistenScheduled.then((stop) => stop());
     };
   });
 </script>
@@ -443,6 +460,8 @@
         selectedAccountId={selectedAccountId}
         selectedMailbox={selectedMailbox}
         onSelect={selectMailbox}
+        scheduled={scheduledSends}
+        onCancelScheduled={handleCancelScheduled}
       />
     </aside>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions
