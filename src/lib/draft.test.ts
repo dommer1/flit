@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { forwardDraft, replyAllDraft, replyDraft } from "./draft";
-import type { MessageHeader } from "./types";
+import { forwardDraft, isDraftEmpty, replyAllDraft, replyDraft } from "./draft";
+import type { MessageHeader, OutgoingMessage } from "./types";
 
 const message: MessageHeader = {
   id: 7,
@@ -158,5 +158,36 @@ describe("forwardDraft", () => {
 
     expect(body).toContain("---------- Forwarded message ----------");
     expect(body).toContain("From: Alice Doe <alice@example.com>");
+  });
+});
+
+describe("isDraftEmpty", () => {
+  const blank: OutgoingMessage = {
+    accountId: 1,
+    to: "",
+    subject: "",
+    body: "",
+  };
+
+  it("treats a blank message as empty", () => {
+    expect(isDraftEmpty(blank)).toBe(true);
+  });
+
+  it("treats whitespace-only fields as empty", () => {
+    expect(isDraftEmpty({ ...blank, to: "  ", body: "\n" })).toBe(true);
+  });
+
+  it("keeps a message with any typed text", () => {
+    expect(isDraftEmpty({ ...blank, to: "jan" })).toBe(false);
+    expect(isDraftEmpty({ ...blank, bcc: "x@y" })).toBe(false);
+    expect(isDraftEmpty({ ...blank, body: "ahoj" })).toBe(false);
+  });
+
+  it("keeps a message that only has an attachment", () => {
+    const withFile = {
+      ...blank,
+      attachments: [{ path: "/tmp/a.txt", name: "a.txt" }],
+    };
+    expect(isDraftEmpty(withFile)).toBe(false);
   });
 });

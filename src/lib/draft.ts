@@ -14,6 +14,22 @@ function senderAddress(from: string): string {
 /** The three ways a message in the viewer can spawn a compose draft. */
 export type DraftKind = "reply" | "reply-all" | "forward";
 
+/** Nothing worth keeping: every text field blank, no attachments. An empty
+ * compose window is never saved to the server's Drafts folder. */
+export function isDraftEmpty(message: OutgoingMessage): boolean {
+  const fields = [
+    message.to,
+    message.cc ?? "",
+    message.bcc ?? "",
+    message.subject,
+    message.body,
+  ];
+  return (
+    fields.every((field) => field.trim() === "") &&
+    (message.attachments?.length ?? 0) === 0
+  );
+}
+
 function replySubject(subject: string): string {
   const trimmed = subject.trim();
   return /^re:/i.test(trimmed) ? trimmed : `Re: ${trimmed}`;

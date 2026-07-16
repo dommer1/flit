@@ -1,14 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
     closeCompose,
     inspectAttachments,
     listAccounts,
     onFileDrop,
     queueSend,
+    saveDraft,
     takeComposeDraft,
   } from "./api";
-  import type { Account, AttachmentInfo } from "./types";
+  import { debounce } from "./debounce";
+  import { isDraftEmpty } from "./draft";
+  import type { Account, AttachmentInfo, OutgoingMessage } from "./types";
   import RichTextEditor from "./RichTextEditor.svelte";
 
   let accounts = $state<Account[]>([]);
@@ -34,8 +38,24 @@
   let queueing = $state(false);
   let error = $state<string | null>(null);
 
+  // Gmail-style silent drafts: while the user types, the message is saved to
+  // the account's server Drafts folder (debounced), and once more when the
+  // window closes — no dialogs. draftMessageId is the handle under which the
+  // previous version is replaced on each save.
+  const AUTOSAVE_MS = 30_000;
+  let draftMessageId: string | null = null;
+  let saveError = $state<string | null>(null);
+  // why watching, not `loaded`: the editor mounts on `loaded`, so its
+  // initial bind-backs still look like edits — only changes after the whole
+  // mount sequence settled count as the user's.
+  let watching = false;
+  let dirty = false;
+  let saving = false;
+  let sent = false;
+
   onMount(() => {
     let unlisten: (() => void) | undefined;
+    let unlistenClose: (() => void) | undefined;
     void (async () => {
       const [loadedAccounts, draft] = await Promise.all([
         listAccounts(),
@@ -62,8 +82,62 @@
         onHover: (hovering) => (dropHover = hovering),
         onDrop: (paths) => void addAttachments(paths),
       });
+      unlistenClose = await getCurrentWindow().onCloseRequested(
+        async (event) => {
+          if (sent || !dirty) return;
+          const message = currentMessage();
+          if (!message || (isDraftEmpty(message) && draftMessageId === null)) {
+            return;
+          }
+          // why: hold the window open until the save lands — destroying the
+          // webview mid-save could lose the newest keystrokes.
+          event.preventDefault();
+          await saveNow();
+          if (dirty) return; // save failed; keep the window and its error
+          await getCurrentWindow().destroy();
+        },
+      );
+      watching = true;
     })();
-    return () => unlisten?.();
+    return () => {
+      unlisten?.();
+      unlistenClose?.();
+    };
+  });
+
+  function currentMessage(): OutgoingMessage | null {
+    return accountId === null ? null : buildMessage(accountId);
+  }
+
+  async function saveNow() {
+    if (saving || sent || !dirty) return;
+    const message = currentMessage();
+    if (!message) return;
+    // An untouched-then-cleared window has nothing worth a server round
+    // trip; once a version exists it keeps being replaced, even by "".
+    if (isDraftEmpty(message) && draftMessageId === null) return;
+    saving = true;
+    // why clear before the await: keystrokes landing during the save must
+    // re-mark the draft dirty, not be swallowed by a stale flag.
+    dirty = false;
+    try {
+      draftMessageId = await saveDraft(message, draftMessageId);
+      saveError = null;
+    } catch (err) {
+      dirty = true;
+      saveError = String(err);
+    } finally {
+      saving = false;
+    }
+  }
+
+  const scheduleAutosave = debounce(() => void saveNow(), AUTOSAVE_MS);
+
+  $effect(() => {
+    void [to, cc, bcc, subject, body, attachments];
+    if (!watching) return;
+    dirty = true;
+    scheduleAutosave();
   });
 
   async function addAttachments(paths: string[]) {
@@ -115,6 +189,9 @@
     error = null;
     try {
       await queueSend(buildMessage(accountId));
+      // why: the message now belongs to the send queue — the close below
+      // must not snapshot it back into the Drafts folder.
+      sent = true;
       await closeCompose();
     } catch (err) {
       error = String(err);
@@ -212,8 +289,10 @@
     />
   </div>
 
-  {#if error}
-    <p class="error" role="alert">{error}</p>
+  {#if error || saveError}
+    <p class="error" role="alert">
+      {error ?? `Draft not saved: ${saveError}`}
+    </p>
   {/if}
 
   {#if loaded}

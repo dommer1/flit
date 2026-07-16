@@ -37,11 +37,27 @@ let dropCallbacks: {
   onDrop: (paths: string[]) => void;
 } | null = null;
 
+// Captured by the window mock so tests can simulate the red traffic light.
+type CloseEvent = { preventDefault: () => void };
+let closeHandler: ((event: CloseEvent) => Promise<void>) | null = null;
+const destroyWindow = vi.fn(async (): Promise<void> => undefined);
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    onCloseRequested: async (handler: (event: CloseEvent) => Promise<void>) => {
+      closeHandler = handler;
+      return () => {};
+    },
+    destroy: destroyWindow,
+  }),
+}));
+
 vi.mock("./api", () => ({
   listAccounts: vi.fn(async () => accounts),
   takeComposeDraft: vi.fn(async (): Promise<OutgoingMessage | null> => null),
   queueSend: vi.fn(async (): Promise<void> => undefined),
   closeCompose: vi.fn(async (): Promise<void> => undefined),
+  saveDraft: vi.fn(async (): Promise<string> => "draft-id-1@flit.local"),
   inspectAttachments: vi.fn(async (paths: string[]) =>
     paths.map((path) => ({
       path,
@@ -276,4 +292,115 @@ it("shows the failure and stays open when queueing fails", async () => {
   expect(api.closeCompose).not.toHaveBeenCalled();
   expect(screen.getByLabelText("To")).toBeEnabled();
   expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+});
+
+it("autosaves the draft after the idle window", async () => {
+  await renderLoaded();
+
+  vi.useFakeTimers();
+  try {
+    await fireEvent.input(screen.getByLabelText("Subject"), {
+      target: { value: "Rozpísané" },
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(api.saveDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: "Rozpísané", to: "bob@example.com" }),
+      null,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("replaces the previous draft version on the next autosave", async () => {
+  await renderLoaded();
+
+  vi.useFakeTimers();
+  try {
+    await fireEvent.input(screen.getByLabelText("Subject"), {
+      target: { value: "v1" },
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await fireEvent.input(screen.getByLabelText("Subject"), {
+      target: { value: "v2" },
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(api.saveDraft).toHaveBeenLastCalledWith(
+      expect.objectContaining({ subject: "v2" }),
+      "draft-id-1@flit.local",
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("never autosaves an untouched or emptied-out new draft", async () => {
+  await renderLoaded();
+
+  vi.useFakeTimers();
+  try {
+    await fireEvent.input(screen.getByLabelText("To"), {
+      target: { value: "   " },
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(api.saveDraft).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("saves a dirty draft before the window closes", async () => {
+  await renderLoaded();
+
+  const preventDefault = vi.fn();
+  await closeHandler!({ preventDefault });
+
+  expect(preventDefault).toHaveBeenCalled();
+  expect(api.saveDraft).toHaveBeenCalledWith(
+    expect.objectContaining({ to: "bob@example.com" }),
+    null,
+  );
+  expect(destroyWindow).toHaveBeenCalled();
+});
+
+it("lets a clean window close without saving", async () => {
+  render(ComposeWindow);
+  await waitFor(() => expect(screen.getByLabelText("From")).toHaveValue("1"));
+
+  const preventDefault = vi.fn();
+  await closeHandler!({ preventDefault });
+
+  expect(preventDefault).not.toHaveBeenCalled();
+  expect(api.saveDraft).not.toHaveBeenCalled();
+  expect(destroyWindow).not.toHaveBeenCalled();
+});
+
+it("stays open and shows the failure when the close-save fails", async () => {
+  vi.mocked(api.saveDraft).mockRejectedValueOnce("imap error: offline");
+  await renderLoaded();
+
+  const preventDefault = vi.fn();
+  await closeHandler!({ preventDefault });
+
+  expect(preventDefault).toHaveBeenCalled();
+  expect(destroyWindow).not.toHaveBeenCalled();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Draft not saved: imap error: offline",
+  );
+});
+
+it("does not snapshot a sent message back into drafts on close", async () => {
+  await renderLoaded();
+
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(api.closeCompose).toHaveBeenCalled());
+
+  const preventDefault = vi.fn();
+  await closeHandler!({ preventDefault });
+
+  expect(preventDefault).not.toHaveBeenCalled();
+  expect(api.saveDraft).not.toHaveBeenCalled();
 });

@@ -210,6 +210,19 @@ export function undoSend(id: number): Promise<void> {
   return invoke<void>("undo_send", { id });
 }
 
+/**
+ * Save a draft into its account's Drafts folder on the server (visible to
+ * webmail and other clients). Returns the Message-ID of the saved version;
+ * pass it back as `previousDraftId` on the next save so the server copy is
+ * replaced instead of duplicated.
+ */
+export function saveDraft(
+  message: OutgoingMessage,
+  previousDraftId: string | null,
+): Promise<string> {
+  return invoke<string>("save_draft", { message, previousDraftId });
+}
+
 /** A message entered its undo window. */
 export function onSendQueued(
   callback: (event: SendEvent) => void,
