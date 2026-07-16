@@ -43,6 +43,15 @@ pub async fn build_draft(
         .from(Address::new_address(None::<&str>, from_email))
         .subject(outgoing.subject.as_str())
         .text_body(outgoing.body.as_str());
+    // Keep the rich-text rendering: mail-builder writes text+html as
+    // multipart/alternative, so formatting survives in webmail and reopen.
+    if let Some(html) = outgoing
+        .body_html
+        .as_deref()
+        .filter(|h| !h.trim().is_empty())
+    {
+        builder = builder.html_body(html);
+    }
     if let Some(to) = recipient_list(&outgoing.to) {
         builder = builder.to(to);
     }
@@ -159,6 +168,34 @@ mod tests {
             Some("Ahoj, prídeš?"),
             "diacritics must survive the round trip"
         );
+    }
+
+    #[tokio::test]
+    async fn keeps_the_html_body_alongside_the_text() {
+        let mut out = outgoing();
+        out.body_html = Some("<p>Ahoj, <b>prídeš</b>?</p>".to_string());
+
+        let message = parsed(&out).await;
+
+        assert_eq!(
+            message.body_html(0).as_deref(),
+            Some("<p>Ahoj, <b>prídeš</b>?</p>")
+        );
+        assert_eq!(message.body_text(0).as_deref(), Some("Ahoj, prídeš?"));
+    }
+
+    #[tokio::test]
+    async fn skips_a_blank_html_body() {
+        // why raw bytes: mail-parser synthesizes an HTML view from the text
+        // part, so only the wire format shows whether an html part exists.
+        let mut out = outgoing();
+        out.body_html = Some("   ".to_string());
+
+        let raw = build_draft("domco@example.com", &out, "id@flit.local")
+            .await
+            .unwrap();
+
+        assert!(!String::from_utf8(raw).unwrap().contains("text/html"));
     }
 
     #[tokio::test]
