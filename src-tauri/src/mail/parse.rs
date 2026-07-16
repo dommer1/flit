@@ -31,6 +31,21 @@ pub struct InlineImage {
     pub data: Vec<u8>,
 }
 
+/// A non-inline attachment of a message: metadata only — the bytes stay on
+/// the server and are re-fetched on demand when the user saves the file.
+#[derive(Debug, PartialEq)]
+pub struct AttachmentMeta {
+    /// Position within mail-parser's attachment enumeration — the key
+    /// `attachment_data` uses to re-extract this part from a fresh fetch
+    /// of the same raw message.
+    pub part_index: i64,
+    pub filename: String,
+    /// Full MIME type ("application/pdf"); octet-stream when unspecified.
+    pub content_type: String,
+    /// Decoded size in bytes.
+    pub size: i64,
+}
+
 /// Bodies extracted from a full message.
 #[derive(Debug, Default, PartialEq)]
 pub struct ParsedBody {
@@ -38,6 +53,7 @@ pub struct ParsedBody {
     pub html: Option<String>,
     pub snippet: String,
     pub images: Vec<InlineImage>,
+    pub attachments: Vec<AttachmentMeta>,
 }
 
 /// Parse raw header bytes (from `BODY.PEEK[HEADER]`).
@@ -68,12 +84,58 @@ pub fn parse_body(raw: &[u8]) -> ParsedBody {
     let html = message.body_html(0).map(|h| h.into_owned());
     let snippet = text.as_deref().map(snippet_of).unwrap_or_default();
     let images = inline_images(&message);
+    let attachments = attachment_meta(&message);
     ParsedBody {
         text,
         html,
         snippet,
         images,
+        attachments,
     }
+}
+
+/// Whether this part renders inline via a `cid:` reference — those live in
+/// `images`, not in the attachment list.
+fn is_inline_image(part: &mail_parser::MessagePart) -> bool {
+    part.content_id().is_some()
+        && part
+            .content_type()
+            .is_some_and(|ct| ct.ctype().eq_ignore_ascii_case("image"))
+}
+
+/// Metadata of every attachment worth listing: anything mail-parser treats
+/// as an attachment except the inline cid: images already rendered in the
+/// body. Enumerated before filtering so `part_index` stays aligned with
+/// mail-parser's `attachments()` order for later re-extraction.
+fn attachment_meta(message: &Message) -> Vec<AttachmentMeta> {
+    message
+        .attachments()
+        .enumerate()
+        .filter(|(_, part)| !is_inline_image(part))
+        .map(|(index, part)| AttachmentMeta {
+            part_index: index as i64,
+            filename: part.attachment_name().unwrap_or("attachment").to_string(),
+            content_type: part
+                .content_type()
+                .map(|ct| match ct.subtype() {
+                    Some(subtype) => format!("{}/{subtype}", ct.ctype()).to_ascii_lowercase(),
+                    None => ct.ctype().to_ascii_lowercase(),
+                })
+                .unwrap_or_else(|| "application/octet-stream".to_string()),
+            size: part.contents().len() as i64,
+        })
+        .collect()
+}
+
+/// Decoded bytes of one attachment, re-extracted from a raw message by the
+/// `part_index` recorded when its metadata was cached. `None` when the
+/// message no longer parses or the part vanished (index out of range).
+pub fn attachment_data(raw: &[u8], part_index: i64) -> Option<Vec<u8>> {
+    let message = MessageParser::default().parse(raw)?;
+    let part = message
+        .attachments()
+        .nth(usize::try_from(part_index).ok()?)?;
+    Some(part.contents().to_vec())
 }
 
 /// Every attachment that an `<img src="cid:...">` could reference: an image
@@ -304,6 +366,93 @@ mod tests {
         // A PDF can't render in an <img>; an image without a Content-ID can't
         // be referenced by any cid: URL — neither belongs in `images`.
         assert_eq!(parse_body(raw).images, Vec::new());
+    }
+
+    // A multipart/mixed message with an HTML body, a PDF attachment, an
+    // inline cid: image and an image attachment without a Content-ID.
+    const RAW_WITH_ATTACHMENTS: &[u8] = b"From: a@example.com\r\n\
+        Subject: Files\r\n\
+        MIME-Version: 1.0\r\n\
+        Content-Type: multipart/mixed; boundary=\"b1\"\r\n\
+        \r\n\
+        --b1\r\n\
+        Content-Type: text/html; charset=utf-8\r\n\
+        \r\n\
+        <p>See attached <img src=\"cid:logo\"></p>\r\n\
+        --b1\r\n\
+        Content-Type: application/pdf\r\n\
+        Content-Disposition: attachment; filename=\"report.pdf\"\r\n\
+        \r\n\
+        %PDF-fake\r\n\
+        --b1\r\n\
+        Content-Type: image/png\r\n\
+        Content-Transfer-Encoding: base64\r\n\
+        Content-ID: <logo>\r\n\
+        Content-Disposition: inline; filename=\"logo.png\"\r\n\
+        \r\n\
+        iVBORw0KGgo=\r\n\
+        --b1\r\n\
+        Content-Type: image/jpeg\r\n\
+        Content-Disposition: attachment; filename=\"photo.jpg\"\r\n\
+        \r\n\
+        JPEGDATA\r\n\
+        --b1--\r\n";
+
+    #[test]
+    fn lists_attachment_metadata_without_inline_images() {
+        let body = parse_body(RAW_WITH_ATTACHMENTS);
+
+        // The cid: logo renders inline — it belongs to images, not here.
+        assert_eq!(body.images.len(), 1);
+        assert_eq!(body.attachments.len(), 2);
+
+        let pdf = &body.attachments[0];
+        assert_eq!(pdf.filename, "report.pdf");
+        assert_eq!(pdf.content_type, "application/pdf");
+        assert_eq!(pdf.size, "%PDF-fake".len() as i64);
+
+        let photo = &body.attachments[1];
+        assert_eq!(photo.filename, "photo.jpg");
+        assert_eq!(photo.content_type, "image/jpeg");
+    }
+
+    #[test]
+    fn attachment_data_re_extracts_bytes_by_part_index() {
+        let body = parse_body(RAW_WITH_ATTACHMENTS);
+
+        let pdf = attachment_data(RAW_WITH_ATTACHMENTS, body.attachments[0].part_index);
+        assert_eq!(pdf.as_deref(), Some(b"%PDF-fake".as_slice()));
+
+        // The photo's index skips over the inline logo in between.
+        let photo = attachment_data(RAW_WITH_ATTACHMENTS, body.attachments[1].part_index);
+        assert_eq!(photo.as_deref(), Some(b"JPEGDATA".as_slice()));
+
+        assert_eq!(attachment_data(RAW_WITH_ATTACHMENTS, 99), None);
+        assert_eq!(attachment_data(b"not mail", 0), None);
+    }
+
+    #[test]
+    fn attachment_without_headers_gets_fallback_name_and_type() {
+        let raw = b"From: a@example.com\r\n\
+            Subject: Blob\r\n\
+            MIME-Version: 1.0\r\n\
+            Content-Type: multipart/mixed; boundary=\"b1\"\r\n\
+            \r\n\
+            --b1\r\n\
+            Content-Type: text/plain\r\n\
+            \r\n\
+            see attachment\r\n\
+            --b1\r\n\
+            Content-Disposition: attachment\r\n\
+            \r\n\
+            rawbytes\r\n\
+            --b1--\r\n";
+
+        let body = parse_body(raw);
+
+        assert_eq!(body.attachments.len(), 1);
+        assert_eq!(body.attachments[0].filename, "attachment");
+        assert!(!body.attachments[0].content_type.is_empty());
     }
 
     #[test]
