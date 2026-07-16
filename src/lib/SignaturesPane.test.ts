@@ -16,6 +16,8 @@ function account(id: number, email: string, signatureId: number | null): Account
     checkedAt: null,
     color: null,
     signatureId,
+    notifyEnabled: null,
+    notifySound: null,
   };
 }
 

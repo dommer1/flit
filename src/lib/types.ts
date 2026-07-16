@@ -17,6 +17,10 @@ export interface Account {
   color: string | null;
   /** Default signature for mail composed from this account; null = none. */
   signatureId: number | null;
+  /** New-mail notification override; null = inherit the global setting. */
+  notifyEnabled: boolean | null;
+  /** Sound override ("none" or a macOS sound name); null = inherit. */
+  notifySound: string | null;
 }
 
 /** One reusable e-mail signature; `body` is editor HTML. */

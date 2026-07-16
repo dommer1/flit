@@ -17,6 +17,8 @@ const accounts: Account[] = [
     checkedAt: 1751900000,
     color: null,
     signatureId: null,
+    notifyEnabled: null,
+    notifySound: null,
   },
   {
     id: 2,
@@ -31,6 +33,8 @@ const accounts: Account[] = [
     checkedAt: 1751900000,
     color: null,
     signatureId: null,
+    notifyEnabled: null,
+    notifySound: null,
   },
 ];
 

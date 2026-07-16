@@ -23,6 +23,11 @@ pub struct Account {
     pub color: Option<String>,
     /// Default signature for mail composed from this account; `None` = none.
     pub signature_id: Option<i64>,
+    /// New-mail notification override; `None` = inherit the global setting.
+    pub notify_enabled: Option<bool>,
+    /// Notification sound override ("none" or a macOS sound name);
+    /// `None` = inherit the global default sound.
+    pub notify_sound: Option<String>,
 }
 
 /// One reusable e-mail signature. `body` is editor HTML — the compose editor

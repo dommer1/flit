@@ -66,6 +66,23 @@ pub async fn set_color(pool: &SqlitePool, id: i64, color: Option<&str>) -> Resul
     Ok(())
 }
 
+/// Set (or clear, with `None`) an account's notification overrides. `None`
+/// means "inherit the global default" — see storage::settings.
+pub async fn set_notify(
+    pool: &SqlitePool,
+    id: i64,
+    enabled: Option<bool>,
+    sound: Option<&str>,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE accounts SET notify_enabled = ?, notify_sound = ? WHERE id = ?")
+        .bind(enabled)
+        .bind(sound)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Delete an account row. Idempotent — deleting a missing id is not an error.
 pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), AppError> {
     sqlx::query("DELETE FROM accounts WHERE id = ?")
@@ -161,6 +178,27 @@ mod tests {
 
         set_color(&pool, account.id, None).await.unwrap();
         assert_eq!(get(&pool, account.id).await.unwrap().color, None);
+    }
+
+    #[tokio::test]
+    async fn set_notify_sets_and_clears_the_overrides() {
+        let pool = test_pool().await;
+        let account = insert(&pool, &sample("Personal")).await.unwrap();
+        // Fresh accounts inherit the global defaults.
+        assert_eq!(account.notify_enabled, None);
+        assert_eq!(account.notify_sound, None);
+
+        set_notify(&pool, account.id, Some(false), Some("Ping"))
+            .await
+            .unwrap();
+        let overridden = get(&pool, account.id).await.unwrap();
+        assert_eq!(overridden.notify_enabled, Some(false));
+        assert_eq!(overridden.notify_sound.as_deref(), Some("Ping"));
+
+        set_notify(&pool, account.id, None, None).await.unwrap();
+        let inherited = get(&pool, account.id).await.unwrap();
+        assert_eq!(inherited.notify_enabled, None);
+        assert_eq!(inherited.notify_sound, None);
     }
 
     #[tokio::test]
