@@ -101,6 +101,18 @@ pub async fn sent_name(pool: &SqlitePool, account_id: i64) -> Result<Option<Stri
     name_for_role(pool, account_id, "sent").await
 }
 
+/// Whether `name` is a discovered folder of this account — the guard a
+/// user-supplied move destination must pass before any IMAP command runs.
+pub async fn exists(pool: &SqlitePool, account_id: i64, name: &str) -> Result<bool, AppError> {
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mailboxes WHERE account_id = ? AND name = ?")
+            .bind(account_id)
+            .bind(name)
+            .fetch_one(pool)
+            .await?;
+    Ok(count > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +306,24 @@ mod tests {
             Some("Archív".to_string())
         );
         assert_eq!(name_for_role(&pool, id, "junk").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn exists_matches_only_that_accounts_folders() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(
+            &pool,
+            id,
+            &[found("INBOX", Some("inbox")), found("Work", None)],
+        )
+        .await
+        .unwrap();
+
+        assert!(exists(&pool, id, "Work").await.unwrap());
+        assert!(exists(&pool, id, "INBOX").await.unwrap());
+        assert!(!exists(&pool, id, "Missing").await.unwrap());
+        assert!(!exists(&pool, id + 1, "Work").await.unwrap());
     }
 
     #[tokio::test]
