@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    archiveMessage,
     listAccounts,
     listMailboxes,
     listMessages,
@@ -94,6 +95,10 @@
 
   function handleTrash(id: number) {
     evictMessage(id, moveToTrash);
+  }
+
+  function handleArchive(id: number) {
+    evictMessage(id, archiveMessage);
   }
 
   // Arrow Up / Down walk the list. Ignored while typing in a field (search,
@@ -423,6 +428,7 @@
         message={selectedMessage}
         onDraft={openDraft}
         onSetRead={handleSetRead}
+        onArchive={handleArchive}
         onTrash={handleTrash}
       />
     </section>

@@ -116,6 +116,15 @@ export function moveToTrash(messageId: number): Promise<void> {
 }
 
 /**
+ * Archive a message: move it to the account's Archive folder on the server,
+ * then drop it from the local cache. Rejects (and keeps the row) if there is
+ * no archive folder or the server move fails.
+ */
+export function archiveMessage(messageId: number): Promise<void> {
+  return invoke<void>("archive_message", { messageId });
+}
+
+/**
  * Queue a message for sending after its undo window. Resolves as soon as
  * the message is validated and queued; progress arrives via onSendQueued /
  * onSendFinished / onSendUndone.

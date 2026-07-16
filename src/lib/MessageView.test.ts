@@ -171,6 +171,14 @@ it("moves the message to trash via the Trash button", async () => {
   expect(onTrash).toHaveBeenCalledWith(1);
 });
 
+it("archives the message via the Archive button", async () => {
+  const onArchive = vi.fn();
+  render(MessageView, { props: { message, onArchive } });
+
+  await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+  expect(onArchive).toHaveBeenCalledWith(1);
+});
+
 it("offers reply, reply all and forward with the loaded text", async () => {
   vi.mocked(api.getMessageBody).mockResolvedValueOnce(
     body({ html: null, text: "hi there" }),

@@ -116,6 +116,7 @@ vi.mock("./lib/api", () => ({
   syncAccount: vi.fn(async () => undefined),
   setMessageRead: vi.fn(async () => undefined),
   moveToTrash: vi.fn(async () => undefined),
+  archiveMessage: vi.fn(async () => undefined),
   openCompose: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async (callback: () => void) => {
     accountsChanged = callback;
@@ -669,6 +670,18 @@ it("trashes the open message and steps to its neighbour", async () => {
 
   expect(api.moveToTrash).toHaveBeenCalledWith(1);
   // The row leaves the list at once (optimistic), selection steps to the next.
+  expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
+  await screen.findByRole("heading", { name: "Re: Invoice" });
+});
+
+it("archives the open message and steps to its neighbour", async () => {
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  await screen.findByRole("heading", { name: "Weekend plans" });
+
+  await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+
+  expect(api.archiveMessage).toHaveBeenCalledWith(1);
   expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
   await screen.findByRole("heading", { name: "Re: Invoice" });
 });

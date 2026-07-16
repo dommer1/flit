@@ -8,6 +8,7 @@
     message,
     onDraft,
     onSetRead,
+    onArchive,
     onTrash,
   }: {
     message: MessageHeader | null;
@@ -19,6 +20,7 @@
       bodyText: string | null,
     ) => void;
     onSetRead?: (id: number, read: boolean) => void;
+    onArchive?: (id: number) => void;
     onTrash?: (id: number) => void;
   } = $props();
 
@@ -75,7 +77,7 @@
       </div>
       <div class="meta">
         <span class="date">{formatFullDate(message.date)}</span>
-        {#if onDraft || onSetRead || onTrash}
+        {#if onDraft || onSetRead || onArchive || onTrash}
           {@const current = message}
           <div class="actions">
             {#if onDraft}
@@ -99,6 +101,10 @@
               <button onclick={() => setRead(current.id, !current.read)}>
                 {current.read ? "Mark Unread" : "Mark Read"}
               </button>
+            {/if}
+            {#if onArchive}
+              {@const archive = onArchive}
+              <button onclick={() => archive(current.id)}>Archive</button>
             {/if}
             {#if onTrash}
               {@const trash = onTrash}
