@@ -31,6 +31,8 @@
   /* Structural chrome borders (toolbar edge, pane dividers) — solid, unlike
      the translucent in-content hairlines. */
   --border-chrome: #d6d6da;
+  /* Inset fields sitting on chrome (the toolbar search). */
+  --bg-field: rgba(0, 0, 0, 0.055);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -52,6 +54,7 @@
     --bg-toolbar-top: #3a3a3c;
     --bg-toolbar-bottom: #333335;
     --border-chrome: rgba(0, 0, 0, 0.55);
+    --bg-field: rgba(255, 255, 255, 0.09);
   }
 }
 

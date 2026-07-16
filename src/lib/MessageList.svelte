@@ -9,9 +9,6 @@
     accountColors = {},
     selectedId,
     onSelect,
-    onCompose,
-    onSearch,
-    onToggleSidebar,
     onArchive,
     onSetRead,
     isArchived,
@@ -22,9 +19,6 @@
     accountColors?: Record<number, string | null>;
     selectedId: number | null;
     onSelect: (id: number) => void;
-    onCompose: () => void;
-    onSearch: (query: string) => void;
-    onToggleSidebar?: () => void;
     /** Fired by a full swipe left on a row (Apple Mail's archive gesture). */
     onArchive?: (id: number) => void;
     /** Fired by a full swipe right on a row: toggle read/unread. */
@@ -33,8 +27,6 @@
      * reads "Move to Inbox" (onArchive still fires; the parent routes). */
     isArchived?: (message: MessageHeader) => boolean;
   } = $props();
-
-  let query = $state("");
 
   // The row currently under a two-finger swipe and how far it has traveled.
   // One gesture at a time — trackpads can't swipe two rows at once.
@@ -79,63 +71,12 @@
 
 <div class="pane">
   <header>
-    <div class="left">
-      {#if onToggleSidebar}
-        <button
-          class="toggle"
-          aria-label="Toggle sidebar"
-          title="Toggle sidebar"
-          onclick={onToggleSidebar}
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <rect
-              x="1.75"
-              y="2.75"
-              width="12.5"
-              height="10.5"
-              rx="1.75"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.2"
-            />
-            <line
-              x1="6.25"
-              y1="2.75"
-              x2="6.25"
-              y2="13.25"
-              stroke="currentColor"
-              stroke-width="1.2"
-            />
-          </svg>
-        </button>
-      {/if}
-      <div class="titles">
-        <h1>{title}</h1>
-        <p class="count">
-          {messages.length}
-          {messages.length === 1 ? "message" : "messages"}
-        </p>
-      </div>
-    </div>
-    <button
-      class="compose"
-      aria-label="New Message"
-      title="New Message"
-      onclick={onCompose}
-    >
-      ✎
-    </button>
+    <h1>{title}</h1>
+    <p class="count">
+      {messages.length}
+      {messages.length === 1 ? "message" : "messages"}
+    </p>
   </header>
-
-  <div class="search">
-    <input
-      type="search"
-      placeholder="Search — from:… to:… subject:… is:unread"
-      aria-label="Search messages"
-      bind:value={query}
-      oninput={() => onSearch(query)}
-    />
-  </div>
 
   <div class="list" role="listbox" aria-label="Messages" bind:this={listEl}>
     {#if messages.length === 0}
@@ -210,55 +151,9 @@
   }
 
   header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
     flex-shrink: 0;
     padding: 12px 16px 8px;
     border-bottom: 1px solid var(--hairline);
-  }
-
-  .left {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .toggle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    width: 26px;
-    height: 26px;
-    padding: 0;
-    border: none;
-    border-radius: 6px;
-    background: none;
-    color: var(--text-secondary);
-    cursor: default;
-  }
-
-  .toggle:hover {
-    background: var(--bg-hover);
-  }
-
-  .toggle svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  .compose {
-    padding: 3px 9px;
-    border: 1px solid var(--hairline);
-    border-radius: 6px;
-    background: var(--bg-window);
-    font: inherit;
-    font-size: 14px;
-    color: var(--text-secondary);
-    cursor: pointer;
   }
 
   h1 {
@@ -271,28 +166,6 @@
     margin: 1px 0 0;
     font-size: 11px;
     color: var(--text-secondary);
-  }
-
-  .search {
-    flex-shrink: 0;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--hairline);
-  }
-
-  .search input {
-    width: 100%;
-    padding: 4px 8px;
-    border: 1px solid var(--hairline);
-    border-radius: 6px;
-    background: var(--bg-window);
-    font: inherit;
-    font-size: 12px;
-    color: inherit;
-  }
-
-  .search input:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -1px;
   }
 
   .list {

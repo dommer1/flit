@@ -31,8 +31,6 @@ function renderList(props: Record<string, unknown> = {}) {
       messages,
       selectedId: null,
       onSelect: vi.fn(),
-      onCompose: vi.fn(),
-      onSearch: vi.fn(),
       ...props,
     },
   });

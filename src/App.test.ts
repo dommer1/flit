@@ -148,6 +148,7 @@ vi.mock("./lib/api", () => ({
   moveMessage: vi.fn(async () => undefined),
   openCompose: vi.fn(async () => undefined),
   openDraft: vi.fn(async () => undefined),
+  openSettings: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async (callback: () => void) => {
     accountsChanged = callback;
     return () => {};
@@ -297,8 +298,14 @@ it("clears the selected message when switching accounts", async () => {
   expect(await screen.findByText("Select a message")).toBeInTheDocument();
 });
 
-// note: settings open only through the native macOS app menu (Settings…, ⌘,
-// — src-tauri lib.rs), so there is no webview trigger left to test here.
+it("opens the settings window from the toolbar gear", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+  await waitFor(() => expect(api.openSettings).toHaveBeenCalled());
+});
 
 it("opens a compose window for a new message", async () => {
   render(App);

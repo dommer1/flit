@@ -18,6 +18,7 @@
     onSendUndone,
     openCompose,
     openDraft as openServerDraft,
+    openSettings,
     searchMessages,
     sendScheduledNow,
     setMessageRead,
@@ -46,6 +47,7 @@
     type PaneWidths,
   } from "./lib/paneSizes";
   import Sidebar from "./lib/Sidebar.svelte";
+  import Toolbar from "./lib/Toolbar.svelte";
   import MessageList from "./lib/MessageList.svelte";
   import MessageView from "./lib/MessageView.svelte";
   import Outbox, { type OutboxEntry } from "./lib/Outbox.svelte";
@@ -345,9 +347,23 @@
     savePaneWidths(localStorage, paneWidths);
   }
 
-  // why: plain variable, not $state — the input's value lives in MessageList;
+  // why: plain variable, not $state — the input's value lives in Toolbar;
   // this only steers which query refreshMessages runs.
   let searchQuery = "";
+
+  // Manual "check for new mail": re-sync what the user is looking at — all
+  // accounts on the unified inbox, otherwise just the selected one.
+  function handleRefresh() {
+    startSync(
+      selectedAccountId === null ? accounts.map((a) => a.id) : [selectedAccountId],
+    );
+  }
+
+  function handleOpenSettings() {
+    void openSettings().catch((err: unknown) =>
+      console.error("failed to open settings:", err),
+    );
+  }
 
   async function selectMailbox(accountId: number | null, mailbox = "INBOX") {
     selectedAccountId = accountId;
@@ -467,9 +483,15 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<!-- why: with titleBarStyle Overlay there is no native title bar left to grab,
-     so the toolbar strip doubles as the window drag handle. -->
-<div class="toolbar" data-tauri-drag-region></div>
+<Toolbar
+  {sidebarCollapsed}
+  sidebarWidth={paneWidths.sidebar}
+  onToggleSidebar={toggleSidebar}
+  onRefresh={handleRefresh}
+  onCompose={openNewMessage}
+  onSearch={handleSearch}
+  onOpenSettings={handleOpenSettings}
+/>
 
 <div
   class="layout"
@@ -515,9 +537,6 @@
         {accountColors}
         selectedId={selectedMessageId}
         onSelect={selectMessage}
-        onCompose={openNewMessage}
-        onSearch={handleSearch}
-        onToggleSidebar={toggleSidebar}
         onArchive={handleArchive}
         onSetRead={handleSetRead}
         {isArchived}
@@ -568,18 +587,6 @@
      lives here rather than in the shared stylesheet. */
   :global(body) {
     background: transparent;
-  }
-
-  /* The unified toolbar strip: full window width, native traffic lights
-     float over its left end (tauri.conf.json trafficLightPosition). */
-  .toolbar {
-    box-sizing: border-box;
-    height: var(--toolbar-height);
-    background: linear-gradient(
-      var(--bg-toolbar-top),
-      var(--bg-toolbar-bottom)
-    );
-    border-bottom: 1px solid var(--border-chrome);
   }
 
   .layout {
