@@ -290,6 +290,24 @@ pub async fn delete_by_id(pool: &SqlitePool, message_id: i64) -> Result<(), AppE
     Ok(())
 }
 
+/// Where a cached message lives on the server — the coordinates a UID
+/// command (STORE, MOVE) needs.
+#[derive(Debug, sqlx::FromRow)]
+pub struct MessageLocation {
+    pub account_id: i64,
+    pub mailbox: String,
+    pub uid: i64,
+}
+
+/// Look up one message's server coordinates by row id.
+pub async fn location(pool: &SqlitePool, message_id: i64) -> Result<MessageLocation, AppError> {
+    let row = sqlx::query_as("SELECT account_id, mailbox, uid FROM messages WHERE id = ?")
+        .bind(message_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(row)
+}
+
 /// Adopt the server's read/unread state for one message.
 pub async fn set_read(pool: &SqlitePool, message_id: i64, read: bool) -> Result<(), AppError> {
     sqlx::query("UPDATE messages SET read = ? WHERE id = ?")
@@ -738,6 +756,28 @@ mod tests {
         let remaining = uid_flags(&pool, id, "INBOX").await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].1, 2);
+    }
+
+    #[tokio::test]
+    async fn location_returns_server_coordinates() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "Archive",
+            &[header(42, "Filed", "2026-07-01T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        let message_id = list(&pool, Some(id), "Archive").await.unwrap()[0].id;
+
+        let loc = location(&pool, message_id).await.unwrap();
+        assert_eq!(loc.account_id, id);
+        assert_eq!(loc.mailbox, "Archive");
+        assert_eq!(loc.uid, 42);
+
+        assert!(location(&pool, 9999).await.is_err());
     }
 
     #[tokio::test]

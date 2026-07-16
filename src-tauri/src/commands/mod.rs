@@ -99,6 +99,58 @@ pub async fn sync_account(
     Ok(())
 }
 
+/// Mark one message read/unread. Updates the local cache and notifies the UI
+/// immediately, then pushes the `\Seen` flag to the server in the background —
+/// opening a message never waits on the network for the dot to clear.
+#[tauri::command]
+pub async fn set_message_read(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+    read: bool,
+) -> Result<(), AppError> {
+    let loc = storage::messages::location(&state.pool, message_id).await?;
+    storage::messages::set_read(&state.pool, message_id, read).await?;
+    app.emit("messages-changed", loc.account_id)?;
+
+    // why: fetch account + password on the command path (cheap, from the
+    // session cache) so the spawned task owns everything it needs.
+    let account = storage::accounts::get(&state.pool, loc.account_id).await?;
+    let password = state.password(loc.account_id).await?;
+    tauri::async_runtime::spawn(async move {
+        // why: best effort — if the server STORE fails, the next sync's
+        // reconcile adopts the server's flag, so nothing drifts permanently.
+        if let Err(err) = push_seen_flag(&account, &password, &loc.mailbox, loc.uid, read).await {
+            eprintln!("failed to push read={read} for message {message_id}: {err}");
+        }
+    });
+    Ok(())
+}
+
+/// Connect, select the folder, flip the `\Seen` flag, log out.
+async fn push_seen_flag(
+    account: &Account,
+    password: &str,
+    mailbox: &str,
+    uid: i64,
+    seen: bool,
+) -> Result<(), AppError> {
+    let mut session = mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        password,
+    )
+    .await?;
+    session
+        .select(mailbox)
+        .await
+        .map_err(|e| AppError::Imap(format!("select {mailbox}: {e}")))?;
+    let result = mail::imap::set_seen(&mut session, uid, seen).await;
+    let _ = session.logout().await;
+    result
+}
+
 fn now_epoch() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

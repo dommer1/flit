@@ -179,6 +179,23 @@ pub async fn fetch_sizes(
         .collect())
 }
 
+/// Set or clear the `\Seen` flag on one message by UID — the server-side
+/// read state. `.SILENT` suppresses the echoed FETCH, but the tagged
+/// response still has to be drained for the command to complete.
+pub async fn set_seen(session: &mut ImapSession, uid: i64, seen: bool) -> Result<(), AppError> {
+    let query = if seen {
+        "+FLAGS.SILENT (\\Seen)"
+    } else {
+        "-FLAGS.SILENT (\\Seen)"
+    };
+    let updates = session
+        .uid_store(uid.to_string(), query)
+        .await
+        .map_err(imap_err)?;
+    let _: Vec<Fetch> = updates.try_collect().await.map_err(imap_err)?;
+    Ok(())
+}
+
 /// Upload one raw RFC-2822 message into a mailbox, already marked read —
 /// used to mirror SMTP-sent mail into the Sent folder.
 pub async fn append(
