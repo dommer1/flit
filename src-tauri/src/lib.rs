@@ -89,6 +89,7 @@ pub fn run() {
             commands::inspect_attachments,
             commands::queue_send,
             commands::undo_send,
+            commands::save_draft,
             commands::test_connection,
             commands::open_compose,
             commands::take_compose_draft,

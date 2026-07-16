@@ -475,6 +475,70 @@ async fn save_sent_copy(
     result
 }
 
+/// Save one compose draft into its account's Drafts folder on the server,
+/// where webmail and other clients see it. Returns the Message-ID of the
+/// saved version — the handle for replacing or deleting it later. IMAP has
+/// no edit-in-place, so each save appends a fresh version and then deletes
+/// the previous one (`previous_draft_id`).
+#[tauri::command]
+pub async fn save_draft(
+    state: State<'_, AppState>,
+    message: OutgoingMessage,
+    previous_draft_id: Option<String>,
+) -> Result<String, AppError> {
+    let account = storage::accounts::get(&state.pool, message.account_id).await?;
+    let Some(drafts) =
+        storage::mailboxes::name_for_role(&state.pool, message.account_id, "drafts").await?
+    else {
+        return Err(AppError::Imap(
+            "no drafts folder discovered yet".to_string(),
+        ));
+    };
+    let message_id = mail::draft::generate_message_id();
+    let raw = mail::draft::build_draft(&account.email, &message, &message_id).await?;
+
+    let password = state.password(message.account_id).await?;
+    let mut session = mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        &password,
+    )
+    .await?;
+    // why \Seen: the user wrote this text — it must not light up unread
+    // badges here or in other clients.
+    let appended = mail::imap::append(&mut session, &drafts, "(\\Draft \\Seen)", &raw).await;
+    if appended.is_ok() {
+        // why best effort: the new version is safely on the server; a
+        // leftover old version is a cosmetic duplicate the user can delete,
+        // never lost text. The next save also retries it via its own id.
+        if let Some(old_id) = &previous_draft_id {
+            if let Err(err) = delete_draft_version(&mut session, &drafts, old_id).await {
+                eprintln!("could not delete draft version {old_id}: {err}");
+            }
+        }
+    }
+    let _ = session.logout().await;
+    appended?;
+    Ok(message_id)
+}
+
+/// Delete one draft version by Message-ID from `drafts`, if it still exists.
+async fn delete_draft_version(
+    session: &mut mail::imap::ImapSession,
+    drafts: &str,
+    message_id: &str,
+) -> Result<(), AppError> {
+    session
+        .select(drafts)
+        .await
+        .map_err(|e| AppError::Imap(format!("select {drafts}: {e}")))?;
+    if let Some(uid) = mail::imap::find_by_message_id(session, message_id).await? {
+        mail::imap::delete_message(session, uid).await?;
+    }
+    Ok(())
+}
+
 /// Verify & Save: prove the submitted credentials against both servers
 /// before the account is stored anywhere. The AppError Display strings
 /// already name the failing leg ("imap error: …" / "smtp error: …").
