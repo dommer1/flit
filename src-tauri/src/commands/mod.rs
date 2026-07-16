@@ -3,6 +3,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::error::AppError;
 use crate::models::{
     Account, Mailbox, MessageBody, MessageHeader, NewAccount, OutgoingMessage, RemoteImagePolicy,
+    Signature,
 };
 use crate::state::AppState;
 use crate::{auth, mail, storage};
@@ -862,6 +863,62 @@ pub async fn set_remote_image_policy(
     // why: the settings window mutates, the main window's open message view
     // listens and re-renders with the new policy.
     app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_signatures(state: State<'_, AppState>) -> Result<Vec<Signature>, AppError> {
+    storage::signatures::list(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn create_signature(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Signature, AppError> {
+    let created = storage::signatures::create(&state.pool, &name).await?;
+    app.emit("signatures-changed", ())?;
+    Ok(created)
+}
+
+#[tauri::command]
+pub async fn update_signature(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    name: String,
+    body: String,
+) -> Result<(), AppError> {
+    storage::signatures::update(&state.pool, id, &name, &body).await?;
+    app.emit("signatures-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_signature(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), AppError> {
+    storage::signatures::delete(&state.pool, id).await?;
+    app.emit("signatures-changed", ())?;
+    // why: ON DELETE SET NULL may have cleared account defaults too.
+    app.emit("accounts-changed", ())?;
+    Ok(())
+}
+
+/// Make one signature the default for exactly the given accounts.
+#[tauri::command]
+pub async fn set_signature_accounts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    account_ids: Vec<i64>,
+) -> Result<(), AppError> {
+    storage::signatures::set_default_for_accounts(&state.pool, id, &account_ids).await?;
+    // why: defaults live on the account rows, so account listeners refetch.
+    app.emit("accounts-changed", ())?;
     Ok(())
 }
 

@@ -100,7 +100,12 @@ pub fn run() {
             commands::open_settings,
             commands::close_settings,
             commands::get_remote_image_policy,
-            commands::set_remote_image_policy
+            commands::set_remote_image_policy,
+            commands::list_signatures,
+            commands::create_signature,
+            commands::update_signature,
+            commands::delete_signature,
+            commands::set_signature_accounts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
