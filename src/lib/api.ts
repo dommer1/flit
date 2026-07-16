@@ -223,6 +223,17 @@ export function saveDraft(
   return invoke<string>("save_draft", { message, previousDraftId });
 }
 
+/**
+ * Park a message until `scheduledAt` (unix seconds) — "Send Later". The
+ * message is validated now; delivery happens in the backend scheduler.
+ */
+export function scheduleSend(
+  message: OutgoingMessage,
+  scheduledAt: number,
+): Promise<void> {
+  return invoke<void>("schedule_send", { message, scheduledAt });
+}
+
 /** A message entered its undo window. */
 export function onSendQueued(
   callback: (event: SendEvent) => void,

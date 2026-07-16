@@ -8,11 +8,18 @@
     onFileDrop,
     queueSend,
     saveDraft,
+    scheduleSend,
     takeComposeDraft,
   } from "./api";
   import { debounce } from "./debounce";
   import { isDraftEmpty } from "./draft";
   import type { Account, AttachmentInfo, OutgoingMessage } from "./types";
+  import {
+    presets,
+    toDatetimeLocal,
+    toEpochSeconds,
+    type SendLaterPreset,
+  } from "./sendLater";
   import RichTextEditor from "./RichTextEditor.svelte";
 
   let accounts = $state<Account[]>([]);
@@ -52,6 +59,22 @@
   let dirty = false;
   let saving = false;
   let sent = false;
+
+  /** The send-later popover; presets are computed fresh on every open so a
+   * long-lived window never offers a moment that has already passed. */
+  let showSendLater = $state(false);
+  let sendLaterPresets = $state<SendLaterPreset[]>([]);
+  let sendAt = $state("");
+  let sendAtMin = $state("");
+
+  function toggleSendLater() {
+    showSendLater = !showSendLater;
+    if (showSendLater) {
+      const now = new Date();
+      sendLaterPresets = presets(now);
+      sendAtMin = toDatetimeLocal(now);
+    }
+  }
 
   onMount(() => {
     let unlisten: (() => void) | undefined;
@@ -199,6 +222,23 @@
       queueing = false;
     }
   }
+
+  /** Send Later: park the message in the backend until `at` (unix seconds)
+   * and close, mirroring submit's validate-then-close flow. */
+  async function schedule(at: number) {
+    if (queueing || accountId === null) return;
+    queueing = true;
+    error = null;
+    try {
+      await scheduleSend(buildMessage(accountId), at);
+      await closeCompose();
+    } catch (err) {
+      error = String(err);
+      showSendLater = false;
+    } finally {
+      queueing = false;
+    }
+  }
 </script>
 
 <form
@@ -211,6 +251,29 @@
        lights (title bar overlay) and doubles as the window drag handle.
        Closing goes through the red traffic light — no extra ✕ here. -->
   <header class="toolbar" data-tauri-drag-region>
+    <button
+      type="button"
+      class="icon"
+      class:active={showSendLater}
+      aria-label="Send later"
+      title="Send later"
+      onclick={toggleSendLater}
+      disabled={queueing || accountId === null}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3 2" />
+      </svg>
+    </button>
     <button
       type="submit"
       class="icon send"
@@ -233,6 +296,40 @@
       </svg>
     </button>
   </header>
+
+  {#if showSendLater}
+    <!-- Floating panel under the toolbar, Apple Mail's "Send Later" pattern:
+         a couple of sensible presets plus an exact date-time picker. -->
+    <div class="send-later" role="dialog" aria-label="Send later options">
+      {#each sendLaterPresets as preset (preset.label)}
+        <button
+          type="button"
+          class="preset"
+          onclick={() => schedule(Math.floor(preset.date.getTime() / 1000))}
+          disabled={queueing}
+        >
+          {preset.label}
+        </button>
+      {/each}
+      <div class="custom">
+        <input
+          type="datetime-local"
+          aria-label="Send at"
+          bind:value={sendAt}
+          min={sendAtMin}
+          disabled={queueing}
+        />
+        <button
+          type="button"
+          class="confirm"
+          onclick={() => schedule(toEpochSeconds(sendAt))}
+          disabled={queueing || sendAt === ""}
+        >
+          Schedule
+        </button>
+      </div>
+    </div>
+  {/if}
 
   <!-- Canary-style envelope fields: quiet label + borderless input rows
        divided by hairlines, subject as a bold standalone line. -->
@@ -370,6 +467,82 @@
 
   .icon.send {
     color: var(--accent);
+  }
+
+  .icon.active {
+    background: var(--bg-hover);
+    color: var(--accent);
+  }
+
+  /* Send-later popover: floats under the toolbar, aligned to its right
+     edge, above the envelope fields. */
+  .send-later {
+    position: absolute;
+    top: 44px;
+    right: 10px;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    background: var(--bg-window);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  }
+
+  .send-later .preset {
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .send-later .preset:hover {
+    background: var(--bg-hover);
+  }
+
+  .send-later .custom {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--hairline);
+  }
+
+  .send-later input[type="datetime-local"] {
+    flex: none;
+    padding: 3px 6px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: transparent;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-primary);
+  }
+
+  .send-later .confirm {
+    padding: 4px 10px;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: #ffffff;
+    cursor: pointer;
+  }
+
+  .send-later .preset:disabled,
+  .send-later .confirm:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 
   .icon:disabled {

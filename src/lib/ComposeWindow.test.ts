@@ -56,6 +56,7 @@ vi.mock("./api", () => ({
   listAccounts: vi.fn(async () => accounts),
   takeComposeDraft: vi.fn(async (): Promise<OutgoingMessage | null> => null),
   queueSend: vi.fn(async (): Promise<void> => undefined),
+  scheduleSend: vi.fn(async (): Promise<void> => undefined),
   closeCompose: vi.fn(async (): Promise<void> => undefined),
   saveDraft: vi.fn(async (): Promise<string> => "draft-id-1@flit.local"),
   inspectAttachments: vi.fn(async (paths: string[]) =>
@@ -403,4 +404,51 @@ it("does not snapshot a sent message back into drafts on close", async () => {
 
   expect(preventDefault).not.toHaveBeenCalled();
   expect(api.saveDraft).not.toHaveBeenCalled();
+});
+
+it("schedules the message for a custom time and closes", async () => {
+  await renderLoaded();
+
+  await fireEvent.click(screen.getByRole("button", { name: "Send later" }));
+  await fireEvent.input(screen.getByLabelText("Send at"), {
+    target: { value: "2099-01-01T09:30" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+
+  await waitFor(() =>
+    expect(api.scheduleSend).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: 1, to: "bob@example.com" }),
+      Math.floor(new Date(2099, 0, 1, 9, 30).getTime() / 1000),
+    ),
+  );
+  await waitFor(() => expect(api.closeCompose).toHaveBeenCalled());
+});
+
+it("offers presets that schedule a future time", async () => {
+  await renderLoaded();
+
+  await fireEvent.click(screen.getByRole("button", { name: "Send later" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Tomorrow 8:00" }));
+
+  await waitFor(() => expect(api.scheduleSend).toHaveBeenCalled());
+  const [, scheduledAt] = vi.mocked(api.scheduleSend).mock.calls[0];
+  expect(scheduledAt).toBeGreaterThan(Date.now() / 1000);
+});
+
+it("shows the failure and stays open when scheduling fails", async () => {
+  vi.mocked(api.scheduleSend).mockRejectedValueOnce(
+    "scheduled time is in the past",
+  );
+  await renderLoaded();
+
+  await fireEvent.click(screen.getByRole("button", { name: "Send later" }));
+  await fireEvent.input(screen.getByLabelText("Send at"), {
+    target: { value: "2099-01-01T09:30" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "scheduled time is in the past",
+  );
+  expect(api.closeCompose).not.toHaveBeenCalled();
 });
