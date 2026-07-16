@@ -131,6 +131,22 @@ impl RemoteImagePolicy {
     }
 }
 
+/// One attachment of a cached message — metadata only. The bytes stay on
+/// the server and are re-fetched by part_index when the user saves the file.
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageAttachment {
+    pub id: i64,
+    pub message_id: i64,
+    /// Position in mail-parser's attachment enumeration of the raw message.
+    pub part_index: i64,
+    pub filename: String,
+    /// Full MIME type ("application/pdf").
+    pub content_type: String,
+    /// Decoded size in bytes, for display.
+    pub size: i64,
+}
+
 /// Body payload for the message viewer. `html`, when present, is already a
 /// full sanitized srcdoc document (mail::sanitize) — never raw mail HTML.
 #[derive(Debug, Clone, Serialize)]

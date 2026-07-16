@@ -1,8 +1,8 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::mail::parse::{snippet_of, InlineImage};
-use crate::models::MessageHeader;
+use crate::mail::parse::{snippet_of, AttachmentMeta, InlineImage};
+use crate::models::{MessageAttachment, MessageHeader};
 
 /// Header data as it arrives from an IMAP fetch, before it has a row id.
 #[derive(Debug, Clone)]
@@ -154,11 +154,15 @@ pub struct BodyRow {
     pub uid: i64,
     pub body_text: Option<String>,
     pub body_html: Option<String>,
+    /// False for bodies cached before attachment metadata existed — the
+    /// next open refetches once to harvest it.
+    pub attachments_scanned: bool,
 }
 
 pub async fn get_body(pool: &SqlitePool, message_id: i64) -> Result<BodyRow, AppError> {
     let row = sqlx::query_as(
-        "SELECT account_id, mailbox, uid, body_text, body_html FROM messages WHERE id = ?",
+        "SELECT account_id, mailbox, uid, body_text, body_html, attachments_scanned
+         FROM messages WHERE id = ?",
     )
     .bind(message_id)
     .fetch_one(pool)
@@ -179,14 +183,20 @@ pub async fn set_body(
     html: Option<&str>,
     snippet: &str,
     images: &[InlineImage],
+    attachments: &[AttachmentMeta],
 ) -> Result<(), AppError> {
-    sqlx::query("UPDATE messages SET body_text = ?, body_html = ?, snippet = ? WHERE id = ?")
-        .bind(text.unwrap_or(""))
-        .bind(html)
-        .bind(snippet)
-        .bind(message_id)
-        .execute(pool)
-        .await?;
+    // why attachments_scanned = 1: this body was parsed by a build that
+    // harvests attachment metadata, so no rescan is ever needed for it.
+    sqlx::query(
+        "UPDATE messages SET body_text = ?, body_html = ?, snippet = ?,
+                             attachments_scanned = 1 WHERE id = ?",
+    )
+    .bind(text.unwrap_or(""))
+    .bind(html)
+    .bind(snippet)
+    .bind(message_id)
+    .execute(pool)
+    .await?;
     // why: images live inside set_body, not a separate call — one write path
     // means a cached body can never drift apart from its cid images.
     sqlx::query("DELETE FROM message_images WHERE message_id = ?")
@@ -205,7 +215,55 @@ pub async fn set_body(
         .execute(pool)
         .await?;
     }
+    // Same reasoning: attachment metadata always mirrors the cached body.
+    sqlx::query("DELETE FROM message_attachments WHERE message_id = ?")
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    for attachment in attachments {
+        sqlx::query(
+            "INSERT INTO message_attachments (message_id, part_index, filename, content_type, size)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(message_id)
+        .bind(attachment.part_index)
+        .bind(&attachment.filename)
+        .bind(&attachment.content_type)
+        .bind(attachment.size)
+        .execute(pool)
+        .await?;
+    }
     Ok(())
+}
+
+/// Attachment metadata of one cached message, in part order.
+pub async fn attachments(
+    pool: &SqlitePool,
+    message_id: i64,
+) -> Result<Vec<MessageAttachment>, AppError> {
+    let rows = sqlx::query_as(
+        "SELECT id, message_id, part_index, filename, content_type, size
+         FROM message_attachments WHERE message_id = ? ORDER BY part_index",
+    )
+    .bind(message_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// One attachment row by id — what the save commands start from.
+pub async fn attachment(
+    pool: &SqlitePool,
+    attachment_id: i64,
+) -> Result<MessageAttachment, AppError> {
+    let row = sqlx::query_as(
+        "SELECT id, message_id, part_index, filename, content_type, size
+         FROM message_attachments WHERE id = ?",
+    )
+    .bind(attachment_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
 }
 
 /// The cid: images cached for one message, for resolving `src="cid:..."`
@@ -563,7 +621,9 @@ mod tests {
         let row_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
 
         // e.g. an attachment-only message: the parser yields no text or html.
-        set_body(&pool, row_id, None, None, "", &[]).await.unwrap();
+        set_body(&pool, row_id, None, None, "", &[], &[])
+            .await
+            .unwrap();
 
         // Without this, the prefetcher would re-download it on every sync.
         assert!(!has_missing_bodies(&pool, id).await.unwrap());
@@ -590,7 +650,7 @@ mod tests {
         assert!(has_missing_bodies(&pool, id).await.unwrap());
 
         let row_id = list(&pool, Some(id), "Archive").await.unwrap()[0].id;
-        set_body(&pool, row_id, Some("text"), None, "text", &[])
+        set_body(&pool, row_id, Some("text"), None, "text", &[], &[])
             .await
             .unwrap();
         assert!(!has_missing_bodies(&pool, id).await.unwrap());
@@ -619,7 +679,7 @@ mod tests {
             .find(|m| m.subject == "Cached")
             .unwrap()
             .id;
-        set_body(&pool, cached_id, Some("text"), None, "text", &[])
+        set_body(&pool, cached_id, Some("text"), None, "text", &[], &[])
             .await
             .unwrap();
 
@@ -659,6 +719,7 @@ mod tests {
             Some("<p>html body</p>"),
             "plain body",
             &[],
+            &[],
         )
         .await
         .unwrap();
@@ -689,7 +750,7 @@ mod tests {
             content_type: "image/png".to_string(),
             data: b"\x89PNG".to_vec(),
         };
-        set_body(&pool, message_id, None, Some("<img>"), "", &[photo])
+        set_body(&pool, message_id, None, Some("<img>"), "", &[photo], &[])
             .await
             .unwrap();
 
@@ -700,7 +761,7 @@ mod tests {
         assert_eq!(stored[0].data, b"\x89PNG");
 
         // A re-fetched body replaces its images instead of stacking them.
-        set_body(&pool, message_id, None, Some("<p>plain</p>"), "", &[])
+        set_body(&pool, message_id, None, Some("<p>plain</p>"), "", &[], &[])
             .await
             .unwrap();
         assert_eq!(images(&pool, message_id).await.unwrap(), Vec::new());
@@ -717,11 +778,127 @@ mod tests {
                 content_type: "image/jpeg".to_string(),
                 data: b"JJ".to_vec(),
             }],
+            &[],
         )
         .await
         .unwrap();
         delete_by_id(&pool, message_id).await.unwrap();
         let orphans: i64 = sqlx::query_scalar("SELECT count(*) FROM message_images")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(orphans, 0);
+    }
+
+    #[tokio::test]
+    async fn set_body_stores_attachment_metadata_and_marks_the_scan() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "Files", "2026-07-08T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        let message_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+
+        // Cached before any body arrived: nothing scanned, nothing listed.
+        assert!(
+            !get_body(&pool, message_id)
+                .await
+                .unwrap()
+                .attachments_scanned
+        );
+        assert_eq!(attachments(&pool, message_id).await.unwrap(), Vec::new());
+
+        let pdf = AttachmentMeta {
+            part_index: 2,
+            filename: "report.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            size: 1234,
+        };
+        set_body(
+            &pool,
+            message_id,
+            Some("see file"),
+            None,
+            "see file",
+            &[],
+            &[pdf],
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            get_body(&pool, message_id)
+                .await
+                .unwrap()
+                .attachments_scanned
+        );
+        let stored = attachments(&pool, message_id).await.unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].message_id, message_id);
+        assert_eq!(stored[0].part_index, 2);
+        assert_eq!(stored[0].filename, "report.pdf");
+        assert_eq!(stored[0].content_type, "application/pdf");
+        assert_eq!(stored[0].size, 1234);
+
+        // The row is addressable by id (what the save commands look up)…
+        let by_id = attachment(&pool, stored[0].id).await.unwrap();
+        assert_eq!(by_id.filename, "report.pdf");
+        assert!(attachment(&pool, 9999).await.is_err());
+
+        // …a re-fetched body replaces the list instead of stacking it…
+        set_body(
+            &pool,
+            message_id,
+            Some("see file"),
+            None,
+            "see file",
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(attachments(&pool, message_id).await.unwrap(), Vec::new());
+
+        // …and a body with none still counts as scanned (no rescan loop).
+        assert!(
+            get_body(&pool, message_id)
+                .await
+                .unwrap()
+                .attachments_scanned
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_a_message_cascades_its_attachments() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "Files", "2026-07-08T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        let message_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+        let meta = AttachmentMeta {
+            part_index: 0,
+            filename: "a.zip".to_string(),
+            content_type: "application/zip".to_string(),
+            size: 10,
+        };
+        set_body(&pool, message_id, None, None, "", &[], &[meta])
+            .await
+            .unwrap();
+
+        delete_by_id(&pool, message_id).await.unwrap();
+
+        let orphans: i64 = sqlx::query_scalar("SELECT count(*) FROM message_attachments")
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -817,6 +994,7 @@ mod tests {
             Some("Just prose here"),
             None,
             "Just prose here",
+            &[],
             &[],
         )
         .await
