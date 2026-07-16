@@ -60,6 +60,21 @@ pub struct OutgoingMessage {
     pub subject: String,
     /// Plain text only for now — no HTML composing.
     pub body: String,
+    /// Files attached by the user. Only paths travel through the app; the
+    /// bytes are read from disk when the MIME message is built.
+    #[serde(default)]
+    pub attachments: Vec<AttachmentRef>,
+}
+
+/// One file attached to an outgoing message, referenced by path so drafts
+/// (undo, failed sends) stay tiny and re-openable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentRef {
+    /// Absolute path on the local disk.
+    pub path: String,
+    /// Filename shown to recipients — the path's final component.
+    pub name: String,
 }
 
 /// How the viewer treats remote (http/https) images in mail bodies.

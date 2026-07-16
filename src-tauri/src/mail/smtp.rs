@@ -4,12 +4,12 @@
 use std::time::Duration;
 
 use lettre::message::header::ContentType;
-use lettre::message::{Mailbox, Mailboxes};
+use lettre::message::{Attachment, Mailbox, Mailboxes, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 use crate::error::AppError;
-use crate::models::OutgoingMessage;
+use crate::models::{AttachmentRef, OutgoingMessage};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 // why: a send uploads the whole message after connecting, so it gets more
@@ -54,6 +54,20 @@ pub fn server_saves_sent_copy(smtp_host: &str) -> bool {
         || host.ends_with(".googlemail.com")
 }
 
+/// Most providers cap incoming messages around 25 MB; failing above that
+/// locally beats an opaque server rejection after the upload.
+const MAX_ATTACHMENT_TOTAL: usize = 25 * 1024 * 1024;
+
+/// Reject attachment payloads the receiving server would bounce anyway.
+fn ensure_attachment_budget(total: usize) -> Result<(), AppError> {
+    if total > MAX_ATTACHMENT_TOTAL {
+        return Err(AppError::Smtp(
+            "attachments exceed the 25 MB limit".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Parse one comma-separated address list; empty input is an empty list.
 fn parse_recipients(list: &str, field: &str) -> Result<Vec<Mailbox>, AppError> {
     if list.trim().is_empty() {
@@ -82,10 +96,7 @@ pub async fn build_message(
         return Err(AppError::Smtp("no recipient given".to_string()));
     }
 
-    let mut builder = Message::builder()
-        .from(from)
-        .subject(&outgoing.subject)
-        .header(ContentType::TEXT_PLAIN);
+    let mut builder = Message::builder().from(from).subject(&outgoing.subject);
     // why: .to()/.cc()/.bcc() append to their header on every call —
     // lettre's way of setting multiple recipients without hand-building
     // the header.
@@ -102,9 +113,42 @@ pub async fn build_message(
     for recipient in parse_recipients(&outgoing.bcc, "bcc")? {
         builder = builder.bcc(recipient);
     }
+
+    if outgoing.attachments.is_empty() {
+        return builder
+            .header(ContentType::TEXT_PLAIN)
+            .body(outgoing.body.clone())
+            .map_err(|e| AppError::Smtp(e.to_string()));
+    }
+
+    // multipart/mixed: the typed text first, then one part per file.
+    let mut parts = MultiPart::mixed().singlepart(SinglePart::plain(outgoing.body.clone()));
+    let mut total = 0usize;
+    for attachment in &outgoing.attachments {
+        parts = parts.singlepart(load_attachment(attachment, &mut total).await?);
+    }
     builder
-        .body(outgoing.body.clone())
+        .multipart(parts)
         .map_err(|e| AppError::Smtp(e.to_string()))
+}
+
+/// Read one attachment from disk into a MIME part, keeping the running
+/// size total honest against the budget.
+async fn load_attachment(
+    attachment: &AttachmentRef,
+    total: &mut usize,
+) -> Result<SinglePart, AppError> {
+    let bytes = tokio::fs::read(&attachment.path)
+        .await
+        .map_err(|e| AppError::Smtp(format!("cannot read attachment {}: {e}", attachment.name)))?;
+    *total += bytes.len();
+    ensure_attachment_budget(*total)?;
+    // why guess from `name`, not `path`: the recipient only ever sees the
+    // filename, so the advertised type must match what they can see.
+    let mime = mime_guess::from_path(&attachment.name).first_or_octet_stream();
+    let content_type = ContentType::parse(mime.essence_str())
+        .map_err(|e| AppError::Smtp(format!("bad content type for {}: {e}", attachment.name)))?;
+    Ok(Attachment::new(attachment.name.clone()).body(bytes, content_type))
 }
 
 /// Send one built message through the account's SMTP server.
@@ -181,6 +225,17 @@ mod tests {
             bcc: String::new(),
             subject: "Hello".to_string(),
             body: "Hi there".to_string(),
+            attachments: Vec::new(),
+        }
+    }
+
+    /// Write a unique temp file and return an AttachmentRef pointing at it.
+    fn temp_attachment(name: &str, contents: &[u8]) -> AttachmentRef {
+        let path = std::env::temp_dir().join(format!("flit-smtp-test-{name}"));
+        std::fs::write(&path, contents).unwrap();
+        AttachmentRef {
+            path: path.to_string_lossy().into_owned(),
+            name: name.to_string(),
         }
     }
 
@@ -244,6 +299,68 @@ mod tests {
             .collect();
         assert!(envelope.contains(&"hidden@example.com".to_string()));
         assert!(envelope.contains(&"alice@example.com".to_string()));
+    }
+
+    #[tokio::test]
+    async fn plain_messages_stay_single_part() {
+        let message = build_message("domco@example.com", &outgoing("alice@example.com"))
+            .await
+            .unwrap();
+
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(!raw.contains("multipart/mixed"));
+    }
+
+    #[tokio::test]
+    async fn attachments_produce_a_multipart_mixed_message() {
+        // Non-ASCII bytes force lettre's encoder to base64, so the exact
+        // transported form is predictable.
+        let contents: &[u8] = b"%PDF-1.4\x00\xff binary";
+        let mut out = outgoing("alice@example.com");
+        out.attachments = vec![temp_attachment("report.pdf", contents)];
+
+        let message = build_message("domco@example.com", &out).await.unwrap();
+
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(raw.contains("multipart/mixed"));
+        assert!(raw.contains("Content-Disposition: attachment; filename=\"report.pdf\""));
+        assert!(raw.contains("application/pdf"));
+        // The typed text still travels alongside the attachment…
+        assert!(raw.contains("Hi there"));
+        // …and the file bytes go out base64-encoded.
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(contents);
+        assert!(raw.contains(&encoded));
+    }
+
+    #[tokio::test]
+    async fn unknown_extensions_fall_back_to_octet_stream() {
+        let mut out = outgoing("alice@example.com");
+        out.attachments = vec![temp_attachment("data.flitblob", b"\x00\x01\x02")];
+
+        let message = build_message("domco@example.com", &out).await.unwrap();
+
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(raw.contains("application/octet-stream"));
+    }
+
+    #[tokio::test]
+    async fn missing_attachment_file_fails_the_build() {
+        let mut out = outgoing("alice@example.com");
+        out.attachments = vec![AttachmentRef {
+            path: "/nonexistent/flit/gone.txt".to_string(),
+            name: "gone.txt".to_string(),
+        }];
+
+        let err = build_message("domco@example.com", &out).await.unwrap_err();
+
+        assert!(err.to_string().contains("gone.txt"));
+    }
+
+    #[test]
+    fn attachment_budget_has_a_hard_ceiling() {
+        assert!(ensure_attachment_budget(MAX_ATTACHMENT_TOTAL).is_ok());
+        assert!(ensure_attachment_budget(MAX_ATTACHMENT_TOTAL + 1).is_err());
     }
 
     #[tokio::test]

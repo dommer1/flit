@@ -29,8 +29,9 @@ keyring = "4"
 thiserror = "2"
 # why: rt is needed for task::spawn_blocking (keychain calls are sync and must
 # not block the async executor); net/time for IMAP TCP connects with timeouts;
-# macros is compile-time only (#[tokio::test]).
-tokio = { version = "1", features = ["rt", "macros", "net", "time"] }
+# fs for reading attachment files without blocking; macros is compile-time
+# only (#[tokio::test]).
+tokio = { version = "1", features = ["rt", "macros", "net", "time", "fs"] }
 # why: async-imap defaults to async-std — runtime-tokio must be selected
 # explicitly. It has no TLS of its own; async-native-tls wraps the TCP stream
 # first (macOS SecureTransport, so system cert store just works).
@@ -50,6 +51,9 @@ lettre = { version = "0.11", default-features = false, features = [
 # why: NSVisualEffectView behind the webview — the translucent "glass"
 # sidebar of native macOS apps; pure decoration, no data access.
 window-vibrancy = "0.7.1"
+# why: attachment Content-Type comes from the filename extension; recipients'
+# clients pick preview/open behavior from it.
+mime_guess = "2"
 utf7-imap = "0.3.2"
 base64 = "0.22.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["native-tls"] }
