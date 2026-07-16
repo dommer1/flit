@@ -195,6 +195,31 @@ impl RemoteImagePolicy {
     }
 }
 
+/// Global new-mail notification defaults plus the background poll cadence.
+/// Per-account overrides live on the accounts table; NULL there = inherit
+/// these values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationSettings {
+    /// Master switch for new-mail notifications.
+    pub enabled: bool,
+    /// "default" = the system notification sound, "none" = silent banner,
+    /// anything else = a macOS sound name such as "Ping".
+    pub sound: String,
+    /// Minutes between background new-mail checks; 0 = manual sync only.
+    pub sync_interval_minutes: i64,
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sound: "default".to_string(),
+            sync_interval_minutes: 3,
+        }
+    }
+}
+
 /// One autocomplete suggestion for a compose recipient field — an address
 /// harvested from cached or sent mail (see storage::contacts).
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
