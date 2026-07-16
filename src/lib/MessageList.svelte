@@ -109,16 +109,20 @@
           class:unread={!message.read}
           onclick={() => onSelect(message.id)}
         >
-          <span
-            class="account-bar"
-            aria-hidden="true"
-            style:background={color ?? "transparent"}
-          ></span>
           <span class="dot" aria-hidden="true"></span>
           <span class="content">
             <span class="row">
               <span class="from">{senderName(message.from)}</span>
-              <span class="date">{formatListDate(message.date)}</span>
+              <span class="end">
+                {#if color}
+                  <span
+                    class="account-dot"
+                    aria-hidden="true"
+                    style:background={color}
+                  ></span>
+                {/if}
+                <span class="date">{formatListDate(message.date)}</span>
+              </span>
             </span>
             <span class="subject">{message.subject}</span>
             <span class="snippet">{message.snippet}</span>
@@ -281,16 +285,6 @@
     color: var(--accent-text);
   }
 
-  /* A thin accent spine on the left, colored per account (transparent when
-     the account has no color, so rows stay aligned either way). */
-  .account-bar {
-    flex-shrink: 0;
-    align-self: stretch;
-    width: 3px;
-    margin-right: 5px;
-    border-radius: 2px;
-  }
-
   .dot {
     flex-shrink: 0;
     width: 8px;
@@ -327,6 +321,21 @@
     font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Right end of the top row: a small account-color dot next to the date. */
+  .end {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+
+  .account-dot {
+    width: 6px;
+    height: 6px;
+    flex-shrink: 0;
+    border-radius: 50%;
   }
 
   .date {
