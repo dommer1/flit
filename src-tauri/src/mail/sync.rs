@@ -38,14 +38,26 @@ pub fn plan(stored_validity: Option<i64>, server_validity: i64, last_uid: Option
     }
 }
 
+/// One message a sync discovered as genuinely new — the payload a new-mail
+/// notification is built from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewMail {
+    pub from: String,
+    pub subject: String,
+}
+
 /// One full sync pass for an account: discover folders, mirror them into
 /// the mailboxes table, then sync each folder over the same connection.
 /// Folders run in sidebar order, so INBOX is fresh before slower ones.
+///
+/// Returns the new unread inbox messages this pass brought in — only those
+/// can warrant a notification. Initial and reset fetches report nothing:
+/// a freshly added account must not fire fifty notifications at once.
 pub async fn sync_account(
     pool: &SqlitePool,
     account: &Account,
     password: &str,
-) -> Result<(), AppError> {
+) -> Result<Vec<NewMail>, AppError> {
     let mut session = imap::connect(
         &account.imap_host,
         account.imap_port,
@@ -57,20 +69,39 @@ pub async fn sync_account(
     let found = imap::list_mailboxes(&mut session).await?;
     crate::storage::mailboxes::replace(pool, account.id, &found).await?;
 
+    let mut new_mail = Vec::new();
     for mailbox in crate::storage::mailboxes::list(pool, account.id).await? {
-        sync_mailbox(pool, account.id, &mut session, &mailbox.name).await?;
+        let fetched = sync_mailbox(pool, account.id, &mut session, &mailbox.name).await?;
+        if mailbox.role.as_deref() == Some("inbox") {
+            new_mail.extend(notifiable(&fetched));
+        }
     }
     let _ = session.logout().await;
-    Ok(())
+    Ok(new_mail)
+}
+
+/// The headers that deserve a notification: unread ones, as payloads.
+fn notifiable(headers: &[FetchedHeader]) -> Vec<NewMail> {
+    headers
+        .iter()
+        .filter(|header| !header.read)
+        .map(|header| NewMail {
+            from: header.from.clone(),
+            subject: header.subject.clone(),
+        })
+        .collect()
 }
 
 /// Sync one folder on an already-open session: decide, fetch, upsert.
+/// Returns the fetched headers when the plan was incremental — exactly the
+/// messages that were not cached before; other plans return nothing (their
+/// fetches mostly re-cover mail the user has already seen).
 async fn sync_mailbox(
     pool: &SqlitePool,
     account_id: i64,
     session: &mut imap::ImapSession,
     mailbox: &str,
-) -> Result<(), AppError> {
+) -> Result<Vec<FetchedHeader>, AppError> {
     let selected = session
         .select(mailbox)
         .await
@@ -80,7 +111,9 @@ async fn sync_mailbox(
     let stored = messages::stored_uid_validity(pool, account_id, mailbox).await?;
     let last_uid = messages::max_uid(pool, account_id, mailbox).await?;
 
-    let raw = match plan(stored, server_validity, last_uid) {
+    let sync_plan = plan(stored, server_validity, last_uid);
+    let incremental = matches!(sync_plan, SyncPlan::Incremental { .. });
+    let raw = match sync_plan {
         SyncPlan::ResetThenInitial => {
             messages::clear_mailbox(pool, account_id, mailbox).await?;
             initial_fetch(session, selected.exists).await?
@@ -107,7 +140,7 @@ async fn sync_mailbox(
     for (id, read) in plan.flag {
         messages::set_read(pool, id, read).await?;
     }
-    Ok(())
+    Ok(if incremental { headers } else { Vec::new() })
 }
 
 /// What reconciliation must change locally: rows to drop (the message left
@@ -328,6 +361,43 @@ mod tests {
         let sizes = [(101, 10_000), (102, 999_999)];
 
         assert_eq!(prefetch_plan(&missing, &sizes, 262_144), vec![(1, 101)]);
+    }
+
+    #[test]
+    fn notifiable_keeps_only_unread_headers() {
+        let make = |from: &str, subject: &str, read: bool| FetchedHeader {
+            uid: 1,
+            uid_validity: 7,
+            from: from.to_string(),
+            to: String::new(),
+            cc: String::new(),
+            reply_to: String::new(),
+            subject: subject.to_string(),
+            date: String::new(),
+            snippet: String::new(),
+            read,
+        };
+        let headers = [
+            make("Alice <alice@example.com>", "Hello", false),
+            make("Bob <bob@example.com>", "Read elsewhere", true),
+            make("Cara <cara@example.com>", "Second", false),
+        ];
+
+        let new_mail = notifiable(&headers);
+
+        assert_eq!(
+            new_mail,
+            vec![
+                NewMail {
+                    from: "Alice <alice@example.com>".to_string(),
+                    subject: "Hello".to_string(),
+                },
+                NewMail {
+                    from: "Cara <cara@example.com>".to_string(),
+                    subject: "Second".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]

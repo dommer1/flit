@@ -82,8 +82,8 @@ pub async fn sync_account(
     // written to state beyond the cache, events, or logs.
     let result = async {
         let password = state.password(account_id).await?;
-        mail::sync::sync_account(&state.pool, &account, &password).await?;
-        Ok::<String, AppError>(password)
+        let new_mail = mail::sync::sync_account(&state.pool, &account, &password).await?;
+        Ok::<(String, Vec<mail::sync::NewMail>), AppError>((password, new_mail))
     }
     .await;
 
@@ -94,7 +94,7 @@ pub async fn sync_account(
         .await?;
     app.emit("accounts-changed", ())?;
 
-    let password = result?;
+    let (password, _new_mail) = result?;
     app.emit("messages-changed", account_id)?;
 
     // why: bodies download in the background AFTER the command returns — the
