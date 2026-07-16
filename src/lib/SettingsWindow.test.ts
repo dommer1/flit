@@ -51,6 +51,11 @@ vi.mock("./api", () => ({
   onAccountsChanged: vi.fn(async () => () => {}),
   getRemoteImagePolicy: vi.fn(async () => "ask"),
   setRemoteImagePolicy: vi.fn(async () => undefined),
+  getSwipeActions: vi.fn(async () => ({
+    left: "archive",
+    right: "toggleRead",
+  })),
+  setSwipeActions: vi.fn(async () => undefined),
 }));
 
 import * as api from "./api";
@@ -189,6 +194,33 @@ it("saves a remote-image policy change", async () => {
   await fireEvent.click(screen.getByLabelText("Always load"));
 
   expect(api.setRemoteImagePolicy).toHaveBeenCalledWith("always");
+});
+
+it("shows the stored swipe actions on the swipes tab", async () => {
+  vi.mocked(api.getSwipeActions).mockResolvedValueOnce({
+    left: "trash",
+    right: "reply",
+  });
+  render(SettingsWindow);
+  await screen.findByText("imap.example.com:993");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Swipes" }));
+
+  expect(await screen.findByLabelText("Swipe left")).toHaveValue("trash");
+  expect(screen.getByLabelText("Swipe right")).toHaveValue("reply");
+});
+
+it("saves a swipe action change", async () => {
+  render(SettingsWindow);
+  await fireEvent.click(screen.getByRole("button", { name: "Swipes" }));
+  const left = await screen.findByLabelText("Swipe left");
+
+  await fireEvent.change(left, { target: { value: "reply" } });
+
+  expect(api.setSwipeActions).toHaveBeenCalledWith({
+    left: "reply",
+    right: "toggleRead",
+  });
 });
 
 it("closes the window on escape", async () => {

@@ -6,13 +6,22 @@
     confirmAccountDeletion,
     deleteAccount,
     getRemoteImagePolicy,
+    getSwipeActions,
     listAccounts,
     onAccountsChanged,
     setAccountColor,
     setRemoteImagePolicy,
+    setSwipeActions,
     testConnection,
   } from "./api";
-  import type { Account, NewAccount, RemoteImagePolicy } from "./types";
+  import { DEFAULT_SWIPE_ACTIONS } from "./swipe";
+  import type {
+    Account,
+    NewAccount,
+    RemoteImagePolicy,
+    SwipeAction,
+    SwipeActions,
+  } from "./types";
   import AccountsPane from "./AccountsPane.svelte";
   import SignaturesPane from "./SignaturesPane.svelte";
 
@@ -35,10 +44,21 @@
       },
     ];
 
+  const SWIPE_OPTIONS: { value: SwipeAction; label: string }[] = [
+    { value: "none", label: "None" },
+    { value: "toggleRead", label: "Mark Read / Unread" },
+    { value: "archive", label: "Archive" },
+    { value: "trash", label: "Trash" },
+    { value: "reply", label: "Reply" },
+  ];
+
   let accounts = $state<Account[]>([]);
   let lastError = $state<string | null>(null);
-  let tab = $state<"accounts" | "signatures" | "privacy">("accounts");
+  let tab = $state<"accounts" | "signatures" | "swipes" | "privacy">(
+    "accounts",
+  );
   let policy = $state<RemoteImagePolicy>("ask");
+  let swipes = $state<SwipeActions>(DEFAULT_SWIPE_ACTIONS);
 
   async function refresh() {
     accounts = await listAccounts();
@@ -96,6 +116,19 @@
     }
   }
 
+  async function selectSwipe(side: "left" | "right", action: SwipeAction) {
+    lastError = null;
+    const previous = swipes;
+    swipes = { ...previous, [side]: action };
+    try {
+      await setSwipeActions(swipes);
+    } catch (err) {
+      // why: the select must not lie — a failed save rolls the value back.
+      swipes = previous;
+      lastError = String(err);
+    }
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") void closeSettings();
   }
@@ -103,6 +136,7 @@
   onMount(() => {
     void refresh();
     void getRemoteImagePolicy().then((stored) => (policy = stored));
+    void getSwipeActions().then((stored) => (swipes = stored));
     // why: refreshes also cover changes made elsewhere (a future main-window
     // action, another settings session) — the backend broadcasts the event.
     const unlisten = onAccountsChanged(() => void refresh());
@@ -132,6 +166,13 @@
     </button>
     <button
       class="tab"
+      class:active={tab === "swipes"}
+      onclick={() => (tab = "swipes")}
+    >
+      Swipes
+    </button>
+    <button
+      class="tab"
       class:active={tab === "privacy"}
       onclick={() => (tab = "privacy")}
     >
@@ -148,6 +189,34 @@
     />
   {:else if tab === "signatures"}
     <SignaturesPane {accounts} />
+  {:else if tab === "swipes"}
+    <section class="swipes">
+      <fieldset>
+        <legend>Swipe actions in the message list</legend>
+        <p class="explain">
+          What a two-finger swipe on a message row does. Pick None to turn a
+          direction off.
+        </p>
+        {#each [{ side: "left", label: "Swipe left" }, { side: "right", label: "Swipe right" }] as const as row (row.side)}
+          <div class="swipe-setting">
+            <label for="swipe-{row.side}">{row.label}</label>
+            <select
+              id="swipe-{row.side}"
+              value={swipes[row.side]}
+              onchange={(e) =>
+                void selectSwipe(
+                  row.side,
+                  e.currentTarget.value as SwipeAction,
+                )}
+            >
+              {#each SWIPE_OPTIONS as option (option.value)}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </div>
+        {/each}
+      </fieldset>
+    </section>
   {:else}
     <section class="privacy">
       <fieldset>
@@ -215,9 +284,26 @@
     font-weight: 600;
   }
 
-  .privacy {
+  .privacy,
+  .swipes {
     padding: 1rem 1.25rem;
     overflow-y: auto;
+  }
+
+  .swipe-setting {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.375rem 0;
+  }
+
+  .swipe-setting label {
+    width: 6.5rem;
+  }
+
+  .swipe-setting select {
+    min-width: 11rem;
+    font: inherit;
   }
 
   fieldset {
