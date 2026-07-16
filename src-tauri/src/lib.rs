@@ -3,6 +3,7 @@ mod commands;
 pub mod error;
 pub mod mail;
 mod models;
+mod scheduler;
 pub mod state;
 pub mod storage;
 
@@ -22,6 +23,10 @@ pub fn run() {
             // then assume the pool always exists in state.
             let pool = tauri::async_runtime::block_on(storage::init(&data_dir.join("flit.db")))?;
             app.manage(AppState::new(pool));
+
+            // The send-later scheduler: delivers parked messages when their
+            // time comes; runs for the whole life of the app.
+            scheduler::spawn(app.handle().clone());
 
             // why: the main window is transparent (tauri.conf.json) and this
             // NSVisualEffectView provides the actual backdrop — the frontend

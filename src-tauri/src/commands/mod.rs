@@ -274,7 +274,7 @@ async fn push_seen_flag(
     result
 }
 
-fn now_epoch() -> i64 {
+pub(crate) fn now_epoch() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -455,6 +455,41 @@ fn validate_scheduled_at(scheduled_at: i64, now: i64) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+/// Deliver a message the scheduler claimed, with the same badge events and
+/// failure recovery (reopen as a draft window) as the undo queue — minus the
+/// undo window, which already passed when the user picked a time.
+pub(crate) async fn deliver_scheduled(app: &AppHandle, message: OutgoingMessage) {
+    let id = SEND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let subject = message.subject.clone();
+    let _ = app.emit(
+        "send-queued",
+        SendEvent {
+            id,
+            subject: subject.clone(),
+            error: None,
+            undo_ms: 0,
+        },
+    );
+    let error = deliver(&app.state::<AppState>(), &message).await.err();
+    if let Some(err) = &error {
+        eprintln!("scheduled send {id} failed: {err}");
+        // why: a failed send must never destroy mail — same contract as the
+        // undo queue's failure path.
+        if let Err(reopen) = open_compose_window(app, message).await {
+            eprintln!("failed to reopen draft for scheduled send {id}: {reopen}");
+        }
+    }
+    let _ = app.emit(
+        "send-finished",
+        SendEvent {
+            id,
+            subject,
+            error: error.map(|e| e.to_string()),
+            undo_ms: 0,
+        },
+    );
 }
 
 /// The one SMTP delivery path: account row → MIME → session cache → send.
