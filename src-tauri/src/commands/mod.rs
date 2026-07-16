@@ -142,21 +142,33 @@ pub async fn set_message_read(
 }
 
 /// Move one message to the account's Trash folder, then drop it from the
-/// local cache. Unlike the read flag this waits on the server — the row must
-/// not vanish from the list if the move failed.
+/// local cache.
 #[tauri::command]
 pub async fn move_to_trash(
     app: AppHandle,
     state: State<'_, AppState>,
     message_id: i64,
 ) -> Result<(), AppError> {
+    move_to_role_folder(&app, &state, message_id, "trash").await
+}
+
+/// Move a message to the account's folder for `role` (trash/archive), then
+/// drop it from the local cache. Unlike the read flag this waits on the
+/// server — the row must not vanish from the list if the move failed.
+async fn move_to_role_folder(
+    app: &AppHandle,
+    state: &AppState,
+    message_id: i64,
+    role: &str,
+) -> Result<(), AppError> {
     let loc = storage::messages::location(&state.pool, message_id).await?;
-    let Some(trash) = storage::mailboxes::trash_name(&state.pool, loc.account_id).await? else {
-        return Err(AppError::Imap("no trash folder discovered yet".to_string()));
+    let Some(dest) = storage::mailboxes::name_for_role(&state.pool, loc.account_id, role).await?
+    else {
+        return Err(AppError::Imap(format!("no {role} folder discovered yet")));
     };
-    // why: moving a message that already lives in Trash to Trash is a no-op
+    // why: moving a message into the folder it already lives in is a no-op
     // (and some servers error on it) — just leave it be.
-    if loc.mailbox == trash {
+    if loc.mailbox == dest {
         return Ok(());
     }
 
@@ -173,7 +185,7 @@ pub async fn move_to_trash(
         .select(&loc.mailbox)
         .await
         .map_err(|e| AppError::Imap(format!("select {}: {e}", loc.mailbox)))?;
-    let moved = mail::imap::move_message(&mut session, loc.uid, &trash).await;
+    let moved = mail::imap::move_message(&mut session, loc.uid, &dest).await;
     let _ = session.logout().await;
     moved?;
 

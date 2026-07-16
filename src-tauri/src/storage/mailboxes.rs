@@ -81,24 +81,24 @@ pub async fn list(pool: &SqlitePool, account_id: i64) -> Result<Vec<Mailbox>, Ap
         .collect())
 }
 
-/// Full IMAP name of the account's Sent folder, if discovery found one.
-pub async fn sent_name(pool: &SqlitePool, account_id: i64) -> Result<Option<String>, AppError> {
-    let name =
-        sqlx::query_scalar("SELECT name FROM mailboxes WHERE account_id = ? AND role = 'sent'")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await?;
+/// Full IMAP name of the account's folder for a special-use `role`
+/// ("sent" | "trash" | "archive" | …), if discovery found one.
+pub async fn name_for_role(
+    pool: &SqlitePool,
+    account_id: i64,
+    role: &str,
+) -> Result<Option<String>, AppError> {
+    let name = sqlx::query_scalar("SELECT name FROM mailboxes WHERE account_id = ? AND role = ?")
+        .bind(account_id)
+        .bind(role)
+        .fetch_optional(pool)
+        .await?;
     Ok(name)
 }
 
-/// Full IMAP name of the account's Trash folder, if discovery found one.
-pub async fn trash_name(pool: &SqlitePool, account_id: i64) -> Result<Option<String>, AppError> {
-    let name =
-        sqlx::query_scalar("SELECT name FROM mailboxes WHERE account_id = ? AND role = 'trash'")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await?;
-    Ok(name)
+/// Full IMAP name of the account's Sent folder, if discovery found one.
+pub async fn sent_name(pool: &SqlitePool, account_id: i64) -> Result<Option<String>, AppError> {
+    name_for_role(pool, account_id, "sent").await
 }
 
 #[cfg(test)]
@@ -266,25 +266,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trash_name_returns_the_trash_role_folder_or_none() {
+    async fn name_for_role_returns_the_matching_folder_or_none() {
         let pool = test_pool().await;
         let id = account(&pool).await;
         replace(&pool, id, &[found("INBOX", Some("inbox"))])
             .await
             .unwrap();
-        assert_eq!(trash_name(&pool, id).await.unwrap(), None);
+        assert_eq!(name_for_role(&pool, id, "trash").await.unwrap(), None);
 
         replace(
             &pool,
             id,
-            &[found("INBOX", Some("inbox")), found("Kôš", Some("trash"))],
+            &[
+                found("INBOX", Some("inbox")),
+                found("Kôš", Some("trash")),
+                found("Archív", Some("archive")),
+            ],
         )
         .await
         .unwrap();
         assert_eq!(
-            trash_name(&pool, id).await.unwrap(),
+            name_for_role(&pool, id, "trash").await.unwrap(),
             Some("Kôš".to_string())
         );
+        assert_eq!(
+            name_for_role(&pool, id, "archive").await.unwrap(),
+            Some("Archív".to_string())
+        );
+        assert_eq!(name_for_role(&pool, id, "junk").await.unwrap(), None);
     }
 
     #[tokio::test]
