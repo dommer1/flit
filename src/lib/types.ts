@@ -111,6 +111,16 @@ export interface SendEvent {
  */
 export type RemoteImagePolicy = "block" | "ask" | "always";
 
+/** Mirrors NotificationSettings in models.rs. */
+export interface NotificationSettings {
+  /** Master switch for new-mail notifications. */
+  enabled: boolean;
+  /** "default" = system sound, "none" = silent, else a macOS sound name. */
+  sound: string;
+  /** Minutes between background new-mail checks; 0 = manual sync only. */
+  syncIntervalMinutes: number;
+}
+
 /** `html`, when present, is a full sanitized srcdoc document from the backend. */
 export interface MessageBody {
   html: string | null;

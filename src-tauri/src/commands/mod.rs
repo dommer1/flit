@@ -2,8 +2,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::models::{
-    Account, Mailbox, MessageBody, MessageHeader, NewAccount, OutgoingMessage, RemoteImagePolicy,
-    Signature,
+    Account, Mailbox, MessageBody, MessageHeader, NewAccount, NotificationSettings,
+    OutgoingMessage, RemoteImagePolicy, Signature,
 };
 use crate::state::AppState;
 use crate::{auth, mail, storage};
@@ -1078,6 +1078,36 @@ pub async fn set_remote_image_policy(
     // why: the settings window mutates, the main window's open message view
     // listens and re-renders with the new policy.
     app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_notification_settings(
+    state: State<'_, AppState>,
+) -> Result<NotificationSettings, AppError> {
+    storage::settings::notification_settings(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_notification_settings(
+    state: State<'_, AppState>,
+    settings: NotificationSettings,
+) -> Result<(), AppError> {
+    storage::settings::set_notification_settings(&state.pool, &settings).await
+}
+
+/// Set (or clear, with nulls) one account's notification overrides, then
+/// broadcast so every window sees the fresh account list.
+#[tauri::command]
+pub async fn set_account_notifications(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    enabled: Option<bool>,
+    sound: Option<String>,
+) -> Result<(), AppError> {
+    storage::accounts::set_notify(&state.pool, id, enabled, sound.as_deref()).await?;
+    app.emit("accounts-changed", ())?;
     Ok(())
 }
 

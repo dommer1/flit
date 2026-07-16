@@ -11,6 +11,7 @@ import type {
   MessageBody,
   MessageHeader,
   NewAccount,
+  NotificationSettings,
   OutgoingMessage,
   RemoteImagePolicy,
   ScheduledMessage,
@@ -334,6 +335,26 @@ export function setRemoteImagePolicy(
   policy: RemoteImagePolicy,
 ): Promise<void> {
   return invoke<void>("set_remote_image_policy", { policy });
+}
+
+/** Global notification defaults + background check cadence. */
+export function getNotificationSettings(): Promise<NotificationSettings> {
+  return invoke<NotificationSettings>("get_notification_settings");
+}
+
+export function setNotificationSettings(
+  settings: NotificationSettings,
+): Promise<void> {
+  return invoke<void>("set_notification_settings", { settings });
+}
+
+/** Per-account notification overrides; null = inherit the global default. */
+export function setAccountNotifications(
+  id: number,
+  enabled: boolean | null,
+  sound: string | null,
+): Promise<void> {
+  return invoke<void>("set_account_notifications", { id, enabled, sound });
 }
 
 /** Fires whenever any window changes an app-wide setting. */
