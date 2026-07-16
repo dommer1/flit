@@ -8,6 +8,7 @@
     text = $bindable(""),
     html = $bindable(""),
     initialText = "",
+    initialHtml = "",
     disabled = false,
     ariaLabel = "Message body",
   }: {
@@ -16,6 +17,8 @@
     /** HTML rendering; "" while the editor is empty. */
     html?: string;
     initialText?: string;
+    /** Initial content as HTML; wins over initialText when both are set. */
+    initialHtml?: string;
     disabled?: boolean;
     ariaLabel?: string;
   } = $props();
@@ -39,7 +42,7 @@
     const editor = new Editor({
       element,
       extensions: [StarterKit],
-      content: textToHtml(initialText),
+      content: initialHtml || textToHtml(initialText),
       editorProps: {
         attributes: { "aria-label": ariaLabel, role: "textbox" },
       },

@@ -15,6 +15,15 @@ export interface Account {
   checkedAt: number | null;
   /** User-chosen accent color (e.g. "#ff9f0a"); null = no color set. */
   color: string | null;
+  /** Default signature for mail composed from this account; null = none. */
+  signatureId: number | null;
+}
+
+/** One reusable e-mail signature; `body` is editor HTML. */
+export interface Signature {
+  id: number;
+  name: string;
+  body: string;
 }
 
 /** Payload for add_account — the password travels as a separate argument. */

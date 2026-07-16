@@ -15,6 +15,7 @@ const accounts: Account[] = [
     lastError: null,
     checkedAt: null,
     color: null,
+    signatureId: null,
   },
   {
     id: 2,
@@ -28,6 +29,7 @@ const accounts: Account[] = [
     lastError: null,
     checkedAt: null,
     color: null,
+    signatureId: null,
   },
 ];
 

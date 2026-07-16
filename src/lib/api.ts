@@ -13,6 +13,7 @@ import type {
   OutgoingMessage,
   RemoteImagePolicy,
   SendEvent,
+  Signature,
 } from "./types";
 
 export function listAccounts(): Promise<Account[]> {
@@ -302,4 +303,37 @@ export function closeSettings(): Promise<void> {
 /** Fires whenever any window mutates the account list. */
 export function onAccountsChanged(callback: () => void): Promise<UnlistenFn> {
   return listen("accounts-changed", callback);
+}
+
+export function listSignatures(): Promise<Signature[]> {
+  return invoke<Signature[]>("list_signatures");
+}
+
+export function createSignature(name: string): Promise<Signature> {
+  return invoke<Signature>("create_signature", { name });
+}
+
+export function updateSignature(
+  id: number,
+  name: string,
+  body: string,
+): Promise<void> {
+  return invoke<void>("update_signature", { id, name, body });
+}
+
+export function deleteSignature(id: number): Promise<void> {
+  return invoke<void>("delete_signature", { id });
+}
+
+/** Make one signature the default for exactly the given accounts. */
+export function setSignatureAccounts(
+  id: number,
+  accountIds: number[],
+): Promise<void> {
+  return invoke<void>("set_signature_accounts", { id, accountIds });
+}
+
+/** Fires whenever any window mutates the signature list. */
+export function onSignaturesChanged(callback: () => void): Promise<UnlistenFn> {
+  return listen("signatures-changed", callback);
 }

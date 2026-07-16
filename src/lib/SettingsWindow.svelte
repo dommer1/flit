@@ -14,6 +14,7 @@
   } from "./api";
   import type { Account, NewAccount, RemoteImagePolicy } from "./types";
   import AccountsPane from "./AccountsPane.svelte";
+  import SignaturesPane from "./SignaturesPane.svelte";
 
   const POLICIES: { value: RemoteImagePolicy; label: string; hint: string }[] =
     [
@@ -36,7 +37,7 @@
 
   let accounts = $state<Account[]>([]);
   let lastError = $state<string | null>(null);
-  let tab = $state<"accounts" | "privacy">("accounts");
+  let tab = $state<"accounts" | "signatures" | "privacy">("accounts");
   let policy = $state<RemoteImagePolicy>("ask");
 
   async function refresh() {
@@ -124,6 +125,13 @@
     </button>
     <button
       class="tab"
+      class:active={tab === "signatures"}
+      onclick={() => (tab = "signatures")}
+    >
+      Signatures
+    </button>
+    <button
+      class="tab"
       class:active={tab === "privacy"}
       onclick={() => (tab = "privacy")}
     >
@@ -138,6 +146,8 @@
       onDelete={handleDelete}
       onSetColor={handleSetColor}
     />
+  {:else if tab === "signatures"}
+    <SignaturesPane {accounts} />
   {:else}
     <section class="privacy">
       <fieldset>
