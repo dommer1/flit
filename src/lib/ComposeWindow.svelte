@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
+    attachmentPreview,
     closeCompose,
     inspectAttachments,
     listAccounts,
@@ -88,6 +89,8 @@
     applySignature(defaultSignatureFor(id));
   }
   let attachments = $state<AttachmentInfo[]>([]);
+  /** Thumbnail data: URIs by attachment path; absent = placeholder card. */
+  let previews = $state<Record<string, string>>({});
   /** A file drag is currently above the window — shows the drop overlay. */
   let dropHover = $state(false);
 
@@ -241,14 +244,34 @@
         (info) => !attachments.some((a) => a.path === info.path),
       );
       attachments = [...attachments, ...fresh];
+      // Thumbnails arrive per card as they render; the placeholder shows
+      // in the meantime.
+      fresh.forEach((info) => void loadPreview(info.path));
       error = null;
     } catch (err) {
       error = String(err);
     }
   }
 
+  async function loadPreview(path: string) {
+    try {
+      const uri = await attachmentPreview(path);
+      if (uri) previews[path] = uri;
+    } catch {
+      // why swallowed: a preview is decoration — a failure just leaves
+      // the extension placeholder in place.
+    }
+  }
+
   function removeAttachment(path: string) {
     attachments = attachments.filter((a) => a.path !== path);
+    delete previews[path];
+  }
+
+  /** Placeholder label for cards without a thumbnail: "PDF", "ZIP", … */
+  function extLabel(name: string): string {
+    const dot = name.lastIndexOf(".");
+    return dot > 0 ? name.slice(dot + 1).toUpperCase().slice(0, 5) : "FILE";
   }
 
   function formatSize(bytes: number): string {
@@ -499,22 +522,33 @@
   {/if}
 
   {#if attachments.length > 0}
-    <!-- Floating card pinned over the bottom of the body, so attachments
+    <!-- Floating panel pinned over the bottom of the body, so attachments
          never push the envelope fields or the text around. -->
     <ul class="attachments" aria-label="Attachments">
       {#each attachments as attachment (attachment.path)}
-        <li class="chip">
-          <span class="chip-name">{attachment.name}</span>
-          <span class="chip-size">{formatSize(attachment.size)}</span>
+        <li class="card">
           <button
             type="button"
-            class="chip-remove"
+            class="card-remove"
             aria-label={`Remove ${attachment.name}`}
             onclick={() => removeAttachment(attachment.path)}
             disabled={queueing}
           >
             ×
           </button>
+          {#if previews[attachment.path]}
+            <img
+              class="thumb"
+              src={previews[attachment.path]}
+              alt={attachment.name}
+            />
+          {:else}
+            <span class="thumb ext" aria-hidden="true">
+              {extLabel(attachment.name)}
+            </span>
+          {/if}
+          <span class="card-name">{attachment.name}</span>
+          <span class="card-size">{formatSize(attachment.size)}</span>
         </li>
       {/each}
     </ul>
@@ -736,25 +770,25 @@
     pointer-events: none;
   }
 
-  /* Floating card: hovers over the bottom edge of the body instead of
+  /* Floating panel: hovers over the bottom edge of the body instead of
      occupying a row of the envelope — the compose text flows beneath it. */
   .attachments {
     position: absolute;
     bottom: 14px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: max-content;
-    max-width: calc(100% - 40px);
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 6px;
+    left: 20px;
+    right: 20px;
+    display: grid;
+    /* why auto-fill + minmax: ~3 cards per row at the default compose
+       width, reflowing with the window; a lone card stays card-sized
+       because empty tracks still occupy the row. */
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
     margin: 0;
-    padding: 8px 10px;
+    padding: 10px;
     border: 1px solid var(--hairline);
     border-radius: 12px;
-    /* why color-mix + blur: the card floats over the user's own text, so it
-       stays readable without fully hiding what's underneath. */
+    /* why color-mix + blur: the panel floats over the user's own text, so
+       it stays readable without fully hiding what's underneath. */
     background: color-mix(in srgb, var(--bg-window) 82%, transparent);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
@@ -762,39 +796,77 @@
     list-style: none;
   }
 
-  .chip {
+  .card {
+    position: relative;
     display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 8px;
+    flex-direction: column;
+    gap: 4px;
+    /* why min-width 0: lets the name ellipsis instead of stretching the
+       grid track. */
+    min-width: 0;
+    padding: 6px;
     border: 1px solid var(--hairline);
-    border-radius: 6px;
+    border-radius: 8px;
     background: var(--bg-hover);
     font-size: 12px;
     color: var(--text-primary);
   }
 
-  .chip-size {
+  .thumb {
+    width: 100%;
+    height: 64px;
+    border-radius: 5px;
+    object-fit: cover;
+  }
+
+  /* Placeholder tile for files without a thumbnail: the extension in caps. */
+  .thumb.ext {
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+  }
+
+  .card-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .card-size {
+    font-size: 11px;
     color: var(--text-tertiary);
   }
 
-  .chip-remove {
+  /* Sits on top of the thumbnail, so it gets a scrim to stay visible over
+     busy image corners. */
+  .card-remove {
+    position: absolute;
+    top: 9px;
+    right: 9px;
+    z-index: 1;
     display: grid;
     place-items: center;
+    width: 16px;
+    height: 16px;
     padding: 0;
     border: none;
-    background: transparent;
-    font-size: 13px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.45);
+    font-size: 12px;
     line-height: 1;
-    color: var(--text-secondary);
+    color: #ffffff;
     cursor: pointer;
   }
 
-  .chip-remove:hover {
-    color: var(--text-primary);
+  .card-remove:hover {
+    background: rgba(0, 0, 0, 0.65);
   }
 
-  .chip-remove:disabled {
+  .card-remove:disabled {
     opacity: 0.45;
     cursor: default;
   }
@@ -814,8 +886,9 @@
     min-height: 0;
   }
 
-  /* Keep the last lines of text visible above the floating card. */
+  /* Keep the last lines of text visible above the floating panel — cards
+     with thumbnails are taller than the old chips. */
   .body-area.with-attachments :global(.tiptap) {
-    padding-bottom: 72px;
+    padding-bottom: 140px;
   }
 </style>

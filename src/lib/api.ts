@@ -182,6 +182,14 @@ export function inspectAttachments(
 }
 
 /**
+ * Best-effort thumbnail for one attachment as a `data:` URI; null when the
+ * file is not a previewable image (png/jpeg/webp).
+ */
+export function attachmentPreview(path: string): Promise<string | null> {
+  return invoke<string | null>("attachment_preview", { path });
+}
+
+/**
  * Native file drag & drop over this window. Tauri intercepts the OS drag
  * before the DOM sees it (HTML5 drop events never carry paths in a webview),
  * so dropped file paths arrive through this listener instead.

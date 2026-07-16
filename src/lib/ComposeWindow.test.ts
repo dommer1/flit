@@ -70,6 +70,9 @@ vi.mock("./api", () => ({
       size: 2048,
     })),
   ),
+  attachmentPreview: vi.fn(async (path: string) =>
+    /\.(png|jpe?g|webp)$/.test(path) ? "data:image/png;base64,dGh1bWI=" : null,
+  ),
   onFileDrop: vi.fn(
     async (callbacks: {
       onHover: (hovering: boolean) => void;
@@ -267,6 +270,24 @@ it("removes an attachment chip and drops repeat paths", async () => {
       }),
     ),
   );
+});
+
+it("shows an image thumbnail on the attachment card", async () => {
+  await renderLoaded();
+
+  dropCallbacks!.onDrop(["/tmp/photo.jpg"]);
+
+  const thumb = await screen.findByRole("img", { name: "photo.jpg" });
+  expect(thumb).toHaveAttribute("src", "data:image/png;base64,dGh1bWI=");
+});
+
+it("shows an extension placeholder when there is no preview", async () => {
+  await renderLoaded();
+
+  dropCallbacks!.onDrop(["/tmp/report.pdf"]);
+
+  expect(await screen.findByText("PDF")).toBeInTheDocument();
+  expect(screen.queryByRole("img", { name: "report.pdf" })).toBeNull();
 });
 
 it("restores a reopened draft's attachments as chips", async () => {
