@@ -30,6 +30,7 @@ const message: MessageHeader = {
   from: "Alice <alice@example.com>",
   to: "me@example.com",
   cc: "",
+  replyTo: "",
   subject: "Weekend plans",
   snippet: "Hey",
   date: "2026-07-07T09:15:00Z",
@@ -122,6 +123,31 @@ it("shows no banner when nothing was blocked", async () => {
   expect(
     screen.queryByRole("button", { name: "Load Images" }),
   ).not.toBeInTheDocument();
+});
+
+it("shows the recipient fields, hiding Cc and Reply-To when empty", async () => {
+  const { rerender } = render(MessageView, { props: { message } });
+
+  // From + To always; Cc/Reply-To only when the message carries them.
+  expect(await screen.findByText("Alice <alice@example.com>")).toBeInTheDocument();
+  expect(screen.getByText("To")).toBeInTheDocument();
+  expect(screen.queryByText("Cc")).not.toBeInTheDocument();
+  expect(screen.queryByText("Reply-To")).not.toBeInTheDocument();
+
+  await rerender({
+    message: {
+      ...message,
+      cc: "carol@example.com",
+      replyTo: "Support <support@example.com>",
+    },
+  });
+
+  expect(screen.getByText("Cc")).toBeInTheDocument();
+  expect(screen.getByText("carol@example.com")).toBeInTheDocument();
+  expect(screen.getByText("Reply-To")).toBeInTheDocument();
+  expect(
+    screen.getByText("Support <support@example.com>"),
+  ).toBeInTheDocument();
 });
 
 it("offers reply, reply all and forward with the loaded text", async () => {

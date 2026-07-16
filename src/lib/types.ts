@@ -86,6 +86,8 @@ export interface MessageHeader {
   to: string;
   /** Cc recipients, same shape; empty when there were none. */
   cc: string;
+  /** Reply-To recipients, same shape; empty when the header was absent. */
+  replyTo: string;
   subject: string;
   snippet: string;
   date: string;

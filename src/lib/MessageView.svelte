@@ -90,6 +90,22 @@
         {/if}
       </div>
     </header>
+    <dl class="recipients">
+      <dt>From</dt>
+      <dd title={message.from}>{message.from}</dd>
+      {#if message.to}
+        <dt>To</dt>
+        <dd title={message.to}>{message.to}</dd>
+      {/if}
+      {#if message.cc}
+        <dt>Cc</dt>
+        <dd title={message.cc}>{message.cc}</dd>
+      {/if}
+      {#if message.replyTo}
+        <dt>Reply-To</dt>
+        <dd title={message.replyTo}>{message.replyTo}</dd>
+      {/if}
+    </dl>
     {#if body?.canLoadRemote}
       <div class="remote-banner">
         <span>
@@ -219,6 +235,32 @@
 
   .actions button:hover {
     background: var(--bg-hover);
+  }
+
+  .recipients {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 2px 10px;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--hairline);
+    font-size: 12px;
+  }
+
+  .recipients dt {
+    color: var(--text-tertiary);
+    text-align: right;
+    user-select: none;
+  }
+
+  .recipients dd {
+    margin: 0;
+    overflow: hidden;
+    color: var(--text-secondary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: text;
   }
 
   .remote-banner {

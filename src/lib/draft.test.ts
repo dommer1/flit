@@ -8,6 +8,7 @@ const message: MessageHeader = {
   from: "Alice Doe <alice@example.com>",
   to: "Me <me@example.com>",
   cc: "",
+  replyTo: "",
   subject: "Weekend plans",
   snippet: "Are we still on?",
   date: "2026-07-07T09:15:00Z",
