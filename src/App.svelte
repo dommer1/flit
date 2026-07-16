@@ -115,6 +115,16 @@
 
   let paneWidths = $state<PaneWidths>(loadPaneWidths(localStorage));
 
+  const SIDEBAR_COLLAPSED_KEY = "flit.sidebar.collapsed";
+  let sidebarCollapsed = $state(
+    localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true",
+  );
+
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+  }
+
   // Sends riding out their undo window, mirrored from backend events.
   let outbox = $state<OutboxEntry[]>([]);
   /** How long a resolved badge lingers: long enough to read, short for ✓. */
@@ -327,36 +337,41 @@
 
 <div
   class="layout"
-  style:grid-template-columns={`${paneWidths.sidebar}px 1px minmax(0, 1fr)`}
+  style:grid-template-columns={sidebarCollapsed
+    ? "minmax(0, 1fr)"
+    : `${paneWidths.sidebar}px 1px minmax(0, 1fr)`}
 >
-  <aside>
-    <Sidebar
-      {accounts}
-      mailboxes={mailboxesByAccount}
-      selectedAccountId={selectedAccountId}
-      selectedMailbox={selectedMailbox}
-      onSelect={selectMailbox}
-    />
-  </aside>
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions
-       — a focusable separator is the ARIA "window splitter" widget; Svelte's
-       checker only knows the static (non-focusable) separator variant. -->
-  <div
-    class="divider ghost"
-    role="separator"
-    tabindex="0"
-    aria-orientation="vertical"
-    aria-label="Resize sidebar"
-    aria-valuenow={paneWidths.sidebar}
-    aria-valuemin={PANE_LIMITS.sidebar.min}
-    aria-valuemax={PANE_LIMITS.sidebar.max}
-    onpointerdown={(e) => startPaneResize("sidebar", e)}
-    onkeydown={(e) => nudgePane("sidebar", e)}
-  ></div>
+  {#if !sidebarCollapsed}
+    <aside>
+      <Sidebar
+        {accounts}
+        mailboxes={mailboxesByAccount}
+        selectedAccountId={selectedAccountId}
+        selectedMailbox={selectedMailbox}
+        onSelect={selectMailbox}
+      />
+    </aside>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions
+         — a focusable separator is the ARIA "window splitter" widget; Svelte's
+         checker only knows the static (non-focusable) separator variant. -->
+    <div
+      class="divider ghost"
+      role="separator"
+      tabindex="0"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      aria-valuenow={paneWidths.sidebar}
+      aria-valuemin={PANE_LIMITS.sidebar.min}
+      aria-valuemax={PANE_LIMITS.sidebar.max}
+      onpointerdown={(e) => startPaneResize("sidebar", e)}
+      onkeydown={(e) => nudgePane("sidebar", e)}
+    ></div>
+  {/if}
   <!-- The list and reading panes share one floating rounded card on top of
        the window's glass backdrop — the macOS Tahoe content-area look. -->
   <main
     class="card"
+    class:collapsed={sidebarCollapsed}
     style:grid-template-columns={`${paneWidths.list}px 1px minmax(0, 1fr)`}
   >
     <section class="list">
@@ -367,6 +382,7 @@
         onSelect={selectMessage}
         onCompose={openNewMessage}
         onSearch={handleSearch}
+        onToggleSidebar={toggleSidebar}
       />
       <Outbox entries={outbox} onUndo={handleUndo} />
     </section>
@@ -433,6 +449,12 @@
       0 0 0 1px var(--hairline),
       0 8px 28px rgba(0, 0, 0, 0.14);
     overflow: hidden;
+  }
+
+  /* With the sidebar hidden the card spans the window, but keeps a small
+     left inset so it still reads as a floating card, not a flush panel. */
+  .card.collapsed {
+    margin-left: 10px;
   }
 
   .list {

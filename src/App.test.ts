@@ -630,6 +630,23 @@ it("does not touch the read state of an already-read message", async () => {
   expect(api.setMessageRead).not.toHaveBeenCalled();
 });
 
+it("collapses and restores the sidebar with the toggle button", async () => {
+  render(App);
+  expect(
+    await screen.findByRole("button", { name: "All Inboxes" }),
+  ).toBeInTheDocument();
+
+  await fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
+  expect(
+    screen.queryByRole("button", { name: "All Inboxes" }),
+  ).not.toBeInTheDocument();
+
+  await fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
+  expect(
+    screen.getByRole("button", { name: "All Inboxes" }),
+  ).toBeInTheDocument();
+});
+
 it("trashes the open message and steps to its neighbour", async () => {
   render(App);
   await fireEvent.click(await screen.findByText("Weekend plans"));

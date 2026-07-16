@@ -9,6 +9,7 @@
     onSelect,
     onCompose,
     onSearch,
+    onToggleSidebar,
   }: {
     title: string;
     messages: MessageHeader[];
@@ -16,6 +17,7 @@
     onSelect: (id: number) => void;
     onCompose: () => void;
     onSearch: (query: string) => void;
+    onToggleSidebar?: () => void;
   } = $props();
 
   let query = $state("");
@@ -33,12 +35,43 @@
 
 <div class="pane">
   <header>
-    <div class="titles">
-      <h1>{title}</h1>
-      <p class="count">
-        {messages.length}
-        {messages.length === 1 ? "message" : "messages"}
-      </p>
+    <div class="left">
+      {#if onToggleSidebar}
+        <button
+          class="toggle"
+          aria-label="Toggle sidebar"
+          title="Toggle sidebar"
+          onclick={onToggleSidebar}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <rect
+              x="1.75"
+              y="2.75"
+              width="12.5"
+              height="10.5"
+              rx="1.75"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+            />
+            <line
+              x1="6.25"
+              y1="2.75"
+              x2="6.25"
+              y2="13.25"
+              stroke="currentColor"
+              stroke-width="1.2"
+            />
+          </svg>
+        </button>
+      {/if}
+      <div class="titles">
+        <h1>{title}</h1>
+        <p class="count">
+          {messages.length}
+          {messages.length === 1 ? "message" : "messages"}
+        </p>
+      </div>
     </div>
     <button
       class="compose"
@@ -103,6 +136,37 @@
     flex-shrink: 0;
     padding: 12px 16px 8px;
     border-bottom: 1px solid var(--hairline);
+  }
+
+  .left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-secondary);
+    cursor: default;
+  }
+
+  .toggle:hover {
+    background: var(--bg-hover);
+  }
+
+  .toggle svg {
+    width: 16px;
+    height: 16px;
   }
 
   .compose {
