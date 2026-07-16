@@ -83,6 +83,8 @@ export interface Mailbox {
 export interface MessageHeader {
   id: number;
   accountId: number;
+  /** Full IMAP name of the folder the message lives in. */
+  mailbox: string;
   from: string;
   /** To recipients as displayed ("Name <addr>", comma-separated). */
   to: string;

@@ -5,6 +5,7 @@ import type { MessageHeader } from "./types";
 const message: MessageHeader = {
   id: 7,
   accountId: 2,
+  mailbox: "INBOX",
   from: "Alice Doe <alice@example.com>",
   to: "Me <me@example.com>",
   cc: "",

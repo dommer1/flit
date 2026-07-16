@@ -136,6 +136,9 @@ pub struct Mailbox {
 pub struct MessageHeader {
     pub id: i64,
     pub account_id: i64,
+    /// Full IMAP name of the folder the message lives in — lets the UI know
+    /// a message's home even in unified or search views that span folders.
+    pub mailbox: String,
     pub from: String,
     /// To recipients as displayed ("Name <addr>", comma-separated).
     pub to: String,

@@ -91,8 +91,8 @@ pub async fn list(
     let headers = match account_id {
         Some(id) => {
             sqlx::query_as(
-                r#"SELECT id, account_id, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
-                          reply_to_addr AS reply_to, subject, snippet, date, read
+                r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
+                          cc_addr AS cc, reply_to_addr AS reply_to, subject, snippet, date, read
                    FROM messages WHERE account_id = ? AND mailbox = ? ORDER BY date DESC"#,
             )
             .bind(id)
@@ -102,8 +102,8 @@ pub async fn list(
         }
         None => {
             sqlx::query_as(
-                r#"SELECT id, account_id, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
-                          reply_to_addr AS reply_to, subject, snippet, date, read
+                r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
+                          cc_addr AS cc, reply_to_addr AS reply_to, subject, snippet, date, read
                    FROM messages WHERE mailbox = ? ORDER BY date DESC"#,
             )
             .bind(mailbox)
@@ -421,6 +421,7 @@ mod tests {
 
         let subjects: Vec<&str> = all.iter().map(|m| m.subject.as_str()).collect();
         assert_eq!(subjects, vec!["New", "Old"]);
+        assert_eq!(all[0].mailbox, "INBOX");
         assert_eq!(all[0].from, "Alice <alice@example.com>");
         assert_eq!(all[0].to, "Bob <bob@example.com>");
         assert_eq!(all[0].cc, "Cara <cara@example.com>");

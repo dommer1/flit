@@ -35,6 +35,7 @@ const allMessages: MessageHeader[] = [
   {
     id: 1,
     accountId: 1,
+    mailbox: "INBOX",
     from: "Alice <alice@example.com>",
     to: "domco@example.com, Bob <bob@example.com>",
     cc: "carol@example.com",
@@ -47,6 +48,7 @@ const allMessages: MessageHeader[] = [
   {
     id: 2,
     accountId: 2,
+    mailbox: "INBOX",
     from: "Peter",
     to: "hello@vocalio.sk",
     cc: "",
@@ -63,6 +65,7 @@ const archivedMessages: MessageHeader[] = [
   {
     id: 9,
     accountId: 1,
+    mailbox: "INBOX",
     from: "Old Friend <old@example.com>",
     to: "hello@vocalio.sk",
     cc: "",
@@ -371,6 +374,7 @@ it("refreshes the list on messages-changed and keeps the selection", async () =>
     {
       id: 3,
       accountId: 1,
+      mailbox: "INBOX",
       from: "New Sender",
       to: "hello@vocalio.sk",
       cc: "",

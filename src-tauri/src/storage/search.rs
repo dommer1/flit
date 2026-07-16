@@ -103,7 +103,7 @@ pub async fn search(
     // building the string at runtime — sqlx 0.9 rejects runtime-built SQL
     // (SqlSafeStr), and a single shape keeps the query plan cached.
     let rows = sqlx::query_as(
-        r#"SELECT id, account_id, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
+        r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
                   reply_to_addr AS reply_to, subject, snippet, date, read
            FROM messages
            WHERE (?1 IS NULL OR account_id = ?1)

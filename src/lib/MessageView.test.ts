@@ -27,6 +27,7 @@ import MessageView from "./MessageView.svelte";
 const message: MessageHeader = {
   id: 1,
   accountId: 1,
+  mailbox: "INBOX",
   from: "Alice <alice@example.com>",
   to: "me@example.com",
   cc: "",
