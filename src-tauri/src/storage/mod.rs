@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod contacts;
 pub mod mailboxes;
 pub mod messages;
 pub mod scheduled;
@@ -47,6 +48,13 @@ pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
     let fixed = messages::backfill_url_snippets(&pool).await?;
     if fixed > 0 {
         eprintln!("backfilled {fixed} message snippet(s) to strip leading URLs");
+    }
+
+    // why: sync only harvests headers it newly fetches — messages cached
+    // before the contacts table existed seed it here, once (no-op after).
+    let seeded = contacts::backfill(&pool).await?;
+    if seeded > 0 {
+        eprintln!("seeded contacts from {seeded} cached message(s)");
     }
 
     Ok(pool)

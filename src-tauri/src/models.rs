@@ -189,6 +189,16 @@ impl RemoteImagePolicy {
     }
 }
 
+/// One autocomplete suggestion for a compose recipient field — an address
+/// harvested from cached or sent mail (see storage::contacts).
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct Contact {
+    pub email: String,
+    /// Latest display name seen for the address; empty when none was.
+    pub name: String,
+}
+
 /// One attachment of a cached message — metadata only. The bytes stay on
 /// the server and are re-fetched by part_index when the user saves the file.
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]

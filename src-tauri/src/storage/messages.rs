@@ -48,6 +48,14 @@ pub async fn upsert_headers(
         .bind(header.read)
         .execute(pool)
         .await?;
+        // why here: every sync path funnels through this upsert, so one hook
+        // keeps the contacts book fed no matter how headers arrive.
+        crate::storage::contacts::harvest(
+            pool,
+            &[&header.from, &header.to, &header.cc, &header.reply_to],
+            &header.date,
+        )
+        .await?;
     }
     Ok(())
 }
