@@ -17,6 +17,7 @@
   let {
     message,
     mailboxes = [],
+    archived = false,
     onDraft,
     onSetRead,
     onArchive,
@@ -26,6 +27,9 @@
     message: MessageHeader | null;
     /** Folders of the message's account — the Move to menu's choices. */
     mailboxes?: Mailbox[];
+    /** The message already sits in its archive folder — the archive action
+     * flips to "Move to Inbox" (onArchive still fires; the parent routes). */
+    archived?: boolean;
     // why: bodyText rides along so the draft can quote what is on screen
     // without the parent re-fetching the body it never held.
     onDraft?: (
@@ -163,7 +167,9 @@
             {/if}
             {#if onArchive}
               {@const archive = onArchive}
-              <button onclick={() => archive(current.id)}>Archive</button>
+              <button onclick={() => archive(current.id)}>
+                {archived ? "Move to Inbox" : "Archive"}
+              </button>
             {/if}
             {#if onMove && moveTargets.length > 0}
               {@const move = onMove}

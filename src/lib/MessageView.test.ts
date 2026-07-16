@@ -276,6 +276,19 @@ it("shows no attachment strip when a message has none", async () => {
   ).not.toBeInTheDocument();
 });
 
+it("relabels the archive action on an already-archived message", async () => {
+  const onArchive = vi.fn();
+  render(MessageView, { props: { message, archived: true, onArchive } });
+
+  expect(
+    screen.queryByRole("button", { name: "Archive" }),
+  ).not.toBeInTheDocument();
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Move to Inbox" }),
+  );
+  expect(onArchive).toHaveBeenCalledWith(1);
+});
+
 it("offers reply, reply all and forward with the loaded text", async () => {
   vi.mocked(api.getMessageBody).mockResolvedValueOnce(
     body({ html: null, text: "hi there" }),

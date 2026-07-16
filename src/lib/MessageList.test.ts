@@ -101,3 +101,13 @@ it("leaves vertical scrolling alone", async () => {
 
   expect(onArchive).not.toHaveBeenCalled();
 });
+
+it("labels the swipe backdrop Move to Inbox for archived rows", async () => {
+  renderList({ onArchive: vi.fn(), isArchived: () => true });
+
+  // Mid-swipe (short of the trigger) the backdrop is visible.
+  await swipe(screen.getByRole("option", { name: /Alice/ }), 30);
+  expect(screen.getByText("Move to Inbox")).toBeInTheDocument();
+
+  vi.advanceTimersByTime(200); // snap back, nothing fired
+});

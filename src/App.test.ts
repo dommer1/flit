@@ -72,7 +72,7 @@ const archivedMessages: MessageHeader[] = [
   {
     id: 9,
     accountId: 1,
-    mailbox: "INBOX",
+    mailbox: "Archive",
     from: "Old Friend <old@example.com>",
     to: "hello@vocalio.sk",
     cc: "",
@@ -97,25 +97,30 @@ let sendUndone: ((e: SendEvent) => void) | undefined;
 let scheduledMissed: (() => void) | undefined;
 let scheduledChanged: (() => void) | undefined;
 
+// why a named default: tests override listMailboxes with
+// mockImplementation, which clearAllMocks does NOT undo — beforeEach
+// reinstalls this so an override can never leak into later tests.
+async function defaultListMailboxes(accountId: number) {
+  return accountId === 1
+    ? [
+        { id: 1, accountId: 1, name: "INBOX", role: "inbox", displayName: "INBOX" },
+        { id: 2, accountId: 1, name: "Archive", role: "archive", displayName: "Archive" },
+        // A Gmail-style folder: the wire name stays modified UTF-7, the
+        // backend ships the decoded label alongside it.
+        {
+          id: 3,
+          accountId: 1,
+          name: "[Gmail]/Odoslan&AOk-",
+          role: "sent",
+          displayName: "Odoslané",
+        },
+      ]
+    : [];
+}
+
 vi.mock("./lib/api", () => ({
   listAccounts: vi.fn(async () => currentAccounts),
-  listMailboxes: vi.fn(async (accountId: number) =>
-    accountId === 1
-      ? [
-          { id: 1, accountId: 1, name: "INBOX", role: "inbox", displayName: "INBOX" },
-          { id: 2, accountId: 1, name: "Archive", role: "archive", displayName: "Archive" },
-          // A Gmail-style folder: the wire name stays modified UTF-7, the
-          // backend ships the decoded label alongside it.
-          {
-            id: 3,
-            accountId: 1,
-            name: "[Gmail]/Odoslan&AOk-",
-            role: "sent",
-            displayName: "Odoslané",
-          },
-        ]
-      : [],
-  ),
+  listMailboxes: vi.fn(defaultListMailboxes),
   listMessages: vi.fn(async (accountId: number | null, mailbox = "INBOX") => {
     const pool = mailbox === "Archive" ? archivedMessages : currentMessages;
     return accountId === null
@@ -125,11 +130,18 @@ vi.mock("./lib/api", () => ({
   // why: a canned single-hit result — App tests only assert the wiring
   // (what was called with what); real matching is covered by Rust tests.
   searchMessages: vi.fn(async () => [currentMessages[1]]),
-  getMessageBody: vi.fn(async () => ({ html: null, text: "body text" })),
+  getMessageBody: vi.fn(async () => ({
+    html: null,
+    text: "body text",
+    blockedImages: 0,
+    canLoadRemote: false,
+    attachments: [],
+  })),
   syncAccount: vi.fn(async () => undefined),
   setMessageRead: vi.fn(async () => undefined),
   moveToTrash: vi.fn(async () => undefined),
   archiveMessage: vi.fn(async () => undefined),
+  moveMessage: vi.fn(async () => undefined),
   openCompose: vi.fn(async () => undefined),
   openDraft: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async (callback: () => void) => {
@@ -183,6 +195,7 @@ beforeEach(() => {
   scheduledChanged = undefined;
   localStorage.clear();
   vi.clearAllMocks();
+  vi.mocked(api.listMailboxes).mockImplementation(defaultListMailboxes);
 });
 
 it("loads accounts and the unified inbox on start", async () => {
@@ -860,4 +873,24 @@ it("refreshes the scheduled section when the backend broadcasts a change", async
   scheduledChanged!();
 
   expect(await screen.findByText("Tomorrow 8:00 mail")).toBeInTheDocument();
+});
+
+it("unarchives an archived message via Move to Inbox", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+
+  // Open Personal's Archive folder and select the archived message.
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Toggle folders for Personal" }),
+  );
+  await fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+  await fireEvent.click(await screen.findByText("Archived note"));
+
+  // On an archived message the archive action flips to Move to Inbox…
+  const button = await screen.findByRole("button", { name: "Move to Inbox" });
+
+  // …and moves it back to the account's inbox instead of re-archiving.
+  await fireEvent.click(button);
+  expect(api.moveMessage).toHaveBeenCalledWith(9, "INBOX");
+  expect(api.archiveMessage).not.toHaveBeenCalled();
 });

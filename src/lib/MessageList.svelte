@@ -14,6 +14,7 @@
     onToggleSidebar,
     onArchive,
     onSetRead,
+    isArchived,
   }: {
     title: string;
     messages: MessageHeader[];
@@ -28,6 +29,9 @@
     onArchive?: (id: number) => void;
     /** Fired by a full swipe right on a row: toggle read/unread. */
     onSetRead?: (id: number, read: boolean) => void;
+    /** Row already sits in its archive folder — the swipe-left backdrop
+     * reads "Move to Inbox" (onArchive still fires; the parent routes). */
+    isArchived?: (message: MessageHeader) => boolean;
   } = $props();
 
   let query = $state("");
@@ -150,7 +154,7 @@
               aria-hidden="true"
               style:width={`${-offset}px`}
             >
-              Archive
+              {isArchived?.(message) ? "Move to Inbox" : "Archive"}
             </span>
           {:else if offset > 0}
             <span

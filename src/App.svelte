@@ -124,8 +124,33 @@
     evictMessage(id, moveToTrash);
   }
 
+  // The account's archive folder wire name; Gmail has no \Archive, so its
+  // All Mail (\All) counts — mirrors the backend's archive fallback order.
+  function archiveNameFor(accountId: number): string | null {
+    const folders = mailboxesByAccount[accountId] ?? [];
+    const archive =
+      folders.find((m) => m.role === "archive") ??
+      folders.find((m) => m.role === "all");
+    return archive?.name ?? null;
+  }
+
+  function isArchived(message: MessageHeader): boolean {
+    return message.mailbox === archiveNameFor(message.accountId);
+  }
+
+  // Archive flips to unarchive on an already-archived message — re-archiving
+  // would be a silent server no-op while the row vanished from the list.
   function handleArchive(id: number) {
-    evictMessage(id, archiveMessage);
+    const message = messages.find((m) => m.id === id);
+    if (message && isArchived(message)) {
+      const inbox =
+        (mailboxesByAccount[message.accountId] ?? []).find(
+          (m) => m.role === "inbox",
+        )?.name ?? "INBOX";
+      evictMessage(id, (messageId) => moveMessage(messageId, inbox));
+    } else {
+      evictMessage(id, archiveMessage);
+    }
   }
 
   function handleMove(id: number, mailbox: string) {
@@ -499,6 +524,7 @@
         onToggleSidebar={toggleSidebar}
         onArchive={handleArchive}
         onSetRead={handleSetRead}
+        {isArchived}
       />
       <Outbox entries={outbox} onUndo={handleUndo} />
     </section>
@@ -529,6 +555,7 @@
         mailboxes={selectedMessage
           ? (mailboxesByAccount[selectedMessage.accountId] ?? [])
           : []}
+        archived={selectedMessage ? isArchived(selectedMessage) : false}
         onDraft={openDraft}
         onSetRead={handleSetRead}
         onArchive={handleArchive}
