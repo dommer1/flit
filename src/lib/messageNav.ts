@@ -23,3 +23,17 @@ export function nextMessageId(
   const next = Math.min(Math.max(index + delta, 0), ids.length - 1);
   return ids[next];
 }
+
+/**
+ * Which message to select after `removedId` leaves the list (deleted /
+ * moved to trash): the one below it, or the one above if it was last, or
+ * null when the list empties or the id wasn't present.
+ */
+export function neighborId(
+  ids: readonly number[],
+  removedId: number,
+): number | null {
+  const index = ids.indexOf(removedId);
+  if (index === -1) return null;
+  return ids[index + 1] ?? ids[index - 1] ?? null;
+}

@@ -113,6 +113,7 @@ vi.mock("./lib/api", () => ({
   getMessageBody: vi.fn(async () => ({ html: null, text: "body text" })),
   syncAccount: vi.fn(async () => undefined),
   setMessageRead: vi.fn(async () => undefined),
+  moveToTrash: vi.fn(async () => undefined),
   openCompose: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async (callback: () => void) => {
     accountsChanged = callback;
@@ -627,4 +628,16 @@ it("does not touch the read state of an already-read message", async () => {
   render(App);
   await fireEvent.click(await screen.findByText("Re: Invoice"));
   expect(api.setMessageRead).not.toHaveBeenCalled();
+});
+
+it("trashes the open message and steps to its neighbour", async () => {
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  await screen.findByRole("heading", { name: "Weekend plans" });
+
+  await fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+
+  expect(api.moveToTrash).toHaveBeenCalledWith(1);
+  // Selection stepped to the next message in the list.
+  await screen.findByRole("heading", { name: "Re: Invoice" });
 });

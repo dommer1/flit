@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextMessageId } from "./messageNav";
+import { neighborId, nextMessageId } from "./messageNav";
 
 describe("nextMessageId", () => {
   const ids = [10, 20, 30];
@@ -27,5 +27,25 @@ describe("nextMessageId", () => {
   it("falls back to an edge when the current id is gone from the list", () => {
     expect(nextMessageId(ids, 999, 1)).toBe(10);
     expect(nextMessageId(ids, 999, -1)).toBe(30);
+  });
+});
+
+describe("neighborId", () => {
+  const ids = [10, 20, 30];
+
+  it("picks the message below the removed one", () => {
+    expect(neighborId(ids, 20)).toBe(30);
+  });
+
+  it("picks the one above when the removed one was last", () => {
+    expect(neighborId(ids, 30)).toBe(20);
+  });
+
+  it("returns null when the list would empty", () => {
+    expect(neighborId([10], 10)).toBeNull();
+  });
+
+  it("returns null when the id isn't in the list", () => {
+    expect(neighborId(ids, 999)).toBeNull();
   });
 });

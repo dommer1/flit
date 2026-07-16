@@ -99,6 +99,15 @@ export function setMessageRead(
 }
 
 /**
+ * Move a message to the account's Trash folder on the server, then drop it
+ * from the local cache. Rejects (and keeps the row) if there is no trash
+ * folder or the server move fails.
+ */
+export function moveToTrash(messageId: number): Promise<void> {
+  return invoke<void>("move_to_trash", { messageId });
+}
+
+/**
  * Queue a message for sending after its undo window. Resolves as soon as
  * the message is validated and queued; progress arrives via onSendQueued /
  * onSendFinished / onSendUndone.

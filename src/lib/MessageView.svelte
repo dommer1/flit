@@ -8,6 +8,7 @@
     message,
     onDraft,
     onSetRead,
+    onTrash,
   }: {
     message: MessageHeader | null;
     // why: bodyText rides along so the draft can quote what is on screen
@@ -18,6 +19,7 @@
       bodyText: string | null,
     ) => void;
     onSetRead?: (id: number, read: boolean) => void;
+    onTrash?: (id: number) => void;
   } = $props();
 
   let body = $state<MessageBody | null>(null);
@@ -73,7 +75,7 @@
       </div>
       <div class="meta">
         <span class="date">{formatFullDate(message.date)}</span>
-        {#if onDraft || onSetRead}
+        {#if onDraft || onSetRead || onTrash}
           {@const current = message}
           <div class="actions">
             {#if onDraft}
@@ -96,6 +98,12 @@
               {@const setRead = onSetRead}
               <button onclick={() => setRead(current.id, !current.read)}>
                 {current.read ? "Mark Unread" : "Mark Read"}
+              </button>
+            {/if}
+            {#if onTrash}
+              {@const trash = onTrash}
+              <button class="danger" onclick={() => trash(current.id)}>
+                Trash
               </button>
             {/if}
           </div>
@@ -247,6 +255,12 @@
 
   .actions button:hover {
     background: var(--bg-hover);
+  }
+
+  .actions button.danger:hover {
+    border-color: #d9302c;
+    background: #d9302c;
+    color: #ffffff;
   }
 
   .recipients {

@@ -4,6 +4,7 @@
     listAccounts,
     listMailboxes,
     listMessages,
+    moveToTrash,
     onAccountsChanged,
     onMessagesChanged,
     onSendFinished,
@@ -23,7 +24,7 @@
     type DraftKind,
   } from "./lib/draft";
   import type { Account, Mailbox, MessageHeader } from "./lib/types";
-  import { nextMessageId, type NavDelta } from "./lib/messageNav";
+  import { neighborId, nextMessageId, type NavDelta } from "./lib/messageNav";
   import {
     clampPaneWidth,
     loadPaneWidths,
@@ -62,6 +63,21 @@
     void setMessageRead(id, read).catch((err: unknown) =>
       console.error("failed to set read state:", err),
     );
+  }
+
+  // Move to Trash, then step the selection to the neighbour the removed
+  // message leaves behind (like Apple Mail). The backend emits
+  // messages-changed once the server confirms, dropping the row from the list.
+  function handleTrash(id: number) {
+    const next = neighborId(
+      messages.map((m) => m.id),
+      id,
+    );
+    void moveToTrash(id).catch((err: unknown) =>
+      console.error("failed to move to trash:", err),
+    );
+    if (next === null) selectedMessageId = null;
+    else selectMessage(next);
   }
 
   // Arrow Up / Down walk the list. Ignored while typing in a field (search,
@@ -374,6 +390,7 @@
         message={selectedMessage}
         onDraft={openDraft}
         onSetRead={handleSetRead}
+        onTrash={handleTrash}
       />
     </section>
   </main>
