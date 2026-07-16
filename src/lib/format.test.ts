@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatFileSize,
   formatFullDate,
   formatListDate,
   senderInitials,
@@ -87,5 +88,20 @@ describe("formatFullDate", () => {
 
   it("returns the raw string for unparseable dates", () => {
     expect(formatFullDate("not a date")).toBe("not a date");
+  });
+});
+
+describe("formatFileSize", () => {
+  it("keeps byte counts plain below 1 kB", () => {
+    expect(formatFileSize(0)).toBe("0 B");
+    expect(formatFileSize(999)).toBe("999 B");
+  });
+
+  it("uses one decimal under 10 units and none above", () => {
+    expect(formatFileSize(1200)).toBe("1.2 kB");
+    expect(formatFileSize(45_600)).toBe("46 kB");
+    expect(formatFileSize(2_400_000)).toBe("2.4 MB");
+    expect(formatFileSize(123_000_000)).toBe("123 MB");
+    expect(formatFileSize(1_100_000_000)).toBe("1.1 GB");
   });
 });

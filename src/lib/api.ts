@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import type {
   Account,
   AttachmentInfo,
   Mailbox,
+  MessageAttachment,
   MessageBody,
   MessageHeader,
   NewAccount,
@@ -136,6 +137,31 @@ export function moveMessage(
   mailbox: string,
 ): Promise<void> {
   return invoke<void>("move_message", { messageId, mailbox });
+}
+
+/**
+ * Save one received attachment: a native save dialog picks the destination,
+ * then the backend re-fetches the message from the server and writes the
+ * extracted part there. Resolves without saving when the dialog is
+ * cancelled.
+ */
+export async function saveAttachment(
+  attachment: MessageAttachment,
+): Promise<void> {
+  const path = await save({ defaultPath: attachment.filename });
+  if (path === null) return;
+  await invoke<void>("save_attachment", { attachmentId: attachment.id, path });
+}
+
+/**
+ * Save every attachment of a message into a folder picked in a native
+ * dialog; one server fetch for all of them. Resolves without saving when
+ * the dialog is cancelled.
+ */
+export async function saveAllAttachments(messageId: number): Promise<void> {
+  const dir = await open({ directory: true, title: "Save Attachments" });
+  if (dir === null) return;
+  await invoke<void>("save_all_attachments", { messageId, dir });
 }
 
 /**

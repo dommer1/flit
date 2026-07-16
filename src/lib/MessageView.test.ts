@@ -218,6 +218,64 @@ it("offers no Move to button when there are no folders to move to", () => {
   ).not.toBeInTheDocument();
 });
 
+const attachments = [
+  {
+    id: 11,
+    messageId: 1,
+    partIndex: 0,
+    filename: "report.pdf",
+    contentType: "application/pdf",
+    size: 1200,
+  },
+  {
+    id: 12,
+    messageId: 1,
+    partIndex: 2,
+    filename: "photo.jpg",
+    contentType: "image/jpeg",
+    size: 45_600,
+  },
+];
+
+it("lists attachments and saves one on click", async () => {
+  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
+    body({ text: "see files", attachments }),
+  );
+
+  render(MessageView, { props: { message } });
+
+  const chip = await screen.findByRole("button", { name: /report\.pdf/ });
+  expect(chip).toHaveTextContent("1.2 kB");
+  expect(screen.getByRole("button", { name: /photo\.jpg/ })).toBeInTheDocument();
+
+  await fireEvent.click(chip);
+  expect(api.saveAttachment).toHaveBeenCalledWith(attachments[0]);
+});
+
+it("offers Save All only for multiple attachments", async () => {
+  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
+    body({ text: "see files", attachments }),
+  );
+  render(MessageView, { props: { message } });
+
+  await fireEvent.click(
+    await screen.findByRole("button", { name: "Save All" }),
+  );
+  expect(api.saveAllAttachments).toHaveBeenCalledWith(1);
+});
+
+it("shows no attachment strip when a message has none", async () => {
+  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
+    body({ text: "plain" }),
+  );
+  render(MessageView, { props: { message } });
+  await screen.findByText("plain");
+
+  expect(
+    screen.queryByRole("button", { name: "Save All" }),
+  ).not.toBeInTheDocument();
+});
+
 it("offers reply, reply all and forward with the loaded text", async () => {
   vi.mocked(api.getMessageBody).mockResolvedValueOnce(
     body({ html: null, text: "hi there" }),

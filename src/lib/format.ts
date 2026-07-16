@@ -41,6 +41,19 @@ export function formatListDate(iso: string, now: Date = new Date()): string {
   }).format(date);
 }
 
+/** Human file size (decimal units, like Finder): 999 B, 1.2 kB, 46 kB, 2.4 MB. */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1000) return `${bytes} B`;
+  let value = bytes;
+  for (const unit of ["kB", "MB", "GB"]) {
+    value /= 1000;
+    if (value < 1000 || unit === "GB") {
+      return `${value < 10 ? value.toFixed(1) : String(Math.round(value))} ${unit}`;
+    }
+  }
+  return `${bytes} B`;
+}
+
 export function formatFullDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
