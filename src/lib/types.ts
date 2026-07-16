@@ -73,6 +73,24 @@ export interface AttachmentInfo {
   size: number;
 }
 
+/** One "Send Later" message parked in the backend until its delivery time.
+ * Mirrors ScheduledMessage in models.rs. */
+export interface ScheduledMessage {
+  id: number;
+  accountId: number;
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  body: string;
+  bodyHtml: string | null;
+  attachments: AttachmentRef[];
+  /** Unix seconds (UTC) when the message should leave. */
+  scheduledAt: number;
+  /** Missed rows never send on their own — the user resolves them. */
+  status: "pending" | "missed";
+}
+
 /** Payload of send-queued / send-finished / send-undone events. */
 export interface SendEvent {
   id: number;
