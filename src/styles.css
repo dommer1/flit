@@ -12,7 +12,7 @@
   --accent-text: #ffffff;
 
   --bg-window: #ffffff;
-  --bg-sidebar: #f2f1f6;
+  --bg-sidebar: #ececef;
   --bg-hover: rgba(0, 0, 0, 0.045);
   --bg-selected-muted: rgba(0, 0, 0, 0.08);
 
@@ -23,9 +23,14 @@
   --divider: rgba(0, 0, 0, 0.12);
   --hairline: rgba(0, 0, 0, 0.08);
 
-  /* Height reserved for the macOS traffic lights — the main window uses
-     titleBarStyle Overlay, so the webview extends to the top edge. */
-  --titlebar-inset: 38px;
+  /* The unified top toolbar (main window): a full-width chrome strip that
+     also hosts the native traffic lights (titleBarStyle Overlay). */
+  --toolbar-height: 52px;
+  --bg-toolbar-top: #fbfbfc;
+  --bg-toolbar-bottom: #f2f2f4;
+  /* Structural chrome borders (toolbar edge, pane dividers) — solid, unlike
+     the translucent in-content hairlines. */
+  --border-chrome: #d6d6da;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -43,6 +48,10 @@
 
     --divider: rgba(255, 255, 255, 0.14);
     --hairline: rgba(255, 255, 255, 0.1);
+
+    --bg-toolbar-top: #3a3a3c;
+    --bg-toolbar-bottom: #333335;
+    --border-chrome: rgba(0, 0, 0, 0.55);
   }
 }
 

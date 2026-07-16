@@ -468,8 +468,8 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <!-- why: with titleBarStyle Overlay there is no native title bar left to grab,
-     so the strip under the traffic lights becomes the window drag handle. -->
-<div class="titlebar" data-tauri-drag-region></div>
+     so the toolbar strip doubles as the window drag handle. -->
+<div class="toolbar" data-tauri-drag-region></div>
 
 <div
   class="layout"
@@ -493,7 +493,7 @@
          — a focusable separator is the ARIA "window splitter" widget; Svelte's
          checker only knows the static (non-focusable) separator variant. -->
     <div
-      class="divider ghost"
+      class="divider"
       role="separator"
       tabindex="0"
       aria-orientation="vertical"
@@ -505,11 +505,7 @@
       onkeydown={(e) => nudgePane("sidebar", e)}
     ></div>
   {/if}
-  <!-- The list and reading panes share one floating rounded card on top of
-       the window's glass backdrop — the macOS Tahoe content-area look. -->
   <main
-    class="card"
-    class:collapsed={sidebarCollapsed}
     style:grid-template-columns={`${paneWidths.list}px 1px minmax(0, 1fr)`}
   >
     <section class="list">
@@ -574,41 +570,31 @@
     background: transparent;
   }
 
-  .titlebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: calc(var(--titlebar-inset) - 6px);
-    z-index: 10;
+  /* The unified toolbar strip: full window width, native traffic lights
+     float over its left end (tauri.conf.json trafficLightPosition). */
+  .toolbar {
+    box-sizing: border-box;
+    height: var(--toolbar-height);
+    background: linear-gradient(
+      var(--bg-toolbar-top),
+      var(--bg-toolbar-bottom)
+    );
+    border-bottom: 1px solid var(--border-chrome);
   }
 
   .layout {
     display: grid;
-    height: 100vh;
+    height: calc(100vh - var(--toolbar-height));
   }
 
   aside {
-    padding-top: var(--titlebar-inset);
     overflow-y: auto;
   }
 
-  .card {
+  main {
     display: grid;
     min-width: 0;
-    margin: calc(var(--titlebar-inset) - 6px) 10px 10px 0;
-    border-radius: 10px;
     background: var(--bg-window);
-    box-shadow:
-      0 0 0 1px var(--hairline),
-      0 8px 28px rgba(0, 0, 0, 0.14);
-    overflow: hidden;
-  }
-
-  /* With the sidebar hidden the card spans the window, but keeps a small
-     left inset so it still reads as a floating card, not a flush panel. */
-  .card.collapsed {
-    margin-left: 10px;
   }
 
   .list {
@@ -621,7 +607,7 @@
      a drag handle, with a wider invisible grab area via the ::after overlay. */
   .divider {
     position: relative;
-    background: var(--divider);
+    background: var(--border-chrome);
     cursor: col-resize;
     touch-action: none;
   }
@@ -633,12 +619,6 @@
     bottom: 0;
     left: -3px;
     right: -3px;
-  }
-
-  /* The sidebar handle is invisible — on the glass backdrop the card edge
-     is the visual boundary, but the grab area stays. */
-  .divider.ghost {
-    background: transparent;
   }
 
   .divider:focus-visible {
