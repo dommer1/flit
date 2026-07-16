@@ -58,3 +58,4 @@ utf7-imap = "0.3.2"
 base64 = "0.22.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["native-tls"] }
 lightningcss = { version = "=1.0.0-alpha.71", default-features = false }
+mail-builder = "0.4"

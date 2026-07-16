@@ -59,7 +59,8 @@ pub fn server_saves_sent_copy(smtp_host: &str) -> bool {
 const MAX_ATTACHMENT_TOTAL: usize = 25 * 1024 * 1024;
 
 /// Reject attachment payloads the receiving server would bounce anyway.
-fn ensure_attachment_budget(total: usize) -> Result<(), AppError> {
+/// pub(crate): the draft path enforces the same budget before an APPEND.
+pub(crate) fn ensure_attachment_budget(total: usize) -> Result<(), AppError> {
     if total > MAX_ATTACHMENT_TOTAL {
         return Err(AppError::Smtp(
             "attachments exceed the 25 MB limit".to_string(),
