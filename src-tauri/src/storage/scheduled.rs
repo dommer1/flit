@@ -121,6 +121,7 @@ mod tests {
             body: "hello".to_string(),
             body_html: None,
             attachments: vec![],
+            draft_message_id: None,
         }
     }
 

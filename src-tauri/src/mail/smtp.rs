@@ -250,6 +250,7 @@ mod tests {
             body: "Hi there".to_string(),
             body_html: None,
             attachments: Vec::new(),
+            draft_message_id: None,
         }
     }
 

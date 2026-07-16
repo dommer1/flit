@@ -53,6 +53,9 @@ export interface OutgoingMessage {
   bodyHtml?: string;
   /** Attached files; absent/empty = none. Bytes are read at send time. */
   attachments?: AttachmentRef[];
+  /** Message-ID of this message's autosaved server draft version, if any —
+   * the backend deletes it from the Drafts folder after a successful send. */
+  draftMessageId?: string;
 }
 
 /** One file attached to an outgoing message, referenced by path. */

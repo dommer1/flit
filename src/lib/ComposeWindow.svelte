@@ -95,6 +95,11 @@
       subject = draft?.subject ?? "";
       initialBody = draft?.body ?? "";
       body = initialBody;
+      // A draft handed back by undo/failed-send keeps replacing the same
+      // server version. Mark it dirty so closing this window re-saves it —
+      // its newest text may never have been autosaved.
+      draftMessageId = draft?.draftMessageId ?? null;
+      dirty = draftMessageId !== null;
       loaded = true;
       // why re-stat instead of trusting the draft: an undone/failed send may
       // reopen after the file changed or vanished — surface that now.
@@ -199,6 +204,9 @@
       // treats a missing field as "plain text only".
       bodyHtml: bodyHtml || undefined,
       attachments: attachments.map(({ path, name }) => ({ path, name })),
+      // why: rides along into queue_send so the backend can clear the
+      // autosaved server draft once the send succeeds.
+      draftMessageId: draftMessageId ?? undefined,
     };
   }
 
@@ -231,6 +239,9 @@
     error = null;
     try {
       await scheduleSend(buildMessage(accountId), at);
+      // why: the message now lives in the scheduled queue — closing must
+      // not snapshot it back into the Drafts folder as unfinished work.
+      sent = true;
       await closeCompose();
     } catch (err) {
       error = String(err);

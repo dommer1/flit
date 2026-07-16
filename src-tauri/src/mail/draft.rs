@@ -135,6 +135,7 @@ mod tests {
             body: "Ahoj, prídeš?".to_string(),
             body_html: None,
             attachments: Vec::new(),
+            draft_message_id: None,
         }
     }
 

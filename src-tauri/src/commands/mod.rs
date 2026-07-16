@@ -515,7 +515,38 @@ async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppE
     if let Err(err) = save_sent_copy(state, &account, &password, &raw).await {
         eprintln!("sent copy for account {} failed: {err}", account.id);
     }
+    // Same rule for the draft cleanup: a leftover draft is cosmetic, the
+    // next save/sync can deal with it.
+    if let Some(draft_id) = &message.draft_message_id {
+        if let Err(err) = delete_sent_draft(state, &account, &password, draft_id).await {
+            eprintln!("could not delete draft {draft_id} after send: {err}");
+        }
+    }
     Ok(())
+}
+
+/// Remove the sent message's autosaved version from the Drafts folder, so
+/// it stops looking like unfinished work here and in webmail.
+async fn delete_sent_draft(
+    state: &AppState,
+    account: &Account,
+    password: &str,
+    draft_id: &str,
+) -> Result<(), AppError> {
+    let Some(drafts) = storage::mailboxes::name_for_role(&state.pool, account.id, "drafts").await?
+    else {
+        return Ok(()); // no drafts folder, nothing to clean up
+    };
+    let mut session = mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        password,
+    )
+    .await?;
+    let result = delete_draft_version(&mut session, &drafts, draft_id).await;
+    let _ = session.logout().await;
+    result
 }
 
 /// Mirror a delivered message into the account's IMAP Sent folder so other

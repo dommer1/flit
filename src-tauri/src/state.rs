@@ -99,6 +99,7 @@ mod tests {
             body: "hi".to_string(),
             body_html: None,
             attachments: Vec::new(),
+            draft_message_id: None,
         }
     }
 

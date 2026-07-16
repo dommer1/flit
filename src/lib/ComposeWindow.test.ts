@@ -454,3 +454,47 @@ it("shows the failure and stays open when scheduling fails", async () => {
   );
   expect(api.closeCompose).not.toHaveBeenCalled();
 });
+
+it("hands the autosaved draft id to the send queue", async () => {
+  await renderLoaded();
+
+  vi.useFakeTimers();
+  try {
+    await fireEvent.input(screen.getByLabelText("Subject"), {
+      target: { value: "v1" },
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+  } finally {
+    vi.useRealTimers();
+  }
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({ draftMessageId: "draft-id-1@flit.local" }),
+    ),
+  );
+});
+
+it("keeps replacing the same server draft after an undo hands it back", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    accountId: 1,
+    to: "alice@example.com",
+    subject: "Rozpísané",
+    body: "text",
+    draftMessageId: "draft-id-0@flit.local",
+  });
+  render(ComposeWindow);
+  await waitFor(() => expect(screen.getByLabelText("From")).toHaveValue("1"));
+
+  // No edits at all — closing must still re-save, because the handed-back
+  // text may be newer than the last autosaved version.
+  const preventDefault = vi.fn();
+  await closeHandler!({ preventDefault });
+
+  expect(api.saveDraft).toHaveBeenCalledWith(
+    expect.objectContaining({ subject: "Rozpísané" }),
+    "draft-id-0@flit.local",
+  );
+  expect(destroyWindow).toHaveBeenCalled();
+});

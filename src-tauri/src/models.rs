@@ -80,6 +80,10 @@ pub struct OutgoingMessage {
     /// bytes are read from disk when the MIME message is built.
     #[serde(default)]
     pub attachments: Vec<AttachmentRef>,
+    /// Message-ID of this message's autosaved version in the server's
+    /// Drafts folder, if any — deleted there after a successful send.
+    #[serde(default)]
+    pub draft_message_id: Option<String>,
 }
 
 /// What inspect_attachments returns for one dropped file — the metadata the
@@ -148,6 +152,8 @@ impl ScheduledMessage {
             body: self.body.clone(),
             body_html: self.body_html.clone(),
             attachments: self.attachments.clone(),
+            // Scheduled rows never track a server draft version.
+            draft_message_id: None,
         }
     }
 }
