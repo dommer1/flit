@@ -297,6 +297,10 @@
   .swipe-row {
     position: relative;
     overflow: hidden;
+    /* why: overflow != visible drops a flex item's automatic minimum size
+       to 0, so rows would squash vertically to fit the pane instead of
+       scrolling — pin them at their content height. */
+    flex-shrink: 0;
   }
 
   .swipe-bg {
