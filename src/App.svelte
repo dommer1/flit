@@ -22,6 +22,7 @@
     type DraftKind,
   } from "./lib/draft";
   import type { Account, Mailbox, MessageHeader } from "./lib/types";
+  import { nextMessageId, type NavDelta } from "./lib/messageNav";
   import {
     clampPaneWidth,
     loadPaneWidths,
@@ -44,6 +45,33 @@
   let selectedMessage = $derived(
     messages.find((m) => m.id === selectedMessageId) ?? null,
   );
+
+  function selectMessage(id: number) {
+    selectedMessageId = id;
+  }
+
+  // Arrow Up / Down walk the list. Ignored while typing in a field (search,
+  // etc.) or with a modifier held, so system/app shortcuts aren't hijacked.
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const target = event.target as HTMLElement | null;
+    if (
+      target?.tagName === "INPUT" ||
+      target?.tagName === "TEXTAREA" ||
+      target?.isContentEditable
+    ) {
+      return;
+    }
+    event.preventDefault();
+    const delta: NavDelta = event.key === "ArrowDown" ? 1 : -1;
+    const next = nextMessageId(
+      messages.map((m) => m.id),
+      selectedMessageId,
+      delta,
+    );
+    if (next !== null) selectMessage(next);
+  }
 
   let listTitle = $derived(
     selectedAccountId === null
@@ -261,6 +289,8 @@
   });
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 <!-- why: with titleBarStyle Overlay there is no native title bar left to grab,
      so the strip under the traffic lights becomes the window drag handle. -->
 <div class="titlebar" data-tauri-drag-region></div>
@@ -304,7 +334,7 @@
         title={listTitle}
         {messages}
         selectedId={selectedMessageId}
-        onSelect={(id) => (selectedMessageId = id)}
+        onSelect={selectMessage}
         onCompose={openNewMessage}
         onSearch={handleSearch}
       />

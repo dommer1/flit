@@ -592,3 +592,22 @@ it("shows a failure badge with the delivery error", async () => {
   expect(screen.getByText("Couldn't send: Ahoj")).toBeInTheDocument();
   expect(screen.getByText("smtp error: relay refused")).toBeInTheDocument();
 });
+
+it("navigates the message list with Arrow Down / Up", async () => {
+  render(App);
+  const first = (await screen.findByText("Weekend plans")).closest(
+    '[role="option"]',
+  );
+  const second = screen.getByText("Re: Invoice").closest('[role="option"]');
+  expect(first).toHaveAttribute("aria-selected", "false");
+
+  await fireEvent.keyDown(document.body, { key: "ArrowDown" });
+  expect(first).toHaveAttribute("aria-selected", "true");
+
+  await fireEvent.keyDown(document.body, { key: "ArrowDown" });
+  expect(second).toHaveAttribute("aria-selected", "true");
+  expect(first).toHaveAttribute("aria-selected", "false");
+
+  await fireEvent.keyDown(document.body, { key: "ArrowUp" });
+  expect(first).toHaveAttribute("aria-selected", "true");
+});

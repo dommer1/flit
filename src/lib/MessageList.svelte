@@ -19,6 +19,16 @@
   } = $props();
 
   let query = $state("");
+
+  // why: keyboard navigation moves the selection without scrolling — keep the
+  // selected row in view so arrowing through a long list stays usable.
+  let listEl = $state<HTMLElement | null>(null);
+  $effect(() => {
+    if (selectedId === null || listEl === null) return;
+    listEl
+      .querySelector<HTMLElement>(".selected")
+      ?.scrollIntoView({ block: "nearest" });
+  });
 </script>
 
 <div class="pane">
@@ -50,7 +60,7 @@
     />
   </div>
 
-  <div class="list" role="listbox" aria-label="Messages">
+  <div class="list" role="listbox" aria-label="Messages" bind:this={listEl}>
     {#if messages.length === 0}
       <p class="empty">No Messages</p>
     {:else}
