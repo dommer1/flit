@@ -13,6 +13,8 @@ export interface Account {
   lastError: string | null;
   /** Unix seconds of the last check; null = never checked yet. */
   checkedAt: number | null;
+  /** User-chosen accent color (e.g. "#ff9f0a"); null = no color set. */
+  color: string | null;
 }
 
 /** Payload for add_account — the password travels as a separate argument. */

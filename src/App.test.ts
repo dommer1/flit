@@ -14,6 +14,7 @@ const accounts: Account[] = [
     username: "domco@example.com",
     lastError: null,
     checkedAt: 1751900000,
+    color: null,
   },
   {
     id: 2,
@@ -26,6 +27,7 @@ const accounts: Account[] = [
     username: "hello@vocalio.sk",
     lastError: null,
     checkedAt: 1751900000,
+    color: null,
   },
 ];
 

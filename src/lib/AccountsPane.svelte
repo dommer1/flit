@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ACCOUNT_COLORS } from "./accountColors";
   import type { Account, NewAccount } from "./types";
   import AddAccountForm from "./AddAccountForm.svelte";
 
@@ -6,6 +7,7 @@
     accounts,
     onAdd,
     onDelete,
+    onSetColor,
   }: {
     accounts: Account[];
     // why: resolves to the created account on success, null on failure — the
@@ -15,6 +17,8 @@
     // why: hands over the whole account — the parent's confirmation dialog
     // needs the name and email, not just the id.
     onDelete: (account: Account) => void;
+    // why: `null` clears the color; the parent owns the api call + refresh.
+    onSetColor: (id: number, color: string | null) => void;
   } = $props();
 
   let selectedId = $state<number | null>(null);
@@ -93,6 +97,26 @@
           {:else}
             <span class="status unknown">Not checked yet</span>
           {/if}
+        </dd>
+        <dt>Color</dt>
+        <dd class="colors">
+          <button
+            class="swatch none"
+            class:selected={!selected.color}
+            aria-label="No color"
+            title="No color"
+            onclick={() => onSetColor(selected.id, null)}
+          ></button>
+          {#each ACCOUNT_COLORS as option (option.value)}
+            <button
+              class="swatch"
+              class:selected={selected.color === option.value}
+              style:background={option.value}
+              aria-label={option.name}
+              title={option.name}
+              onclick={() => onSetColor(selected.id, option.value)}
+            ></button>
+          {/each}
         </dd>
         <dt>Name</dt>
         <dd>{selected.name}</dd>
@@ -236,6 +260,48 @@
 
   dd {
     margin: 0;
+  }
+
+  .colors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+  }
+
+  .swatch {
+    width: 1.15rem;
+    height: 1.15rem;
+    padding: 0;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 50%;
+    cursor: pointer;
+  }
+
+  /* The selected swatch gets a ring: a window-colored gap, then the accent. */
+  .swatch.selected {
+    box-shadow:
+      0 0 0 2px #fff,
+      0 0 0 3.5px #007aff;
+  }
+
+  .swatch.none {
+    position: relative;
+    background: #fff;
+  }
+
+  /* A red diagonal marks the "no color" swatch. */
+  .swatch.none::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: linear-gradient(
+      to top right,
+      transparent 45%,
+      #d9302c 45%,
+      #d9302c 55%,
+      transparent 55%
+    );
   }
 
   .empty {

@@ -27,6 +27,14 @@ export function deleteAccount(id: number): Promise<void> {
   return invoke<void>("delete_account", { id });
 }
 
+/** Set (or clear, with `null`) an account's accent color. */
+export function setAccountColor(
+  id: number,
+  color: string | null,
+): Promise<void> {
+  return invoke<void>("set_account_color", { id, color });
+}
+
 /** Verify & Save: prove IMAP + SMTP credentials before saving the account. */
 export function testConnection(
   account: NewAccount,

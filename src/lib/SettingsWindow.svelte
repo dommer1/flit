@@ -8,6 +8,7 @@
     getRemoteImagePolicy,
     listAccounts,
     onAccountsChanged,
+    setAccountColor,
     setRemoteImagePolicy,
     testConnection,
   } from "./api";
@@ -71,6 +72,16 @@
     }
   }
 
+  async function handleSetColor(id: number, color: string | null) {
+    lastError = null;
+    try {
+      await setAccountColor(id, color);
+      await refresh();
+    } catch (err) {
+      lastError = String(err);
+    }
+  }
+
   async function selectPolicy(next: RemoteImagePolicy) {
     lastError = null;
     const previous = policy;
@@ -121,7 +132,12 @@
   </header>
 
   {#if tab === "accounts"}
-    <AccountsPane {accounts} onAdd={handleAdd} onDelete={handleDelete} />
+    <AccountsPane
+      {accounts}
+      onAdd={handleAdd}
+      onDelete={handleDelete}
+      onSetColor={handleSetColor}
+    />
   {:else}
     <section class="privacy">
       <fieldset>

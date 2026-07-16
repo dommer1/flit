@@ -15,6 +15,7 @@ const accounts: Account[] = [
     username: "domco@example.com",
     lastError: null,
     checkedAt: 1751900000,
+    color: null,
   },
   {
     id: 2,
@@ -27,6 +28,7 @@ const accounts: Account[] = [
     username: "hello@vocalio.sk",
     lastError: null,
     checkedAt: 1751900000,
+    color: null,
   },
 ];
 
@@ -35,6 +37,7 @@ function renderPane(overrides: Record<string, unknown> = {}) {
     accounts,
     onAdd: vi.fn(async () => null),
     onDelete: vi.fn(),
+    onSetColor: vi.fn(),
     ...overrides,
   };
   render(AccountsPane, { props });
@@ -150,4 +153,19 @@ it("shows an empty state and disables delete without accounts", () => {
 
   expect(screen.getByText(/No accounts yet/)).toBeInTheDocument();
   expect(screen.getByLabelText("Delete account")).toBeDisabled();
+});
+
+it("sets an account color from the palette", async () => {
+  const props = renderPane();
+
+  await fireEvent.click(screen.getByLabelText("Orange"));
+  expect(props.onSetColor).toHaveBeenCalledWith(1, "#ff9f0a");
+});
+
+it("clears the color with the no-color swatch", async () => {
+  const colored = { ...accounts[0], color: "#ff9f0a" };
+  const props = renderPane({ accounts: [colored] });
+
+  await fireEvent.click(screen.getByLabelText("No color"));
+  expect(props.onSetColor).toHaveBeenCalledWith(1, null);
 });

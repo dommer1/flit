@@ -14,6 +14,7 @@ const accounts: Account[] = [
     username: "domco@example.com",
     lastError: null,
     checkedAt: 1751900000,
+    color: null,
   },
   {
     id: 2,
@@ -26,6 +27,7 @@ const accounts: Account[] = [
     username: "hello@vocalio.sk",
     lastError: null,
     checkedAt: 1751900000,
+    color: null,
   },
 ];
 
@@ -36,6 +38,7 @@ vi.mock("./api", () => ({
     ...account,
   })),
   deleteAccount: vi.fn(async () => undefined),
+  setAccountColor: vi.fn(async () => undefined),
   testConnection: vi.fn(async () => undefined),
   confirmAccountDeletion: vi.fn(async () => true),
   closeSettings: vi.fn(async () => undefined),
