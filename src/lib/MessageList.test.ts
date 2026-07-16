@@ -89,6 +89,45 @@ it("fires nothing when the swipe stops short of the trigger", async () => {
   expect(onSetRead).not.toHaveBeenCalled();
 });
 
+it("routes swipes through the configured actions", async () => {
+  const onTrash = vi.fn();
+  const onReply = vi.fn();
+  renderList({
+    swipeActions: { left: "trash", right: "reply" },
+    onTrash,
+    onReply,
+  });
+  const row = screen.getByRole("option", { name: /Alice/ });
+
+  // Mid-gesture the strip announces the configured action, not Archive.
+  await swipe(row, 60);
+  expect(screen.getByText("Trash")).toBeInTheDocument();
+  await swipe(row, 60);
+  vi.advanceTimersByTime(200);
+  expect(onTrash).toHaveBeenCalledWith(1);
+
+  await swipe(row, -120);
+  expect(screen.getByText("Reply")).toBeInTheDocument();
+  vi.advanceTimersByTime(200);
+  expect(onReply).toHaveBeenCalledWith(1);
+});
+
+it("neither moves nor fires on a direction configured to none", async () => {
+  const onArchive = vi.fn();
+  renderList({
+    swipeActions: { left: "none", right: "toggleRead" },
+    onArchive,
+  });
+  const row = screen.getByRole("option", { name: /Alice/ });
+
+  await swipe(row, 120);
+  // The row stays pinned — no strip is revealed for the dead side.
+  expect(row.style.transform).toBe("");
+  vi.advanceTimersByTime(200);
+
+  expect(onArchive).not.toHaveBeenCalled();
+});
+
 it("leaves vertical scrolling alone", async () => {
   const onArchive = vi.fn();
   renderList({ onArchive });

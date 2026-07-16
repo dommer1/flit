@@ -3,6 +3,8 @@
   import {
     archiveMessage,
     cancelScheduled,
+    getMessageBody,
+    getSwipeActions,
     listAccounts,
     listMailboxes,
     listMessages,
@@ -11,6 +13,7 @@
     moveToTrash,
     onAccountsChanged,
     onMessagesChanged,
+    onSettingsChanged,
     onScheduledChanged,
     onScheduledMissed,
     onSendFinished,
@@ -37,7 +40,9 @@
     Mailbox,
     MessageHeader,
     ScheduledMessage,
+    SwipeActions,
   } from "./lib/types";
+  import { DEFAULT_SWIPE_ACTIONS } from "./lib/swipe";
   import { neighborId, nextMessageId, type NavDelta } from "./lib/messageNav";
   import {
     clampPaneWidth,
@@ -124,6 +129,28 @@
 
   function handleTrash(id: number) {
     evictMessage(id, moveToTrash);
+  }
+
+  // What the list's swipe gesture does per direction — user-configurable in
+  // the settings window, so it loads on start and re-loads on settings-changed.
+  let swipeActions = $state<SwipeActions>(DEFAULT_SWIPE_ACTIONS);
+
+  async function refreshSwipeActions() {
+    swipeActions = await getSwipeActions();
+  }
+
+  // why fetch the body: the list only holds headers, but a reply should
+  // quote the message like one opened from the viewer — a failed fetch
+  // still opens the compose window, just without the quote.
+  function handleSwipeReply(id: number) {
+    const message = messages.find((m) => m.id === id);
+    if (!message) return;
+    void getMessageBody(id)
+      .then((body) => openDraft("reply", message, body.text))
+      .catch((err: unknown) => {
+        console.error("failed to load body for reply:", err);
+        openDraft("reply", message, null);
+      });
   }
 
   // The account's archive folder wire name; Gmail has no \Archive, so its
@@ -446,6 +473,14 @@
       await refreshAccounts();
       await selectMailbox(null);
     })();
+    const refreshSwipeLogged = () =>
+      void refreshSwipeActions().catch((err: unknown) =>
+        console.error("failed to load swipe actions:", err),
+      );
+    refreshSwipeLogged();
+    // why: the settings window mutates the config in its own JS context —
+    // this window finds out through the backend's settings-changed event.
+    const unlistenSettings = onSettingsChanged(refreshSwipeLogged);
     // why separate: scheduled/missed sends must surface even if account sync
     // fails — they are local rows, not server state.
     const refreshScheduledLogged = () =>
@@ -477,6 +512,7 @@
       void unlistenUndone.then((stop) => stop());
       void unlistenMissed.then((stop) => stop());
       void unlistenScheduled.then((stop) => stop());
+      void unlistenSettings.then((stop) => stop());
     };
   });
 </script>
@@ -537,9 +573,12 @@
         {accountColors}
         selectedId={selectedMessageId}
         onSelect={selectMessage}
+        {swipeActions}
         onArchive={handleArchive}
         onSetRead={handleSetRead}
         {isArchived}
+        onTrash={handleTrash}
+        onReply={handleSwipeReply}
       />
       <Outbox entries={outbox} onUndo={handleUndo} />
     </section>

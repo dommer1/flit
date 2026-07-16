@@ -5,6 +5,7 @@ import type {
   MessageHeader,
   ScheduledMessage,
   SendEvent,
+  SwipeActions,
 } from "./lib/types";
 
 const accounts: Account[] = [
@@ -100,6 +101,8 @@ let sendFinished: ((e: SendEvent) => void) | undefined;
 let sendUndone: ((e: SendEvent) => void) | undefined;
 let scheduledMissed: (() => void) | undefined;
 let scheduledChanged: (() => void) | undefined;
+let settingsChanged: (() => void) | undefined;
+let currentSwipeActions: SwipeActions;
 
 // why a named default: tests override listMailboxes with
 // mockImplementation, which clearAllMocks does NOT undo — beforeEach
@@ -170,6 +173,11 @@ vi.mock("./lib/api", () => ({
     sendUndone = callback;
     return () => {};
   }),
+  getSwipeActions: vi.fn(async () => currentSwipeActions),
+  onSettingsChanged: vi.fn(async (callback: () => void) => {
+    settingsChanged = callback;
+    return () => {};
+  }),
   listScheduled: vi.fn(async () => currentScheduled),
   sendScheduledNow: vi.fn(async () => undefined),
   cancelScheduled: vi.fn(async () => undefined),
@@ -198,6 +206,8 @@ beforeEach(() => {
   sendUndone = undefined;
   scheduledMissed = undefined;
   scheduledChanged = undefined;
+  settingsChanged = undefined;
+  currentSwipeActions = { left: "archive", right: "toggleRead" };
   localStorage.clear();
   vi.clearAllMocks();
   vi.mocked(api.listMailboxes).mockImplementation(defaultListMailboxes);
@@ -750,6 +760,64 @@ it("restores the message when trashing fails on the server", async () => {
   await waitFor(() =>
     expect(screen.getByText("Weekend plans")).toBeInTheDocument(),
   );
+});
+
+it("trashes a row when the left swipe is configured to trash", async () => {
+  currentSwipeActions = { left: "trash", right: "reply" };
+  render(App);
+  const row = await screen.findByRole("option", { name: /Weekend plans/ });
+
+  // why fake timers mid-test: only the gesture's settle window is faked —
+  // the initial load polls with real timers (findBy*).
+  vi.useFakeTimers();
+  await fireEvent.wheel(row, { deltaX: 60 });
+  await fireEvent.wheel(row, { deltaX: 60 });
+  await vi.advanceTimersByTimeAsync(200);
+  vi.useRealTimers();
+
+  expect(api.moveToTrash).toHaveBeenCalledWith(1);
+  expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
+});
+
+it("opens a quoted reply when the right swipe is configured to reply", async () => {
+  currentSwipeActions = { left: "trash", right: "reply" };
+  render(App);
+  const row = await screen.findByRole("option", { name: /Weekend plans/ });
+
+  vi.useFakeTimers();
+  await fireEvent.wheel(row, { deltaX: -120 });
+  await vi.advanceTimersByTimeAsync(200);
+  vi.useRealTimers();
+
+  // The list has no body loaded — the reply fetches it to quote it.
+  expect(api.getMessageBody).toHaveBeenCalledWith(1);
+  await waitFor(() =>
+    expect(api.openCompose).toHaveBeenCalledWith({
+      accountId: 1,
+      to: "alice@example.com",
+      subject: "Re: Weekend plans",
+      body: expect.stringContaining("> body text"),
+    }),
+  );
+});
+
+it("re-reads the swipe config when settings change", async () => {
+  render(App);
+  const row = await screen.findByRole("option", { name: /Weekend plans/ });
+
+  currentSwipeActions = { left: "trash", right: "toggleRead" };
+  settingsChanged?.();
+  await waitFor(() =>
+    expect(api.getSwipeActions).toHaveBeenCalledTimes(2),
+  );
+
+  vi.useFakeTimers();
+  await fireEvent.wheel(row, { deltaX: 120 });
+  await vi.advanceTimersByTimeAsync(200);
+  vi.useRealTimers();
+
+  expect(api.moveToTrash).toHaveBeenCalledWith(1);
+  expect(api.archiveMessage).not.toHaveBeenCalled();
 });
 
 function missedEntry(over: Partial<ScheduledMessage> = {}): ScheduledMessage {

@@ -1,7 +1,12 @@
 <script lang="ts">
   import { formatListDate, senderName } from "./format";
-  import { accumulateOffset, actionFor, isHorizontal } from "./swipe";
-  import type { MessageHeader } from "./types";
+  import {
+    accumulateOffset,
+    actionFor,
+    DEFAULT_SWIPE_ACTIONS,
+    isHorizontal,
+  } from "./swipe";
+  import type { MessageHeader, SwipeAction, SwipeActions } from "./types";
 
   let {
     title,
@@ -9,9 +14,12 @@
     accountColors = {},
     selectedId,
     onSelect,
+    swipeActions = DEFAULT_SWIPE_ACTIONS,
     onArchive,
     onSetRead,
     isArchived,
+    onTrash,
+    onReply,
   }: {
     title: string;
     messages: MessageHeader[];
@@ -19,14 +27,33 @@
     accountColors?: Record<number, string | null>;
     selectedId: number | null;
     onSelect: (id: number) => void;
-    /** Fired by a full swipe left on a row (Apple Mail's archive gesture). */
+    /** Which action a full swipe in each direction fires. */
+    swipeActions?: SwipeActions;
     onArchive?: (id: number) => void;
-    /** Fired by a full swipe right on a row: toggle read/unread. */
     onSetRead?: (id: number, read: boolean) => void;
-    /** Row already sits in its archive folder — the swipe-left backdrop
+    /** Row already sits in its archive folder — the swipe backdrop
      * reads "Move to Inbox" (onArchive still fires; the parent routes). */
     isArchived?: (message: MessageHeader) => boolean;
+    onTrash?: (id: number) => void;
+    onReply?: (id: number) => void;
   } = $props();
+
+  /** Strip color + label for each swipe action ("none" never renders). */
+  const SWIPE_STRIPS: Record<
+    Exclude<SwipeAction, "none">,
+    { color: string; label: (message: MessageHeader) => string }
+  > = {
+    archive: {
+      color: "#4f7cf7",
+      label: (m) => (isArchived?.(m) ? "Move to Inbox" : "Archive"),
+    },
+    toggleRead: {
+      color: "#f0a132",
+      label: (m) => (m.read ? "Mark Unread" : "Mark Read"),
+    },
+    trash: { color: "#e5484d", label: () => "Trash" },
+    reply: { color: "#7a5af8", label: () => "Reply" },
+  };
 
   // The row currently under a two-finger swipe and how far it has traveled.
   // One gesture at a time — trackpads can't swipe two rows at once.
@@ -41,7 +68,7 @@
       swipeId = message.id;
       swipeOffset = 0;
     }
-    swipeOffset = accumulateOffset(swipeOffset, event.deltaX);
+    swipeOffset = accumulateOffset(swipeOffset, event.deltaX, swipeActions);
     // why a timer: DOM wheel streams have no "gesture ended" event — a quiet
     // gap longer than the ~10-20ms between trackpad pulses means release.
     clearTimeout(settleTimer);
@@ -50,12 +77,14 @@
 
   function settleSwipe(message: MessageHeader) {
     if (swipeId !== message.id) return;
-    const action = actionFor(swipeOffset);
+    const action = actionFor(swipeOffset, swipeActions);
     // Reset first so the row snaps back even when no action fired.
     swipeId = null;
     swipeOffset = 0;
     if (action === "archive") onArchive?.(message.id);
     else if (action === "toggleRead") onSetRead?.(message.id, !message.read);
+    else if (action === "trash") onTrash?.(message.id);
+    else if (action === "reply") onReply?.(message.id);
   }
 
   // why: keyboard navigation moves the selection without scrolling — keep the
@@ -85,25 +114,26 @@
       {#each messages as message (message.id)}
         {@const color = accountColors[message.accountId] ?? null}
         {@const offset = swipeId === message.id ? swipeOffset : 0}
+        {@const stripAction =
+          offset < 0
+            ? swipeActions.left
+            : offset > 0
+              ? swipeActions.right
+              : "none"}
         <div class="swipe-row" onwheel={(e) => handleWheel(message, e)}>
           <!-- why the width style: the backdrop spans exactly the revealed
                strip, so it can never show through the row content above it
                (hover tints the row translucent). -->
-          {#if offset < 0}
+          {#if stripAction !== "none"}
             <span
-              class="swipe-bg archive"
+              class="swipe-bg"
+              class:trailing={offset < 0}
+              class:leading={offset > 0}
               aria-hidden="true"
-              style:width={`${-offset}px`}
+              style:width={`${Math.abs(offset)}px`}
+              style:background={SWIPE_STRIPS[stripAction].color}
             >
-              {isArchived?.(message) ? "Move to Inbox" : "Archive"}
-            </span>
-          {:else if offset > 0}
-            <span
-              class="swipe-bg read"
-              aria-hidden="true"
-              style:width={`${offset}px`}
-            >
-              {message.read ? "Mark Unread" : "Mark Read"}
+              {SWIPE_STRIPS[stripAction].label(message)}
             </span>
           {/if}
           <button
@@ -213,16 +243,15 @@
     white-space: nowrap;
   }
 
-  .swipe-bg.archive {
+  /* Anchoring by direction; the action's color arrives as an inline style. */
+  .swipe-bg.trailing {
     right: 0;
     justify-content: flex-end;
-    background: #4f7cf7;
   }
 
-  .swipe-bg.read {
+  .swipe-bg.leading {
     left: 0;
     justify-content: flex-start;
-    background: #f0a132;
   }
 
   .swipe-row button {
