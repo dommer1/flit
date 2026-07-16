@@ -2,11 +2,13 @@
   import { onMount } from "svelte";
   import {
     closeCompose,
+    inspectAttachments,
     listAccounts,
+    onFileDrop,
     queueSend,
     takeComposeDraft,
   } from "./api";
-  import type { Account } from "./types";
+  import type { Account, AttachmentInfo } from "./types";
 
   let accounts = $state<Account[]>([]);
   let accountId = $state<number | null>(null);
@@ -18,11 +20,15 @@
   let showCcBcc = $state(false);
   let subject = $state("");
   let body = $state("");
+  let attachments = $state<AttachmentInfo[]>([]);
+  /** A file drag is currently above the window — shows the drop overlay. */
+  let dropHover = $state(false);
 
   let queueing = $state(false);
   let error = $state<string | null>(null);
 
   onMount(() => {
+    let unlisten: (() => void) | undefined;
     void (async () => {
       const [loadedAccounts, draft] = await Promise.all([
         listAccounts(),
@@ -38,8 +44,42 @@
       showCcBcc = cc !== "" || bcc !== "";
       subject = draft?.subject ?? "";
       body = draft?.body ?? "";
+      // why re-stat instead of trusting the draft: an undone/failed send may
+      // reopen after the file changed or vanished — surface that now.
+      if (draft?.attachments?.length) {
+        await addAttachments(draft.attachments.map((a) => a.path));
+      }
+      unlisten = await onFileDrop({
+        onHover: (hovering) => (dropHover = hovering),
+        onDrop: (paths) => void addAttachments(paths),
+      });
     })();
+    return () => unlisten?.();
   });
+
+  async function addAttachments(paths: string[]) {
+    if (queueing) return;
+    try {
+      const infos = await inspectAttachments(paths);
+      const fresh = infos.filter(
+        (info) => !attachments.some((a) => a.path === info.path),
+      );
+      attachments = [...attachments, ...fresh];
+      error = null;
+    } catch (err) {
+      error = String(err);
+    }
+  }
+
+  function removeAttachment(path: string) {
+    attachments = attachments.filter((a) => a.path !== path);
+  }
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
 
   // why: the backend queue owns the undo window — this window only hands
   // the message over (which validates addresses) and closes. The undo badge
@@ -50,7 +90,15 @@
     queueing = true;
     error = null;
     try {
-      await queueSend({ accountId, to, cc, bcc, subject, body });
+      await queueSend({
+        accountId,
+        to,
+        cc,
+        bcc,
+        subject,
+        body,
+        attachments: attachments.map(({ path, name }) => ({ path, name })),
+      });
       await closeCompose();
     } catch (err) {
       error = String(err);
@@ -60,7 +108,12 @@
   }
 </script>
 
-<form class="window" aria-label="Compose message" onsubmit={submit}>
+<form
+  class="window"
+  class:drop-target={dropHover}
+  aria-label="Compose message"
+  onsubmit={submit}
+>
   <!-- Canary-style toolbar: a tinted strip that hosts the native traffic
        lights (title bar overlay) and doubles as the window drag handle.
        Closing goes through the red traffic light — no extra ✕ here. -->
@@ -142,6 +195,26 @@
       placeholder="Subject"
     />
   </div>
+
+  {#if attachments.length > 0}
+    <ul class="attachments" aria-label="Attachments">
+      {#each attachments as attachment (attachment.path)}
+        <li class="chip">
+          <span class="chip-name">{attachment.name}</span>
+          <span class="chip-size">{formatSize(attachment.size)}</span>
+          <button
+            type="button"
+            class="chip-remove"
+            aria-label={`Remove ${attachment.name}`}
+            onclick={() => removeAttachment(attachment.path)}
+            disabled={queueing}
+          >
+            ×
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
 
   {#if error}
     <p class="error" role="alert">{error}</p>
@@ -273,6 +346,71 @@
   .subject {
     font-weight: 600;
     font-size: 14px;
+  }
+
+  /* Dashed accent frame over the whole window while a file drag hovers.
+     pointer-events: none so it never swallows the drop itself. */
+  .window.drop-target::after {
+    content: "Drop files to attach";
+    position: fixed;
+    inset: 8px;
+    display: grid;
+    place-items: center;
+    border: 2px dashed var(--accent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    pointer-events: none;
+  }
+
+  .attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex-shrink: 0;
+    margin: 0 20px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--hairline);
+    list-style: none;
+  }
+
+  .chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--bg-hover);
+    font-size: 12px;
+    color: var(--text-primary);
+  }
+
+  .chip-size {
+    color: var(--text-tertiary);
+  }
+
+  .chip-remove {
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: none;
+    background: transparent;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .chip-remove:hover {
+    color: var(--text-primary);
+  }
+
+  .chip-remove:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 
   .error {

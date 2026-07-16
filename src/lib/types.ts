@@ -40,6 +40,23 @@ export interface OutgoingMessage {
   subject: string;
   /** Plain text only for now. */
   body: string;
+  /** Attached files; absent/empty = none. Bytes are read at send time. */
+  attachments?: AttachmentRef[];
+}
+
+/** One file attached to an outgoing message, referenced by path. */
+export interface AttachmentRef {
+  path: string;
+  /** Filename shown to recipients — the path's final component. */
+  name: string;
+}
+
+/** inspect_attachments result — chip metadata for one dropped file. */
+export interface AttachmentInfo {
+  path: string;
+  name: string;
+  /** File size in bytes, for display only. */
+  size: number;
 }
 
 /** Payload of send-queued / send-finished / send-undone events. */

@@ -1,8 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ask } from "@tauri-apps/plugin-dialog";
 import type {
   Account,
+  AttachmentInfo,
   Mailbox,
   MessageBody,
   MessageHeader,
@@ -134,6 +136,38 @@ export function moveMessage(
   mailbox: string,
 ): Promise<void> {
   return invoke<void>("move_message", { messageId, mailbox });
+}
+
+/**
+ * Stat dropped file paths into chip metadata (name + size). Duplicates and
+ * directories drop out; rejects if a file is missing or unreadable.
+ */
+export function inspectAttachments(
+  paths: string[],
+): Promise<AttachmentInfo[]> {
+  return invoke<AttachmentInfo[]>("inspect_attachments", { paths });
+}
+
+/**
+ * Native file drag & drop over this window. Tauri intercepts the OS drag
+ * before the DOM sees it (HTML5 drop events never carry paths in a webview),
+ * so dropped file paths arrive through this listener instead.
+ */
+export function onFileDrop(callbacks: {
+  onHover: (hovering: boolean) => void;
+  onDrop: (paths: string[]) => void;
+}): Promise<UnlistenFn> {
+  return getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === "drop") {
+      callbacks.onHover(false);
+      callbacks.onDrop(event.payload.paths);
+    } else if (event.payload.type === "leave") {
+      callbacks.onHover(false);
+    } else {
+      // "enter" and "over" both mean a drag is above the window.
+      callbacks.onHover(true);
+    }
+  });
 }
 
 /**
