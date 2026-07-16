@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::error::AppError;
 use crate::models::{
     Account, Mailbox, MessageBody, MessageHeader, NewAccount, NotificationSettings,
-    OutgoingMessage, RemoteImagePolicy, Signature,
+    OutgoingMessage, RemoteImagePolicy, Signature, SwipeActions,
 };
 use crate::state::AppState;
 use crate::{auth, mail, storage};
@@ -1082,6 +1082,24 @@ pub async fn set_remote_image_policy(
     storage::settings::set_remote_image_policy(&state.pool, policy).await?;
     // why: the settings window mutates, the main window's open message view
     // listens and re-renders with the new policy.
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_swipe_actions(state: State<'_, AppState>) -> Result<SwipeActions, AppError> {
+    storage::settings::swipe_actions(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_swipe_actions(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    actions: SwipeActions,
+) -> Result<(), AppError> {
+    storage::settings::set_swipe_actions(&state.pool, actions).await?;
+    // why: the settings window mutates, the main window's message list
+    // listens and re-reads the gesture config.
     app.emit("settings-changed", ())?;
     Ok(())
 }
