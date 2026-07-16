@@ -196,7 +196,20 @@
     />
   </div>
 
+  {#if error}
+    <p class="error" role="alert">{error}</p>
+  {/if}
+
+  <textarea
+    aria-label="Message body"
+    class:with-attachments={attachments.length > 0}
+    bind:value={body}
+    disabled={queueing}
+  ></textarea>
+
   {#if attachments.length > 0}
+    <!-- Floating card pinned over the bottom of the body, so attachments
+         never push the envelope fields or the text around. -->
     <ul class="attachments" aria-label="Attachments">
       {#each attachments as attachment (attachment.path)}
         <li class="chip">
@@ -215,20 +228,12 @@
       {/each}
     </ul>
   {/if}
-
-  {#if error}
-    <p class="error" role="alert">{error}</p>
-  {/if}
-
-  <textarea
-    aria-label="Message body"
-    bind:value={body}
-    disabled={queueing}
-  ></textarea>
 </form>
 
 <style>
   .window {
+    /* why relative: the attachments card is positioned against the window. */
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100vh;
@@ -365,14 +370,29 @@
     pointer-events: none;
   }
 
+  /* Floating card: hovers over the bottom edge of the body instead of
+     occupying a row of the envelope — the compose text flows beneath it. */
   .attachments {
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: calc(100% - 40px);
     display: flex;
     flex-wrap: wrap;
+    justify-content: center;
     gap: 6px;
-    flex-shrink: 0;
-    margin: 0 20px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--hairline);
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    /* why color-mix + blur: the card floats over the user's own text, so it
+       stays readable without fully hiding what's underneath. */
+    background: color-mix(in srgb, var(--bg-window) 82%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
     list-style: none;
   }
 
@@ -432,5 +452,10 @@
     line-height: 1.5;
     color: var(--text-primary);
     resize: none;
+  }
+
+  /* Keep the last lines of text visible above the floating card. */
+  textarea.with-attachments {
+    padding-bottom: 72px;
   }
 </style>
