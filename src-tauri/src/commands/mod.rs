@@ -94,8 +94,13 @@ pub async fn sync_account(
         .await?;
     app.emit("accounts-changed", ())?;
 
-    let (password, _new_mail) = result?;
+    let (password, new_mail) = result?;
     app.emit("messages-changed", account_id)?;
+
+    // why: after the emit — banners are cosmetic, the fresh list is not.
+    // Settings are re-read per sync so a toggle applies to the next pass.
+    let defaults = storage::settings::notification_settings(&state.pool).await?;
+    crate::notify::show(&app, &crate::notify::plan(&account, &defaults, &new_mail));
 
     // why: bodies download in the background AFTER the command returns — the
     // header list is already usable, and each cached body feeds the FTS index

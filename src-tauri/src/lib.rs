@@ -3,6 +3,7 @@ mod commands;
 pub mod error;
 pub mod mail;
 mod models;
+mod notify;
 mod scheduler;
 pub mod state;
 pub mod storage;
