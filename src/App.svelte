@@ -74,21 +74,26 @@
   // Move to Trash, then step the selection to the neighbour the removed
   // message leaves behind (like Apple Mail). The backend emits
   // messages-changed once the server confirms, dropping the row from the list.
-  function handleTrash(id: number) {
+  // Optimistically drop a message from the list and run `action` (trash /
+  // archive) on the server, so it feels instant. Selection steps to the
+  // neighbour it leaves behind; a server failure re-queries to bring the
+  // message back rather than leave the list lying.
+  function evictMessage(id: number, action: (id: number) => Promise<void>) {
     const next = neighborId(
       messages.map((m) => m.id),
       id,
     );
-    // why: drop the row from the list at once so trashing feels instant. The
-    // server move runs in the background; on failure we re-query to bring the
-    // message back rather than leave the list lying.
     messages = messages.filter((m) => m.id !== id);
     if (next === null) selectedMessageId = null;
     else selectMessage(next);
-    void moveToTrash(id).catch((err: unknown) => {
-      console.error("failed to move to trash:", err);
+    void action(id).catch((err: unknown) => {
+      console.error("message action failed:", err);
       void refreshMessages();
     });
+  }
+
+  function handleTrash(id: number) {
+    evictMessage(id, moveToTrash);
   }
 
   // Arrow Up / Down walk the list. Ignored while typing in a field (search,
