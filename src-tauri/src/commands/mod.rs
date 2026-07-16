@@ -71,11 +71,14 @@ pub async fn delete_account(
 /// Sync one account into the local cache: folder list + every folder's
 /// headers.
 #[tauri::command]
-pub async fn sync_account(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    account_id: i64,
-) -> Result<(), AppError> {
+pub async fn sync_account(app: AppHandle, account_id: i64) -> Result<(), AppError> {
+    run_sync(&app, account_id).await
+}
+
+/// The sync pass behind the command, callable from background tasks (the
+/// poller) that have an AppHandle but no `State` extractor.
+pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
     let account = storage::accounts::get(&state.pool, account_id).await?;
     // why: the password comes from the session cache (one keychain read per
     // account per run) and is handed on to the prefetch task below — never
@@ -100,12 +103,13 @@ pub async fn sync_account(
     // why: after the emit — banners are cosmetic, the fresh list is not.
     // Settings are re-read per sync so a toggle applies to the next pass.
     let defaults = storage::settings::notification_settings(&state.pool).await?;
-    crate::notify::show(&app, &crate::notify::plan(&account, &defaults, &new_mail));
+    crate::notify::show(app, &crate::notify::plan(&account, &defaults, &new_mail));
 
     // why: bodies download in the background AFTER the command returns — the
     // header list is already usable, and each cached body feeds the FTS index
     // so search covers unopened mail.
     let pool = state.pool.clone();
+    let app = app.clone();
     tauri::async_runtime::spawn(async move {
         match mail::sync::prefetch_bodies(&pool, &account, &password).await {
             // why: snippets just became real — lists and searches should see them.
