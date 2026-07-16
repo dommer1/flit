@@ -152,6 +152,17 @@ pub async fn move_to_trash(
     move_to_role_folder(&app, &state, message_id, "trash").await
 }
 
+/// Archive one message: move it to the account's Archive folder, then drop it
+/// from the local cache. Same server-confirmed path as trashing.
+#[tauri::command]
+pub async fn archive_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<(), AppError> {
+    move_to_role_folder(&app, &state, message_id, "archive").await
+}
+
 /// Move a message to the account's folder for `role` (trash/archive), then
 /// drop it from the local cache. Unlike the read flag this waits on the
 /// server — the row must not vanish from the list if the move failed.
