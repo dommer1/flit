@@ -2,16 +2,20 @@
   import { getMessageBody } from "./api";
   import type { DraftKind } from "./draft";
   import { formatFullDate, senderInitials, senderName } from "./format";
-  import type { MessageBody, MessageHeader } from "./types";
+  import type { Mailbox, MessageBody, MessageHeader } from "./types";
 
   let {
     message,
+    mailboxes = [],
     onDraft,
     onSetRead,
     onArchive,
     onTrash,
+    onMove,
   }: {
     message: MessageHeader | null;
+    /** Folders of the message's account — the Move to menu's choices. */
+    mailboxes?: Mailbox[];
     // why: bodyText rides along so the draft can quote what is on screen
     // without the parent re-fetching the body it never held.
     onDraft?: (
@@ -22,7 +26,22 @@
     onSetRead?: (id: number, read: boolean) => void;
     onArchive?: (id: number) => void;
     onTrash?: (id: number) => void;
+    onMove?: (id: number, mailbox: string) => void;
   } = $props();
+
+  // The message's own folder is no destination — offering it would be a
+  // silent no-op move.
+  let moveTargets = $derived(
+    mailboxes.filter((m) => m.name !== message?.mailbox),
+  );
+  let moveOpen = $state(false);
+  let moveEl = $state<HTMLElement | null>(null);
+
+  function closeMoveOnOutsideClick(event: MouseEvent) {
+    if (moveOpen && moveEl && !moveEl.contains(event.target as Node)) {
+      moveOpen = false;
+    }
+  }
 
   let body = $state<MessageBody | null>(null);
   let loading = $state(false);
@@ -33,6 +52,7 @@
   $effect(() => {
     body = null;
     error = null;
+    moveOpen = false;
     if (message === null) return;
     const id = message.id;
     loading = true;
@@ -63,6 +83,11 @@
   }
 </script>
 
+<svelte:window
+  onmousedown={closeMoveOnOutsideClick}
+  onkeydown={(e) => e.key === "Escape" && (moveOpen = false)}
+/>
+
 <article>
   {#if message === null}
     <p class="empty">Select a message</p>
@@ -77,7 +102,7 @@
       </div>
       <div class="meta">
         <span class="date">{formatFullDate(message.date)}</span>
-        {#if onDraft || onSetRead || onArchive || onTrash}
+        {#if onDraft || onSetRead || onArchive || onTrash || onMove}
           {@const current = message}
           <div class="actions">
             {#if onDraft}
@@ -105,6 +130,33 @@
             {#if onArchive}
               {@const archive = onArchive}
               <button onclick={() => archive(current.id)}>Archive</button>
+            {/if}
+            {#if onMove && moveTargets.length > 0}
+              {@const move = onMove}
+              <div class="move" bind:this={moveEl}>
+                <button
+                  aria-haspopup="menu"
+                  aria-expanded={moveOpen}
+                  onclick={() => (moveOpen = !moveOpen)}
+                >
+                  Move to
+                </button>
+                {#if moveOpen}
+                  <div class="menu" role="menu" aria-label="Move to folder">
+                    {#each moveTargets as folder (folder.id)}
+                      <button
+                        role="menuitem"
+                        onclick={() => {
+                          moveOpen = false;
+                          move(current.id, folder.name);
+                        }}
+                      >
+                        {folder.displayName}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
             {/if}
             {#if onTrash}
               {@const trash = onTrash}
@@ -267,6 +319,38 @@
     border-color: #d9302c;
     background: #d9302c;
     color: #ffffff;
+  }
+
+  .move {
+    position: relative;
+  }
+
+  .menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    min-width: 150px;
+    max-height: 50vh;
+    padding: 4px;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    background: var(--bg-window);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+    overflow-y: auto;
+  }
+
+  /* Menu entries are quiet rows, unlike the bordered action buttons. */
+  .actions .menu button {
+    border: none;
+    border-radius: 5px;
+    background: none;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .recipients {

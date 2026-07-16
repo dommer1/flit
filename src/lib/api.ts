@@ -125,6 +125,18 @@ export function archiveMessage(messageId: number): Promise<void> {
 }
 
 /**
+ * Move a message to a folder of its account on the server, then drop it from
+ * the local cache. Rejects (and keeps the row) if the folder is unknown or
+ * the server move fails.
+ */
+export function moveMessage(
+  messageId: number,
+  mailbox: string,
+): Promise<void> {
+  return invoke<void>("move_message", { messageId, mailbox });
+}
+
+/**
  * Queue a message for sending after its undo window. Resolves as soon as
  * the message is validated and queued; progress arrives via onSendQueued /
  * onSendFinished / onSendUndone.

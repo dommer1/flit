@@ -5,6 +5,7 @@
     listAccounts,
     listMailboxes,
     listMessages,
+    moveMessage,
     moveToTrash,
     onAccountsChanged,
     onMessagesChanged,
@@ -99,6 +100,10 @@
 
   function handleArchive(id: number) {
     evictMessage(id, archiveMessage);
+  }
+
+  function handleMove(id: number, mailbox: string) {
+    evictMessage(id, (messageId) => moveMessage(messageId, mailbox));
   }
 
   // Arrow Up / Down walk the list. Ignored while typing in a field (search,
@@ -426,10 +431,14 @@
     <section class="view">
       <MessageView
         message={selectedMessage}
+        mailboxes={selectedMessage
+          ? (mailboxesByAccount[selectedMessage.accountId] ?? [])
+          : []}
         onDraft={openDraft}
         onSetRead={handleSetRead}
         onArchive={handleArchive}
         onTrash={handleTrash}
+        onMove={handleMove}
       />
     </section>
   </main>

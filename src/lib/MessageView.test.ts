@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import type { MessageBody, MessageHeader } from "./types";
+import type { Mailbox, MessageBody, MessageHeader } from "./types";
 
 function body(partial: Partial<MessageBody>): MessageBody {
   return {
@@ -178,6 +178,40 @@ it("archives the message via the Archive button", async () => {
 
   await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
   expect(onArchive).toHaveBeenCalledWith(1);
+});
+
+const folders: Mailbox[] = [
+  { id: 1, accountId: 1, name: "INBOX", role: "inbox", displayName: "INBOX" },
+  { id: 2, accountId: 1, name: "Work", role: null, displayName: "Work" },
+  { id: 3, accountId: 1, name: "K&APQBYQ-", role: "trash", displayName: "Kôš" },
+];
+
+it("moves the message via the Move to menu, hiding its current folder", async () => {
+  const onMove = vi.fn();
+  render(MessageView, { props: { message, mailboxes: folders, onMove } });
+
+  await fireEvent.click(screen.getByRole("button", { name: "Move to" }));
+
+  // The message lives in INBOX — no self-move on offer.
+  expect(
+    screen.queryByRole("menuitem", { name: "INBOX" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: "Work" })).toBeInTheDocument();
+
+  // The move reports the folder's IMAP wire name, not its display name.
+  await fireEvent.click(screen.getByRole("menuitem", { name: "Kôš" }));
+  expect(onMove).toHaveBeenCalledWith(1, "K&APQBYQ-");
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+});
+
+it("offers no Move to button when there are no folders to move to", () => {
+  render(MessageView, {
+    props: { message, mailboxes: [folders[0]], onMove: vi.fn() },
+  });
+
+  expect(
+    screen.queryByRole("button", { name: "Move to" }),
+  ).not.toBeInTheDocument();
 });
 
 it("offers reply, reply all and forward with the loaded text", async () => {
