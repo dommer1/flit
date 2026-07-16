@@ -301,6 +301,15 @@ export function openCompose(draft: OutgoingMessage): Promise<void> {
   return invoke<void>("open_compose", { draft });
 }
 
+/**
+ * Reopen a message from a Drafts folder for editing: the backend fetches
+ * and parses the raw draft, then opens a compose window that keeps
+ * replacing this server version on every save.
+ */
+export function openDraft(messageId: number): Promise<void> {
+  return invoke<void>("open_draft", { messageId });
+}
+
 /** One-shot pickup of this compose window's draft; null after a reload. */
 export function takeComposeDraft(): Promise<OutgoingMessage | null> {
   return invoke<OutgoingMessage | null>("take_compose_draft");

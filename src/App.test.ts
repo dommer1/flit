@@ -130,6 +130,7 @@ vi.mock("./lib/api", () => ({
   moveToTrash: vi.fn(async () => undefined),
   archiveMessage: vi.fn(async () => undefined),
   openCompose: vi.fn(async () => undefined),
+  openDraft: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async (callback: () => void) => {
     accountsChanged = callback;
     return () => {};
@@ -769,4 +770,53 @@ it("shows newly missed sends when the backend flags them mid-run", async () => {
     screen.getByRole("button", { name: "Open Slept through as draft" }),
   );
   expect(api.cancelScheduled).toHaveBeenCalledWith(5);
+});
+
+it("opens a drafts-folder message in compose instead of the viewer", async () => {
+  vi.mocked(api.listMailboxes).mockImplementation(async (accountId: number) =>
+    accountId === 1
+      ? [
+          {
+            id: 1,
+            accountId: 1,
+            name: "INBOX",
+            role: "inbox",
+            displayName: "INBOX",
+          },
+          {
+            id: 4,
+            accountId: 1,
+            name: "Drafts",
+            role: "drafts",
+            displayName: "Drafts",
+          },
+        ]
+      : [],
+  );
+  currentMessages = [
+    ...allMessages,
+    {
+      id: 7,
+      accountId: 1,
+      mailbox: "Drafts",
+      from: "",
+      to: "jan",
+      cc: "",
+      replyTo: "",
+      subject: "Rozpísaný návrh",
+      snippet: "",
+      date: "2026-07-10T00:00:00Z",
+      read: true,
+    },
+  ];
+  render(App);
+
+  await fireEvent.click(await screen.findByText("Rozpísaný návrh"));
+
+  await waitFor(() => expect(api.openDraft).toHaveBeenCalledWith(7));
+  // The viewer stayed closed — no body fetch, no reading pane heading.
+  expect(api.getMessageBody).not.toHaveBeenCalled();
+  expect(
+    screen.queryByRole("heading", { name: "Rozpísaný návrh" }),
+  ).not.toBeInTheDocument();
 });

@@ -16,6 +16,7 @@
     onSendQueued,
     onSendUndone,
     openCompose,
+    openDraft as openServerDraft,
     searchMessages,
     sendScheduledNow,
     setMessageRead,
@@ -67,11 +68,25 @@
   );
 
   function selectMessage(id: number) {
+    const message = messages.find((m) => m.id === id);
+    // A message living in a Drafts folder is unfinished work — clicking it
+    // resumes editing in a compose window instead of opening the viewer.
+    if (message && isDraft(message)) {
+      void openServerDraft(id).catch((err: unknown) =>
+        console.error("failed to open draft:", err),
+      );
+      return;
+    }
     selectedMessageId = id;
     // why: opening an unread message marks it read (like Apple Mail) — the
     // backend clears the local dot and pushes \Seen to the server.
-    const message = messages.find((m) => m.id === id);
     if (message && !message.read) handleSetRead(id, true);
+  }
+
+  function isDraft(message: MessageHeader): boolean {
+    return (mailboxesByAccount[message.accountId] ?? []).some(
+      (m) => m.name === message.mailbox && m.role === "drafts",
+    );
   }
 
   // why: the backend updates the cache and emits messages-changed, so the
