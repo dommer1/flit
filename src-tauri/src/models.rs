@@ -19,6 +19,8 @@ pub struct Account {
     pub last_error: Option<String>,
     /// Unix seconds of the last check; `None` = never checked yet.
     pub checked_at: Option<i64>,
+    /// User-chosen accent color (e.g. "#ff9f0a"); `None` = no color set.
+    pub color: Option<String>,
 }
 
 /// Payload for creating an account. Deliberately has no password field —

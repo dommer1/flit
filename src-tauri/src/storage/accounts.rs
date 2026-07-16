@@ -56,6 +56,16 @@ pub async fn set_status(
     Ok(())
 }
 
+/// Set (or clear, with `None`) an account's accent color.
+pub async fn set_color(pool: &SqlitePool, id: i64, color: Option<&str>) -> Result<(), AppError> {
+    sqlx::query("UPDATE accounts SET color = ? WHERE id = ?")
+        .bind(color)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Delete an account row. Idempotent — deleting a missing id is not an error.
 pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), AppError> {
     sqlx::query("DELETE FROM accounts WHERE id = ?")
@@ -135,6 +145,22 @@ mod tests {
         let healthy = get(&pool, account.id).await.unwrap();
         assert_eq!(healthy.last_error, None);
         assert_eq!(healthy.checked_at, Some(200));
+    }
+
+    #[tokio::test]
+    async fn set_color_sets_and_clears_the_accent() {
+        let pool = test_pool().await;
+        let account = insert(&pool, &sample("Personal")).await.unwrap();
+        assert_eq!(account.color, None);
+
+        set_color(&pool, account.id, Some("#ff9f0a")).await.unwrap();
+        assert_eq!(
+            get(&pool, account.id).await.unwrap().color.as_deref(),
+            Some("#ff9f0a")
+        );
+
+        set_color(&pool, account.id, None).await.unwrap();
+        assert_eq!(get(&pool, account.id).await.unwrap().color, None);
     }
 
     #[tokio::test]

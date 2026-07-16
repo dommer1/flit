@@ -38,6 +38,20 @@ pub async fn add_account(
     Ok(inserted)
 }
 
+/// Set (or clear) an account's accent color, then broadcast so the main
+/// window re-tints its sidebar and message dots.
+#[tauri::command]
+pub async fn set_account_color(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    color: Option<String>,
+) -> Result<(), AppError> {
+    storage::accounts::set_color(&state.pool, id, color.as_deref()).await?;
+    app.emit("accounts-changed", ())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn delete_account(
     app: AppHandle,
