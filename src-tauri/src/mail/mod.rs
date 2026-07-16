@@ -1,3 +1,4 @@
+pub mod attachments;
 pub mod css;
 pub mod imap;
 pub mod parse;

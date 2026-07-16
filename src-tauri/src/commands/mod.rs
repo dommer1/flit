@@ -311,6 +311,16 @@ pub async fn search_messages(
     storage::search::search(&state.pool, account_id, &parsed).await
 }
 
+/// Stat files dropped on the compose window into chip metadata (name +
+/// size); duplicates and directories drop out, missing files error now
+/// rather than at send time.
+#[tauri::command]
+pub async fn inspect_attachments(
+    paths: Vec<String>,
+) -> Result<Vec<crate::models::AttachmentInfo>, AppError> {
+    mail::attachments::inspect(paths).await
+}
+
 // note: there is deliberately no direct send command — every outgoing
 // message goes through the undoable queue below.
 

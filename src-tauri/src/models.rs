@@ -66,6 +66,19 @@ pub struct OutgoingMessage {
     pub attachments: Vec<AttachmentRef>,
 }
 
+/// What inspect_attachments returns for one dropped file — the metadata the
+/// compose window renders as a removable chip.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentInfo {
+    pub path: String,
+    /// The path's final component — becomes AttachmentRef.name on send.
+    pub name: String,
+    /// File size in bytes, for display only; the 25 MB budget is enforced
+    /// against the real bytes at MIME build time.
+    pub size: u64,
+}
+
 /// One file attached to an outgoing message, referenced by path so drafts
 /// (undo, failed sends) stay tiny and re-openable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
