@@ -1,5 +1,6 @@
 <script lang="ts">
   import { formatListDate, senderName } from "./format";
+  import { accumulateOffset, actionFor, isHorizontal } from "./swipe";
   import type { MessageHeader } from "./types";
 
   let {
@@ -11,6 +12,8 @@
     onCompose,
     onSearch,
     onToggleSidebar,
+    onArchive,
+    onSetRead,
   }: {
     title: string;
     messages: MessageHeader[];
@@ -21,9 +24,43 @@
     onCompose: () => void;
     onSearch: (query: string) => void;
     onToggleSidebar?: () => void;
+    /** Fired by a full swipe left on a row (Apple Mail's archive gesture). */
+    onArchive?: (id: number) => void;
+    /** Fired by a full swipe right on a row: toggle read/unread. */
+    onSetRead?: (id: number, read: boolean) => void;
   } = $props();
 
   let query = $state("");
+
+  // The row currently under a two-finger swipe and how far it has traveled.
+  // One gesture at a time — trackpads can't swipe two rows at once.
+  let swipeId = $state<number | null>(null);
+  let swipeOffset = $state(0);
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function handleWheel(message: MessageHeader, event: WheelEvent) {
+    if (!isHorizontal(event.deltaX, event.deltaY)) return;
+    event.preventDefault();
+    if (swipeId !== message.id) {
+      swipeId = message.id;
+      swipeOffset = 0;
+    }
+    swipeOffset = accumulateOffset(swipeOffset, event.deltaX);
+    // why a timer: DOM wheel streams have no "gesture ended" event — a quiet
+    // gap longer than the ~10-20ms between trackpad pulses means release.
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => settleSwipe(message), 120);
+  }
+
+  function settleSwipe(message: MessageHeader) {
+    if (swipeId !== message.id) return;
+    const action = actionFor(swipeOffset);
+    // Reset first so the row snaps back even when no action fired.
+    swipeId = null;
+    swipeOffset = 0;
+    if (action === "archive") onArchive?.(message.id);
+    else if (action === "toggleRead") onSetRead?.(message.id, !message.read);
+  }
 
   // why: keyboard navigation moves the selection without scrolling — keep the
   // selected row in view so arrowing through a long list stays usable.
@@ -102,32 +139,46 @@
     {:else}
       {#each messages as message (message.id)}
         {@const color = accountColors[message.accountId] ?? null}
-        <button
-          role="option"
-          aria-selected={selectedId === message.id}
-          class:selected={selectedId === message.id}
-          class:unread={!message.read}
-          onclick={() => onSelect(message.id)}
-        >
-          <span class="dot" aria-hidden="true"></span>
-          <span class="content">
-            <span class="row">
-              <span class="from">{senderName(message.from)}</span>
-              <span class="end">
-                {#if color}
-                  <span
-                    class="account-dot"
-                    aria-hidden="true"
-                    style:background={color}
-                  ></span>
-                {/if}
-                <span class="date">{formatListDate(message.date)}</span>
-              </span>
+        {@const offset = swipeId === message.id ? swipeOffset : 0}
+        <div class="swipe-row" onwheel={(e) => handleWheel(message, e)}>
+          {#if offset < 0}
+            <span class="swipe-bg archive" aria-hidden="true">Archive</span>
+          {:else if offset > 0}
+            <span class="swipe-bg read" aria-hidden="true">
+              {message.read ? "Mark Unread" : "Mark Read"}
             </span>
-            <span class="subject">{message.subject}</span>
-            <span class="snippet">{message.snippet}</span>
-          </span>
-        </button>
+          {/if}
+          <button
+            role="option"
+            aria-selected={selectedId === message.id}
+            class:selected={selectedId === message.id}
+            class:unread={!message.read}
+            class:swiping={offset !== 0}
+            style:transform={offset === 0
+              ? undefined
+              : `translateX(${offset}px)`}
+            onclick={() => onSelect(message.id)}
+          >
+            <span class="dot" aria-hidden="true"></span>
+            <span class="content">
+              <span class="row">
+                <span class="from">{senderName(message.from)}</span>
+                <span class="end">
+                  {#if color}
+                    <span
+                      class="account-dot"
+                      aria-hidden="true"
+                      style:background={color}
+                    ></span>
+                  {/if}
+                  <span class="date">{formatListDate(message.date)}</span>
+                </span>
+              </span>
+              <span class="subject">{message.subject}</span>
+              <span class="snippet">{message.snippet}</span>
+            </span>
+          </button>
+        </div>
       {/each}
     {/if}
   </div>
@@ -240,26 +291,63 @@
     color: var(--text-tertiary);
   }
 
-  button {
+  /* Each row: an absolutely-positioned action backdrop underneath, the row
+     button sliding over it. Clip so a mid-swipe row can't poke into its
+     neighbours. */
+  .swipe-row {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .swipe-bg {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #ffffff;
+  }
+
+  .swipe-bg.archive {
+    justify-content: flex-end;
+    background: #4f7cf7;
+  }
+
+  .swipe-bg.read {
+    justify-content: flex-start;
+    background: #f0a132;
+  }
+
+  .swipe-row button {
+    /* why relative: keeps the button painting above the positioned swipe
+       backdrop; doubles as the anchor for the ::before separator. */
+    position: relative;
     display: flex;
     align-items: flex-start;
+    width: 100%;
     padding: 7px 8px 7px 4px;
     border: none;
     border-radius: 7px;
-    background: none;
+    background: var(--bg-window);
     font: inherit;
     color: inherit;
     text-align: left;
     cursor: default;
+    /* Snap-back after release; .swiping turns it off so the row follows
+       the fingers with no lag. */
+    transition: transform 0.18s ease;
+  }
+
+  .swipe-row button.swiping {
+    transition: none;
   }
 
   /* Inset separators between rows, hidden around the selected one —
      the Apple Mail look. */
-  button + button {
-    position: relative;
-  }
-
-  button + button::before {
+  .swipe-row + .swipe-row button::before {
     content: "";
     position: absolute;
     top: -1px;
@@ -269,7 +357,7 @@
     background: var(--hairline);
   }
 
-  button.selected + button::before,
+  .swipe-row:has(button.selected) + .swipe-row button::before,
   button.selected::before {
     background: transparent;
   }

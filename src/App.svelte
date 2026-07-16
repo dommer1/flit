@@ -410,6 +410,8 @@
         onCompose={openNewMessage}
         onSearch={handleSearch}
         onToggleSidebar={toggleSidebar}
+        onArchive={handleArchive}
+        onSetRead={handleSetRead}
       />
       <Outbox entries={outbox} onUndo={handleUndo} />
     </section>
