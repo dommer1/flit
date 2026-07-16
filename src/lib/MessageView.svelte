@@ -7,6 +7,7 @@
   let {
     message,
     onDraft,
+    onSetRead,
   }: {
     message: MessageHeader | null;
     // why: bodyText rides along so the draft can quote what is on screen
@@ -16,6 +17,7 @@
       message: MessageHeader,
       bodyText: string | null,
     ) => void;
+    onSetRead?: (id: number, read: boolean) => void;
   } = $props();
 
   let body = $state<MessageBody | null>(null);
@@ -71,21 +73,31 @@
       </div>
       <div class="meta">
         <span class="date">{formatFullDate(message.date)}</span>
-        {#if onDraft}
+        {#if onDraft || onSetRead}
           {@const current = message}
-          {@const open = onDraft}
           <div class="actions">
-            <button onclick={() => open("reply", current, body?.text ?? null)}>
-              Reply
-            </button>
-            <button
-              onclick={() => open("reply-all", current, body?.text ?? null)}
-            >
-              Reply All
-            </button>
-            <button onclick={() => open("forward", current, body?.text ?? null)}>
-              Forward
-            </button>
+            {#if onDraft}
+              {@const open = onDraft}
+              <button onclick={() => open("reply", current, body?.text ?? null)}>
+                Reply
+              </button>
+              <button
+                onclick={() => open("reply-all", current, body?.text ?? null)}
+              >
+                Reply All
+              </button>
+              <button
+                onclick={() => open("forward", current, body?.text ?? null)}
+              >
+                Forward
+              </button>
+            {/if}
+            {#if onSetRead}
+              {@const setRead = onSetRead}
+              <button onclick={() => setRead(current.id, !current.read)}>
+                {current.read ? "Mark Unread" : "Mark Read"}
+              </button>
+            {/if}
           </div>
         {/if}
       </div>

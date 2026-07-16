@@ -150,6 +150,19 @@ it("shows the recipient fields, hiding Cc and Reply-To when empty", async () => 
   ).toBeInTheDocument();
 });
 
+it("toggles read state via the Mark Read / Mark Unread button", async () => {
+  const onSetRead = vi.fn();
+  const { rerender } = render(MessageView, { props: { message, onSetRead } });
+
+  // The fixture is unread, so the button offers to mark it read.
+  await fireEvent.click(screen.getByRole("button", { name: "Mark Read" }));
+  expect(onSetRead).toHaveBeenCalledWith(1, true);
+
+  await rerender({ message: { ...message, read: true }, onSetRead });
+  await fireEvent.click(screen.getByRole("button", { name: "Mark Unread" }));
+  expect(onSetRead).toHaveBeenCalledWith(1, false);
+});
+
 it("offers reply, reply all and forward with the loaded text", async () => {
   vi.mocked(api.getMessageBody).mockResolvedValueOnce(
     body({ html: null, text: "hi there" }),

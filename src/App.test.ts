@@ -112,6 +112,7 @@ vi.mock("./lib/api", () => ({
   searchMessages: vi.fn(async () => [currentMessages[1]]),
   getMessageBody: vi.fn(async () => ({ html: null, text: "body text" })),
   syncAccount: vi.fn(async () => undefined),
+  setMessageRead: vi.fn(async () => undefined),
   openCompose: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async (callback: () => void) => {
     accountsChanged = callback;
@@ -614,4 +615,16 @@ it("navigates the message list with Arrow Down / Up", async () => {
 
   await fireEvent.keyDown(document.body, { key: "ArrowUp" });
   expect(first).toHaveAttribute("aria-selected", "true");
+});
+
+it("marks an unread message read when it is opened", async () => {
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  expect(api.setMessageRead).toHaveBeenCalledWith(1, true);
+});
+
+it("does not touch the read state of an already-read message", async () => {
+  render(App);
+  await fireEvent.click(await screen.findByText("Re: Invoice"));
+  expect(api.setMessageRead).not.toHaveBeenCalled();
 });

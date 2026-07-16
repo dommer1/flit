@@ -11,6 +11,7 @@
     onSendUndone,
     openCompose,
     searchMessages,
+    setMessageRead,
     syncAccount,
     undoSend,
   } from "./lib/api";
@@ -48,6 +49,19 @@
 
   function selectMessage(id: number) {
     selectedMessageId = id;
+    // why: opening an unread message marks it read (like Apple Mail) — the
+    // backend clears the local dot and pushes \Seen to the server.
+    const message = messages.find((m) => m.id === id);
+    if (message && !message.read) handleSetRead(id, true);
+  }
+
+  // why: the backend updates the cache and emits messages-changed, so the
+  // list refreshes on its own — here we only fire the command and log a
+  // failure (a stale flag heals on the next sync).
+  function handleSetRead(id: number, read: boolean) {
+    void setMessageRead(id, read).catch((err: unknown) =>
+      console.error("failed to set read state:", err),
+    );
   }
 
   // Arrow Up / Down walk the list. Ignored while typing in a field (search,
@@ -356,7 +370,11 @@
       onkeydown={(e) => nudgePane("list", e)}
     ></div>
     <section class="view">
-      <MessageView message={selectedMessage} onDraft={openDraft} />
+      <MessageView
+        message={selectedMessage}
+        onDraft={openDraft}
+        onSetRead={handleSetRead}
+      />
     </section>
   </main>
 </div>

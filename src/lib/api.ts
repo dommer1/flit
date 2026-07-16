@@ -87,6 +87,18 @@ export function syncAccount(accountId: number): Promise<void> {
 }
 
 /**
+ * Mark a message read/unread. Updates the local cache and fires
+ * messages-changed at once; the `\Seen` flag is pushed to the server in the
+ * background by the backend.
+ */
+export function setMessageRead(
+  messageId: number,
+  read: boolean,
+): Promise<void> {
+  return invoke<void>("set_message_read", { messageId, read });
+}
+
+/**
  * Queue a message for sending after its undo window. Resolves as soon as
  * the message is validated and queued; progress arrives via onSendQueued /
  * onSendFinished / onSendUndone.
