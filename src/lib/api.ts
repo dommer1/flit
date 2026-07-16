@@ -13,6 +13,7 @@ import type {
   NewAccount,
   OutgoingMessage,
   RemoteImagePolicy,
+  ScheduledMessage,
   SendEvent,
   Signature,
 } from "./types";
@@ -247,6 +248,31 @@ export function scheduleSend(
   scheduledAt: number,
 ): Promise<void> {
   return invoke<void>("schedule_send", { message, scheduledAt });
+}
+
+/** Every parked send-later message, soonest first (pending and missed). */
+export function listScheduled(): Promise<ScheduledMessage[]> {
+  return invoke<ScheduledMessage[]>("list_scheduled");
+}
+
+/** Deliver one parked message immediately (the catch-up dialog's confirm). */
+export function sendScheduledNow(id: number): Promise<void> {
+  return invoke<void>("send_scheduled_now", { id });
+}
+
+/** Unschedule one parked message — it reopens as a compose window. */
+export function cancelScheduled(id: number): Promise<void> {
+  return invoke<void>("cancel_scheduled", { id });
+}
+
+/** The set of parked messages changed (scheduled, sent, or cancelled). */
+export function onScheduledChanged(callback: () => void): Promise<UnlistenFn> {
+  return listen<void>("scheduled-changed", () => callback());
+}
+
+/** Some scheduled messages were missed and wait for the user's decision. */
+export function onScheduledMissed(callback: () => void): Promise<UnlistenFn> {
+  return listen<void>("scheduled-missed", () => callback());
 }
 
 /** A message entered its undo window. */

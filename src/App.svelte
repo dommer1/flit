@@ -2,18 +2,22 @@
   import { onMount } from "svelte";
   import {
     archiveMessage,
+    cancelScheduled,
     listAccounts,
     listMailboxes,
     listMessages,
+    listScheduled,
     moveMessage,
     moveToTrash,
     onAccountsChanged,
     onMessagesChanged,
+    onScheduledMissed,
     onSendFinished,
     onSendQueued,
     onSendUndone,
     openCompose,
     searchMessages,
+    sendScheduledNow,
     setMessageRead,
     syncAccount,
     undoSend,
@@ -25,7 +29,12 @@
     replyDraft,
     type DraftKind,
   } from "./lib/draft";
-  import type { Account, Mailbox, MessageHeader } from "./lib/types";
+  import type {
+    Account,
+    Mailbox,
+    MessageHeader,
+    ScheduledMessage,
+  } from "./lib/types";
   import { neighborId, nextMessageId, type NavDelta } from "./lib/messageNav";
   import {
     clampPaneWidth,
@@ -38,6 +47,7 @@
   import MessageList from "./lib/MessageList.svelte";
   import MessageView from "./lib/MessageView.svelte";
   import Outbox, { type OutboxEntry } from "./lib/Outbox.svelte";
+  import MissedSends from "./lib/MissedSends.svelte";
 
   let accounts = $state<Account[]>([]);
   let mailboxesByAccount = $state<Record<number, Mailbox[]>>({});
@@ -181,6 +191,37 @@
     void undoSend(id).catch((err: unknown) =>
       console.error("undo send failed:", err),
     );
+  }
+
+  // Scheduled sends whose time passed while the app was off (or asleep past
+  // the grace window). They are never auto-sent — the dialog asks per message.
+  let missedSends = $state<ScheduledMessage[]>([]);
+
+  async function refreshMissedSends() {
+    const scheduled = await listScheduled();
+    missedSends = scheduled.filter((m) => m.status === "missed");
+  }
+
+  // why remove-first: the row is gone from the DB either way (take() is the
+  // claim); keeping it in the dialog would just offer a dead button.
+  function missedSendNow(id: number) {
+    missedSends = missedSends.filter((m) => m.id !== id);
+    void sendScheduledNow(id).catch((err: unknown) =>
+      console.error("send scheduled now failed:", err),
+    );
+  }
+
+  function missedOpenDraft(id: number) {
+    missedSends = missedSends.filter((m) => m.id !== id);
+    void cancelScheduled(id).catch((err: unknown) =>
+      console.error("cancel scheduled failed:", err),
+    );
+  }
+
+  // "Decide later": rows stay missed in the DB, so the dialog returns on the
+  // next launch (or the next scheduled-missed event).
+  function missedDismiss() {
+    missedSends = [];
   }
 
   function openNewMessage() {
@@ -331,6 +372,17 @@
       await refreshAccounts();
       await selectMailbox(null);
     })();
+    // why separate: missed sends must surface even if account sync fails —
+    // they are local rows, not server state.
+    void refreshMissedSends().catch((err: unknown) =>
+      console.error("failed to load missed sends:", err),
+    );
+    const unlistenMissed = onScheduledMissed(
+      () =>
+        void refreshMissedSends().catch((err: unknown) =>
+          console.error("failed to load missed sends:", err),
+        ),
+    );
     // why: account CRUD lives in the settings window (its own JS context) —
     // this window finds out through the backend's accounts-changed event.
     const unlistenAccounts = onAccountsChanged(() => void refreshAccounts());
@@ -351,6 +403,7 @@
       void unlistenQueued.then((stop) => stop());
       void unlistenFinished.then((stop) => stop());
       void unlistenUndone.then((stop) => stop());
+      void unlistenMissed.then((stop) => stop());
     };
   });
 </script>
@@ -415,6 +468,12 @@
       />
       <Outbox entries={outbox} onUndo={handleUndo} />
     </section>
+    <MissedSends
+      entries={missedSends}
+      onSendNow={missedSendNow}
+      onOpenDraft={missedOpenDraft}
+      onDismiss={missedDismiss}
+    />
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions
          — a focusable separator is the ARIA "window splitter" widget; Svelte's
          checker only knows the static (non-focusable) separator variant. -->

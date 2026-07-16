@@ -1,6 +1,11 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import type { Account, MessageHeader, SendEvent } from "./lib/types";
+import type {
+  Account,
+  MessageHeader,
+  ScheduledMessage,
+  SendEvent,
+} from "./lib/types";
 
 const accounts: Account[] = [
   {
@@ -83,11 +88,13 @@ const archivedMessages: MessageHeader[] = [
 // backend changing state and firing change events.
 let currentAccounts: Account[] = [];
 let currentMessages: MessageHeader[] = [];
+let currentScheduled: ScheduledMessage[] = [];
 let accountsChanged: (() => void) | undefined;
 let messagesChanged: (() => void) | undefined;
 let sendQueued: ((e: SendEvent) => void) | undefined;
 let sendFinished: ((e: SendEvent) => void) | undefined;
 let sendUndone: ((e: SendEvent) => void) | undefined;
+let scheduledMissed: (() => void) | undefined;
 
 vi.mock("./lib/api", () => ({
   listAccounts: vi.fn(async () => currentAccounts),
@@ -144,6 +151,13 @@ vi.mock("./lib/api", () => ({
     sendUndone = callback;
     return () => {};
   }),
+  listScheduled: vi.fn(async () => currentScheduled),
+  sendScheduledNow: vi.fn(async () => undefined),
+  cancelScheduled: vi.fn(async () => undefined),
+  onScheduledMissed: vi.fn(async (callback: () => void) => {
+    scheduledMissed = callback;
+    return () => {};
+  }),
 }));
 
 import * as api from "./lib/api";
@@ -153,11 +167,13 @@ import App from "./App.svelte";
 beforeEach(() => {
   currentAccounts = [...accounts];
   currentMessages = [...allMessages];
+  currentScheduled = [];
   accountsChanged = undefined;
   messagesChanged = undefined;
   sendQueued = undefined;
   sendFinished = undefined;
   sendUndone = undefined;
+  scheduledMissed = undefined;
   localStorage.clear();
   vi.clearAllMocks();
 });
@@ -703,4 +719,54 @@ it("restores the message when trashing fails on the server", async () => {
   await waitFor(() =>
     expect(screen.getByText("Weekend plans")).toBeInTheDocument(),
   );
+});
+
+function missedEntry(over: Partial<ScheduledMessage> = {}): ScheduledMessage {
+  return {
+    id: 5,
+    accountId: 1,
+    to: "alice@example.com",
+    cc: "",
+    bcc: "",
+    subject: "Overdue hello",
+    body: "",
+    bodyHtml: null,
+    attachments: [],
+    scheduledAt: 1_752_600_000,
+    status: "missed",
+    ...over,
+  };
+}
+
+it("surfaces missed scheduled sends on start and sends on confirm", async () => {
+  currentScheduled = [missedEntry()];
+  render(App);
+
+  expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+  expect(screen.getByText("Overdue hello")).toBeInTheDocument();
+
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Send Overdue hello now" }),
+  );
+
+  expect(api.sendScheduledNow).toHaveBeenCalledWith(5);
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+});
+
+it("shows newly missed sends when the backend flags them mid-run", async () => {
+  render(App);
+  await screen.findByRole("button", { name: "All Inboxes" });
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+  currentScheduled = [missedEntry({ subject: "Slept through" })];
+  scheduledMissed!();
+
+  expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+  expect(screen.getByText("Slept through")).toBeInTheDocument();
+
+  // Reopening as a draft unschedules the row.
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Open Slept through as draft" }),
+  );
+  expect(api.cancelScheduled).toHaveBeenCalledWith(5);
 });
