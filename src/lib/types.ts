@@ -132,7 +132,6 @@ export interface MessageAttachment {
   size: number;
 }
 
-/** One folder of one account, as shown in the sidebar. */
 /** One autocomplete suggestion for a compose recipient field. */
 export interface Contact {
   email: string;
@@ -140,6 +139,7 @@ export interface Contact {
   name: string;
 }
 
+/** One folder of one account, as shown in the sidebar. */
 export interface Mailbox {
   id: number;
   accountId: number;
