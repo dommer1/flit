@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import type { Mailbox, MessageBody, MessageHeader } from "./types";
+import type { MessageBody, MessageHeader } from "./types";
 
 function body(partial: Partial<MessageBody>): MessageBody {
   return {
@@ -155,69 +155,6 @@ it("shows the recipient fields, hiding Cc and Reply-To when empty", async () => 
   ).toBeInTheDocument();
 });
 
-it("toggles read state via the Mark Read / Mark Unread button", async () => {
-  const onSetRead = vi.fn();
-  const { rerender } = render(MessageView, { props: { message, onSetRead } });
-
-  // The fixture is unread, so the button offers to mark it read.
-  await fireEvent.click(screen.getByRole("button", { name: "Mark Read" }));
-  expect(onSetRead).toHaveBeenCalledWith(1, true);
-
-  await rerender({ message: { ...message, read: true }, onSetRead });
-  await fireEvent.click(screen.getByRole("button", { name: "Mark Unread" }));
-  expect(onSetRead).toHaveBeenCalledWith(1, false);
-});
-
-it("moves the message to trash via the Trash button", async () => {
-  const onTrash = vi.fn();
-  render(MessageView, { props: { message, onTrash } });
-
-  await fireEvent.click(screen.getByRole("button", { name: "Trash" }));
-  expect(onTrash).toHaveBeenCalledWith(1);
-});
-
-it("archives the message via the Archive button", async () => {
-  const onArchive = vi.fn();
-  render(MessageView, { props: { message, onArchive } });
-
-  await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
-  expect(onArchive).toHaveBeenCalledWith(1);
-});
-
-const folders: Mailbox[] = [
-  { id: 1, accountId: 1, name: "INBOX", role: "inbox", displayName: "INBOX" },
-  { id: 2, accountId: 1, name: "Work", role: null, displayName: "Work" },
-  { id: 3, accountId: 1, name: "K&APQBYQ-", role: "trash", displayName: "Kôš" },
-];
-
-it("moves the message via the Move to menu, hiding its current folder", async () => {
-  const onMove = vi.fn();
-  render(MessageView, { props: { message, mailboxes: folders, onMove } });
-
-  await fireEvent.click(screen.getByRole("button", { name: "Move to" }));
-
-  // The message lives in INBOX — no self-move on offer.
-  expect(
-    screen.queryByRole("menuitem", { name: "INBOX" }),
-  ).not.toBeInTheDocument();
-  expect(screen.getByRole("menuitem", { name: "Work" })).toBeInTheDocument();
-
-  // The move reports the folder's IMAP wire name, not its display name.
-  await fireEvent.click(screen.getByRole("menuitem", { name: "Kôš" }));
-  expect(onMove).toHaveBeenCalledWith(1, "K&APQBYQ-");
-  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-});
-
-it("offers no Move to button when there are no folders to move to", () => {
-  render(MessageView, {
-    props: { message, mailboxes: [folders[0]], onMove: vi.fn() },
-  });
-
-  expect(
-    screen.queryByRole("button", { name: "Move to" }),
-  ).not.toBeInTheDocument();
-});
-
 const attachments = [
   {
     id: 11,
@@ -276,34 +213,3 @@ it("shows no attachment strip when a message has none", async () => {
   ).not.toBeInTheDocument();
 });
 
-it("relabels the archive action on an already-archived message", async () => {
-  const onArchive = vi.fn();
-  render(MessageView, { props: { message, archived: true, onArchive } });
-
-  expect(
-    screen.queryByRole("button", { name: "Archive" }),
-  ).not.toBeInTheDocument();
-  await fireEvent.click(
-    screen.getByRole("button", { name: "Move to Inbox" }),
-  );
-  expect(onArchive).toHaveBeenCalledWith(1);
-});
-
-it("offers reply, reply all and forward with the loaded text", async () => {
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
-    body({ html: null, text: "hi there" }),
-  );
-  const onDraft = vi.fn();
-
-  render(MessageView, { props: { message, onDraft } });
-  await screen.findByText("hi there");
-
-  await fireEvent.click(screen.getByRole("button", { name: "Reply" }));
-  expect(onDraft).toHaveBeenCalledWith("reply", message, "hi there");
-
-  await fireEvent.click(screen.getByRole("button", { name: "Reply All" }));
-  expect(onDraft).toHaveBeenCalledWith("reply-all", message, "hi there");
-
-  await fireEvent.click(screen.getByRole("button", { name: "Forward" }));
-  expect(onDraft).toHaveBeenCalledWith("forward", message, "hi there");
-});

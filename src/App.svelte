@@ -139,18 +139,22 @@
     swipeActions = await getSwipeActions();
   }
 
-  // why fetch the body: the list only holds headers, but a reply should
-  // quote the message like one opened from the viewer — a failed fetch
-  // still opens the compose window, just without the quote.
+  // why fetch the body: neither the list rows nor the toolbar hold the body
+  // text, but a draft should quote the message like one opened from the
+  // viewer — the fetch is a local cache hit, and a failure still opens the
+  // compose window, just without the quote.
+  function openDraftWithBody(kind: DraftKind, message: MessageHeader) {
+    void getMessageBody(message.id)
+      .then((body) => openDraft(kind, message, body.text))
+      .catch((err: unknown) => {
+        console.error("failed to load body for draft:", err);
+        openDraft(kind, message, null);
+      });
+  }
+
   function handleSwipeReply(id: number) {
     const message = messages.find((m) => m.id === id);
-    if (!message) return;
-    void getMessageBody(id)
-      .then((body) => openDraft("reply", message, body.text))
-      .catch((err: unknown) => {
-        console.error("failed to load body for reply:", err);
-        openDraft("reply", message, null);
-      });
+    if (message) openDraftWithBody("reply", message);
   }
 
   // The account's archive folder wire name; Gmail has no \Archive, so its
@@ -344,6 +348,21 @@
     );
   }
 
+  // The toolbar's reply/forward buttons act on the open message.
+  function openDraftFromSelection(kind: DraftKind) {
+    if (selectedMessage) openDraftWithBody(kind, selectedMessage);
+  }
+
+  // Move to targets for the toolbar menu: the selection's account folders,
+  // minus the folder the message already sits in (a self-move is a no-op).
+  let moveTargets = $derived(
+    selectedMessage === null
+      ? []
+      : (mailboxesByAccount[selectedMessage.accountId] ?? []).filter(
+          (m) => m.name !== selectedMessage?.mailbox,
+        ),
+  );
+
   function startPaneResize(pane: keyof PaneWidths, event: PointerEvent) {
     event.preventDefault();
     const divider = event.currentTarget as HTMLElement;
@@ -527,6 +546,14 @@
   onCompose={openNewMessage}
   onSearch={handleSearch}
   onOpenSettings={handleOpenSettings}
+  selected={selectedMessage}
+  archived={selectedMessage ? isArchived(selectedMessage) : false}
+  {moveTargets}
+  onDraft={openDraftFromSelection}
+  onSetRead={handleSetRead}
+  onArchive={handleArchive}
+  onTrash={handleTrash}
+  onMove={handleMove}
 />
 
 <div
@@ -604,18 +631,7 @@
       onkeydown={(e) => nudgePane("list", e)}
     ></div>
     <section class="view">
-      <MessageView
-        message={selectedMessage}
-        mailboxes={selectedMessage
-          ? (mailboxesByAccount[selectedMessage.accountId] ?? [])
-          : []}
-        archived={selectedMessage ? isArchived(selectedMessage) : false}
-        onDraft={openDraft}
-        onSetRead={handleSetRead}
-        onArchive={handleArchive}
-        onTrash={handleTrash}
-        onMove={handleMove}
-      />
+      <MessageView message={selectedMessage} />
     </section>
   </main>
 </div>

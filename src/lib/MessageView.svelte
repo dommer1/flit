@@ -1,6 +1,5 @@
 <script lang="ts">
   import { getMessageBody, saveAllAttachments, saveAttachment } from "./api";
-  import type { DraftKind } from "./draft";
   import {
     formatFileSize,
     formatFullDate,
@@ -8,7 +7,6 @@
     senderName,
   } from "./format";
   import type {
-    Mailbox,
     MessageAttachment,
     MessageBody,
     MessageHeader,
@@ -16,46 +14,9 @@
 
   let {
     message,
-    mailboxes = [],
-    archived = false,
-    onDraft,
-    onSetRead,
-    onArchive,
-    onTrash,
-    onMove,
   }: {
     message: MessageHeader | null;
-    /** Folders of the message's account — the Move to menu's choices. */
-    mailboxes?: Mailbox[];
-    /** The message already sits in its archive folder — the archive action
-     * flips to "Move to Inbox" (onArchive still fires; the parent routes). */
-    archived?: boolean;
-    // why: bodyText rides along so the draft can quote what is on screen
-    // without the parent re-fetching the body it never held.
-    onDraft?: (
-      kind: DraftKind,
-      message: MessageHeader,
-      bodyText: string | null,
-    ) => void;
-    onSetRead?: (id: number, read: boolean) => void;
-    onArchive?: (id: number) => void;
-    onTrash?: (id: number) => void;
-    onMove?: (id: number, mailbox: string) => void;
   } = $props();
-
-  // The message's own folder is no destination — offering it would be a
-  // silent no-op move.
-  let moveTargets = $derived(
-    mailboxes.filter((m) => m.name !== message?.mailbox),
-  );
-  let moveOpen = $state(false);
-  let moveEl = $state<HTMLElement | null>(null);
-
-  function closeMoveOnOutsideClick(event: MouseEvent) {
-    if (moveOpen && moveEl && !moveEl.contains(event.target as Node)) {
-      moveOpen = false;
-    }
-  }
 
   let body = $state<MessageBody | null>(null);
   let loading = $state(false);
@@ -66,7 +27,6 @@
   $effect(() => {
     body = null;
     error = null;
-    moveOpen = false;
     attachmentError = null;
     if (message === null) return;
     const id = message.id;
@@ -121,11 +81,6 @@
   }
 </script>
 
-<svelte:window
-  onmousedown={closeMoveOnOutsideClick}
-  onkeydown={(e) => e.key === "Escape" && (moveOpen = false)}
-/>
-
 <article>
   {#if message === null}
     <p class="empty">Select a message</p>
@@ -138,75 +93,7 @@
         <p class="from" title={message.from}>{senderName(message.from)}</p>
         <h2 class="subject">{message.subject}</h2>
       </div>
-      <div class="meta">
-        <span class="date">{formatFullDate(message.date)}</span>
-        {#if onDraft || onSetRead || onArchive || onTrash || onMove}
-          {@const current = message}
-          <div class="actions">
-            {#if onDraft}
-              {@const open = onDraft}
-              <button onclick={() => open("reply", current, body?.text ?? null)}>
-                Reply
-              </button>
-              <button
-                onclick={() => open("reply-all", current, body?.text ?? null)}
-              >
-                Reply All
-              </button>
-              <button
-                onclick={() => open("forward", current, body?.text ?? null)}
-              >
-                Forward
-              </button>
-            {/if}
-            {#if onSetRead}
-              {@const setRead = onSetRead}
-              <button onclick={() => setRead(current.id, !current.read)}>
-                {current.read ? "Mark Unread" : "Mark Read"}
-              </button>
-            {/if}
-            {#if onArchive}
-              {@const archive = onArchive}
-              <button onclick={() => archive(current.id)}>
-                {archived ? "Move to Inbox" : "Archive"}
-              </button>
-            {/if}
-            {#if onMove && moveTargets.length > 0}
-              {@const move = onMove}
-              <div class="move" bind:this={moveEl}>
-                <button
-                  aria-haspopup="menu"
-                  aria-expanded={moveOpen}
-                  onclick={() => (moveOpen = !moveOpen)}
-                >
-                  Move to
-                </button>
-                {#if moveOpen}
-                  <div class="menu" role="menu" aria-label="Move to folder">
-                    {#each moveTargets as folder (folder.id)}
-                      <button
-                        role="menuitem"
-                        onclick={() => {
-                          moveOpen = false;
-                          move(current.id, folder.name);
-                        }}
-                      >
-                        {folder.displayName}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/if}
-            {#if onTrash}
-              {@const trash = onTrash}
-              <button class="danger" onclick={() => trash(current.id)}>
-                Trash
-              </button>
-            {/if}
-          </div>
-        {/if}
-      </div>
+      <span class="date">{formatFullDate(message.date)}</span>
     </header>
     <dl class="recipients">
       <dt>From</dt>
@@ -365,76 +252,12 @@
     color: var(--text-secondary);
   }
 
-  .meta {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 6px;
+  .date {
     flex-shrink: 0;
     align-self: flex-start;
-  }
-
-  .date {
+    padding-top: 2px;
     font-size: 11px;
     color: var(--text-secondary);
-  }
-
-  .actions {
-    display: flex;
-    gap: 6px;
-  }
-
-  .actions button {
-    padding: 3px 10px;
-    border: 1px solid var(--hairline);
-    border-radius: 6px;
-    background: var(--bg-window);
-    font: inherit;
-    font-size: 12px;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-
-  .actions button:hover {
-    background: var(--bg-hover);
-  }
-
-  .actions button.danger:hover {
-    border-color: #d9302c;
-    background: #d9302c;
-    color: #ffffff;
-  }
-
-  .move {
-    position: relative;
-  }
-
-  .menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 5;
-    display: flex;
-    flex-direction: column;
-    min-width: 150px;
-    max-height: 50vh;
-    padding: 4px;
-    border: 1px solid var(--hairline);
-    border-radius: 8px;
-    background: var(--bg-window);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
-    overflow-y: auto;
-  }
-
-  /* Menu entries are quiet rows, unlike the bordered action buttons. */
-  .actions .menu button {
-    border: none;
-    border-radius: 5px;
-    background: none;
-    text-align: left;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .recipients {

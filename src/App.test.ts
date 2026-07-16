@@ -1,5 +1,11 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/svelte";
 import type {
   Account,
   MessageHeader,
@@ -260,7 +266,10 @@ it("expands an account and opens one of its folders", async () => {
   await fireEvent.click(
     screen.getByRole("button", { name: "Toggle folders for Personal" }),
   );
-  await fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+  // why within(nav): the toolbar has an Archive action button too — the
+  // sidebar folder is the one this test opens.
+  const sidebar = within(screen.getByRole("navigation"));
+  await fireEvent.click(await sidebar.findByRole("button", { name: "Archive" }));
 
   expect(await screen.findByText("Archived note")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Archive" })).toBeInTheDocument();
@@ -958,11 +967,13 @@ it("unarchives an archived message via Move to Inbox", async () => {
   render(App);
   await screen.findByText("Weekend plans");
 
-  // Open Personal's Archive folder and select the archived message.
+  // Open Personal's Archive folder (the sidebar one, not the toolbar
+  // action) and select the archived message.
   await fireEvent.click(
     screen.getByRole("button", { name: "Toggle folders for Personal" }),
   );
-  await fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+  const sidebar = within(screen.getByRole("navigation"));
+  await fireEvent.click(await sidebar.findByRole("button", { name: "Archive" }));
   await fireEvent.click(await screen.findByText("Archived note"));
 
   // On an archived message the archive action flips to Move to Inbox…
