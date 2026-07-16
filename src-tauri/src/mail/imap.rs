@@ -215,15 +215,21 @@ pub async fn move_message(session: &mut ImapSession, uid: i64, dest: &str) -> Re
     }
 
     session.uid_copy(&uid, dest).await.map_err(imap_err)?;
+    expunge_uid(session, &uid).await
+}
+
+/// Mark one UID `\Deleted` and expunge it from the selected mailbox.
+async fn expunge_uid(session: &mut ImapSession, uid: &str) -> Result<(), AppError> {
     let updates = session
-        .uid_store(&uid, "+FLAGS.SILENT (\\Deleted)")
+        .uid_store(uid, "+FLAGS.SILENT (\\Deleted)")
         .await
         .map_err(imap_err)?;
     let _: Vec<Fetch> = updates.try_collect().await.map_err(imap_err)?;
     // why: UID EXPUNGE removes only this message; without UIDPLUS the plain
     // EXPUNGE clears the whole \Deleted set (the RFC's documented fallback).
-    if supports("UIDPLUS") {
-        let stream = session.uid_expunge(&uid).await.map_err(imap_err)?;
+    let caps = session.capabilities().await.ok();
+    if caps.as_ref().is_some_and(|c| c.has_str("UIDPLUS")) {
+        let stream = session.uid_expunge(uid).await.map_err(imap_err)?;
         let _: Vec<_> = stream.try_collect().await.map_err(imap_err)?;
     } else {
         let stream = session.expunge().await.map_err(imap_err)?;
