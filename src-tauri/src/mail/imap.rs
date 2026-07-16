@@ -232,15 +232,16 @@ pub async fn move_message(session: &mut ImapSession, uid: i64, dest: &str) -> Re
     Ok(())
 }
 
-/// Upload one raw RFC-2822 message into a mailbox, already marked read —
-/// used to mirror SMTP-sent mail into the Sent folder.
+/// Upload one raw RFC-2822 message into a mailbox with the given IMAP flag
+/// set — `(\Seen)` for Sent copies, `(\Draft \Seen)` for drafts.
 pub async fn append(
     session: &mut ImapSession,
     mailbox: &str,
+    flags: &str,
     message: &[u8],
 ) -> Result<(), AppError> {
     session
-        .append(mailbox, Some("(\\Seen)"), None, message)
+        .append(mailbox, Some(flags), None, message)
         .await
         .map_err(imap_err)
 }

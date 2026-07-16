@@ -470,7 +470,7 @@ async fn save_sent_copy(
         password,
     )
     .await?;
-    let result = mail::imap::append(&mut session, &sent, raw).await;
+    let result = mail::imap::append(&mut session, &sent, "(\\Seen)", raw).await;
     let _ = session.logout().await;
     result
 }
