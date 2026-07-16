@@ -115,6 +115,13 @@ export interface MessageAttachment {
 }
 
 /** One folder of one account, as shown in the sidebar. */
+/** One autocomplete suggestion for a compose recipient field. */
+export interface Contact {
+  email: string;
+  /** Latest display name seen for the address; empty when none was. */
+  name: string;
+}
+
 export interface Mailbox {
   id: number;
   accountId: number;

@@ -5,6 +5,7 @@ import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import type {
   Account,
   AttachmentInfo,
+  Contact,
   Mailbox,
   MessageAttachment,
   MessageBody,
@@ -55,6 +56,11 @@ export function confirmAccountDeletion(account: Account): Promise<boolean> {
       "This cannot be undone.",
     { title: "Delete Account", kind: "warning" },
   );
+}
+
+/** Compose autocomplete: locally harvested contacts matching the query. */
+export function listContacts(query: string): Promise<Contact[]> {
+  return invoke<Contact[]>("list_contacts", { query });
 }
 
 /** Folders of one account in sidebar order (roles first, then customs). */

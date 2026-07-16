@@ -64,6 +64,19 @@ pub async fn harvest(pool: &SqlitePool, lists: &[&str], seen_at: &str) -> Result
     Ok(())
 }
 
+/// Record the recipients of an outgoing message, stamped with the current
+/// time — someone just written to should rank as the freshest contact.
+///
+/// why strftime: the timestamp must match the RFC3339 shape harvested from
+/// message Date headers so MAX() string comparison stays meaningful, and
+/// SQLite produces it without pulling in a date-time crate.
+pub async fn harvest_sent(pool: &SqlitePool, lists: &[&str]) -> Result<(), AppError> {
+    let now: String = sqlx::query_scalar("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
+        .fetch_one(pool)
+        .await?;
+    harvest(pool, lists, &now).await
+}
+
 /// One-time seed from the already-cached messages, run at startup while the
 /// contacts table is still empty (rows cached before the table existed would
 /// otherwise never be harvested — sync only touches new headers).
@@ -217,6 +230,29 @@ mod tests {
         assert_eq!(suggest(&pool, "zzz").await.unwrap(), Vec::new());
         // LIKE wildcards typed by the user stay literal.
         assert_eq!(suggest(&pool, "%").await.unwrap(), Vec::new());
+    }
+
+    #[tokio::test]
+    async fn harvest_sent_stamps_recipients_with_now() {
+        let pool = test_pool().await;
+        harvest(&pool, &["old@example.com"], "2026-07-01T00:00:00Z")
+            .await
+            .unwrap();
+
+        harvest_sent(&pool, &["new@example.com", ""]).await.unwrap();
+
+        // The just-written address outranks the older, equally-seen one.
+        let hits = suggest(&pool, "e").await.unwrap();
+        assert_eq!(hits.len(), 0); // prefix "e" matches neither address
+
+        let all = suggest(&pool, "new").await.unwrap();
+        assert_eq!(all.len(), 1);
+        let last: String =
+            sqlx::query_scalar("SELECT last_seen FROM contacts WHERE email = 'new@example.com'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(last.as_str() > "2026-07-01T00:00:00Z");
     }
 
     #[tokio::test]

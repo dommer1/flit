@@ -291,6 +291,16 @@ pub async fn list_messages(
     storage::messages::list(&state.pool, account_id, mailbox).await
 }
 
+/// Autocomplete for compose recipient fields: locally harvested contacts
+/// matching `query`, best first. Never touches the network.
+#[tauri::command]
+pub async fn list_contacts(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<Vec<crate::models::Contact>, AppError> {
+    storage::contacts::suggest(&state.pool, &query).await
+}
+
 /// Folders of one account in sidebar order, from the local mirror.
 #[tauri::command]
 pub async fn list_mailboxes(
@@ -358,6 +368,15 @@ pub async fn queue_send(
     // as a failure badge eight seconds after the window closed.
     let account = storage::accounts::get(&state.pool, message.account_id).await?;
     mail::smtp::build_message(&account.email, &message).await?;
+
+    // why best effort: the contacts book is a convenience — a failed write
+    // must never block or fail a send that already validated.
+    if let Err(err) =
+        storage::contacts::harvest_sent(&state.pool, &[&message.to, &message.cc, &message.bcc])
+            .await
+    {
+        eprintln!("failed to record recipients as contacts: {err}");
+    }
 
     let id = SEND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let subject = message.subject.clone();

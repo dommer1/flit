@@ -82,6 +82,7 @@ pub fn run() {
             commands::add_account,
             commands::delete_account,
             commands::set_account_color,
+            commands::list_contacts,
             commands::list_mailboxes,
             commands::list_messages,
             commands::search_messages,
