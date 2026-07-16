@@ -21,6 +21,10 @@ pub enum AppError {
     Imap(String),
     #[error("smtp error: {0}")]
     Smtp(String),
+    // why: user-fixable input problems (e.g. a schedule time in the past)
+    // get their own variant so the message reads as guidance, not a fault.
+    #[error("{0}")]
+    Invalid(String),
 }
 
 // why: Serialize can't be derived here because the wrapped errors (sqlx,

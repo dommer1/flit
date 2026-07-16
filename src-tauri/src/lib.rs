@@ -91,6 +91,7 @@ pub fn run() {
             commands::save_all_attachments,
             commands::queue_send,
             commands::undo_send,
+            commands::schedule_send,
             commands::save_draft,
             commands::test_connection,
             commands::open_compose,

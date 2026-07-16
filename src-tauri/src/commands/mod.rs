@@ -422,6 +422,37 @@ pub async fn undo_send(
     Ok(())
 }
 
+/// Park a composed message in SQLite until its delivery time ("Send Later").
+/// Validation mirrors queue_send: problems must surface in the compose
+/// window now, not as a failure badge when the time comes.
+#[tauri::command]
+pub async fn schedule_send(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message: OutgoingMessage,
+    scheduled_at: i64,
+) -> Result<(), AppError> {
+    let account = storage::accounts::get(&state.pool, message.account_id).await?;
+    mail::smtp::build_message(&account.email, &message).await?;
+    validate_scheduled_at(scheduled_at, now_epoch())?;
+    storage::scheduled::insert(&state.pool, &message, scheduled_at).await?;
+    // why: no payload — listeners (scheduled list in the sidebar) re-query
+    // the DB, which is the single source of truth for parked messages.
+    app.emit("scheduled-changed", ())?;
+    Ok(())
+}
+
+/// A schedule time must be strictly in the future — "now" belongs to the
+/// ordinary send button.
+fn validate_scheduled_at(scheduled_at: i64, now: i64) -> Result<(), AppError> {
+    if scheduled_at <= now {
+        return Err(AppError::Invalid(
+            "scheduled time is in the past".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// The one SMTP delivery path: account row → MIME → session cache → send.
 async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppError> {
     let account = storage::accounts::get(&state.pool, message.account_id).await?;
@@ -866,4 +897,17 @@ pub async fn close_settings(app: AppHandle) -> Result<(), AppError> {
         window.close()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schedule_times_must_be_in_the_future() {
+        assert!(validate_scheduled_at(1_001, 1_000).is_ok());
+        // "now" and the past both belong to the ordinary send button
+        assert!(validate_scheduled_at(1_000, 1_000).is_err());
+        assert!(validate_scheduled_at(999, 1_000).is_err());
+    }
 }
