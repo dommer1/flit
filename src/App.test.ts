@@ -670,6 +670,20 @@ it("trashes the open message and steps to its neighbour", async () => {
   await fireEvent.click(screen.getByRole("button", { name: "Trash" }));
 
   expect(api.moveToTrash).toHaveBeenCalledWith(1);
-  // Selection stepped to the next message in the list.
+  // The row leaves the list at once (optimistic), selection steps to the next.
+  expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
   await screen.findByRole("heading", { name: "Re: Invoice" });
+});
+
+it("restores the message when trashing fails on the server", async () => {
+  vi.mocked(api.moveToTrash).mockRejectedValueOnce("imap error: no trash");
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+
+  await fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+
+  // Optimistically removed, then brought back by the failure re-query.
+  await waitFor(() =>
+    expect(screen.getByText("Weekend plans")).toBeInTheDocument(),
+  );
 });

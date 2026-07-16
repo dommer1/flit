@@ -79,11 +79,16 @@
       messages.map((m) => m.id),
       id,
     );
-    void moveToTrash(id).catch((err: unknown) =>
-      console.error("failed to move to trash:", err),
-    );
+    // why: drop the row from the list at once so trashing feels instant. The
+    // server move runs in the background; on failure we re-query to bring the
+    // message back rather than leave the list lying.
+    messages = messages.filter((m) => m.id !== id);
     if (next === null) selectedMessageId = null;
     else selectMessage(next);
+    void moveToTrash(id).catch((err: unknown) => {
+      console.error("failed to move to trash:", err);
+      void refreshMessages();
+    });
   }
 
   // Arrow Up / Down walk the list. Ignored while typing in a field (search,
