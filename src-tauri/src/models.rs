@@ -94,6 +94,52 @@ pub struct AttachmentRef {
     pub name: String,
 }
 
+/// One "Send Later" message parked in SQLite until its delivery time.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledMessage {
+    pub id: i64,
+    pub account_id: i64,
+    // why sqlx(rename): the columns follow the messages-table naming
+    // (to_addr/cc_addr) while the struct mirrors OutgoingMessage, so the
+    // frontend sees the same field names in drafts and scheduled rows.
+    #[sqlx(rename = "to_addr")]
+    pub to: String,
+    #[sqlx(rename = "cc_addr")]
+    pub cc: String,
+    #[sqlx(rename = "bcc_addr")]
+    pub bcc: String,
+    pub subject: String,
+    pub body: String,
+    /// HTML version of the body; None = plain-text-only message.
+    pub body_html: Option<String>,
+    /// Attachment references; the column stores them as a JSON array and
+    /// #[sqlx(json)] does the (de)serialization on read.
+    #[sqlx(json)]
+    pub attachments: Vec<AttachmentRef>,
+    /// Unix seconds (UTC) when the message should leave.
+    pub scheduled_at: i64,
+    /// "pending" | "missed" — missed rows never send on their own; the user
+    /// resolves them in the catch-up dialog.
+    pub status: String,
+}
+
+impl ScheduledMessage {
+    /// The compose-shaped form: what deliver() and reopened drafts expect.
+    pub fn outgoing(&self) -> OutgoingMessage {
+        OutgoingMessage {
+            account_id: self.account_id,
+            to: self.to.clone(),
+            cc: self.cc.clone(),
+            bcc: self.bcc.clone(),
+            subject: self.subject.clone(),
+            body: self.body.clone(),
+            body_html: self.body_html.clone(),
+            attachments: self.attachments.clone(),
+        }
+    }
+}
+
 /// How the viewer treats remote (http/https) images in mail bodies.
 /// Inline cid: images always render — they are part of the message and
 /// loading them touches no network. Remote images are the tracking vector.

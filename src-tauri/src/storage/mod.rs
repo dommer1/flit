@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod mailboxes;
 pub mod messages;
+pub mod scheduled;
 pub mod search;
 pub mod settings;
 
