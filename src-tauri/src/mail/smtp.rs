@@ -68,7 +68,12 @@ fn parse_recipients(list: &str, field: &str) -> Result<Vec<Mailbox>, AppError> {
 
 /// Build the MIME message for an outgoing mail. `to`/`cc`/`bcc` accept
 /// comma-separated recipient lists; the body is plain text for now.
-pub fn build_message(from_email: &str, outgoing: &OutgoingMessage) -> Result<Message, AppError> {
+// why async: attachment bytes will be read from disk here — file I/O must
+// not block the runtime, so the signature is async ahead of that change.
+pub async fn build_message(
+    from_email: &str,
+    outgoing: &OutgoingMessage,
+) -> Result<Message, AppError> {
     let from: Mailbox = from_email
         .parse()
         .map_err(|e| AppError::Smtp(format!("invalid from address: {e}")))?;
@@ -179,9 +184,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn builds_a_plain_text_message() {
-        let message = build_message("domco@example.com", &outgoing("alice@example.com")).unwrap();
+    #[tokio::test]
+    async fn builds_a_plain_text_message() {
+        let message = build_message("domco@example.com", &outgoing("alice@example.com"))
+            .await
+            .unwrap();
 
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(raw.contains("From: domco@example.com"));
@@ -190,12 +197,13 @@ mod tests {
         assert!(raw.contains("Hi there"));
     }
 
-    #[test]
-    fn accepts_a_comma_separated_recipient_list() {
+    #[tokio::test]
+    async fn accepts_a_comma_separated_recipient_list() {
         let message = build_message(
             "domco@example.com",
             &outgoing("alice@example.com, Bob <bob@example.com>"),
         )
+        .await
         .unwrap();
 
         let raw = String::from_utf8(message.formatted()).unwrap();
@@ -203,12 +211,12 @@ mod tests {
         assert!(raw.contains("bob@example.com"));
     }
 
-    #[test]
-    fn cc_recipients_land_in_the_cc_header() {
+    #[tokio::test]
+    async fn cc_recipients_land_in_the_cc_header() {
         let mut out = outgoing("alice@example.com");
         out.cc = "Carol <carol@example.com>, dan@example.com".to_string();
 
-        let message = build_message("domco@example.com", &out).unwrap();
+        let message = build_message("domco@example.com", &out).await.unwrap();
 
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(raw.contains("Cc:"));
@@ -216,12 +224,12 @@ mod tests {
         assert!(raw.contains("dan@example.com"));
     }
 
-    #[test]
-    fn bcc_reaches_the_envelope_but_never_the_headers() {
+    #[tokio::test]
+    async fn bcc_reaches_the_envelope_but_never_the_headers() {
         let mut out = outgoing("alice@example.com");
         out.bcc = "hidden@example.com".to_string();
 
-        let message = build_message("domco@example.com", &out).unwrap();
+        let message = build_message("domco@example.com", &out).await.unwrap();
 
         // The transmitted bytes (also the Sent copy) must not name the
         // hidden recipient anywhere.
@@ -238,11 +246,12 @@ mod tests {
         assert!(envelope.contains(&"alice@example.com".to_string()));
     }
 
-    #[test]
-    fn rejects_an_invalid_cc_or_bcc() {
+    #[tokio::test]
+    async fn rejects_an_invalid_cc_or_bcc() {
         let mut out = outgoing("alice@example.com");
         out.cc = "not-an-address".to_string();
         assert!(build_message("domco@example.com", &out)
+            .await
             .unwrap_err()
             .to_string()
             .contains("cc"));
@@ -250,21 +259,26 @@ mod tests {
         let mut out = outgoing("alice@example.com");
         out.bcc = "also bad".to_string();
         assert!(build_message("domco@example.com", &out)
+            .await
             .unwrap_err()
             .to_string()
             .contains("bcc"));
     }
 
-    #[test]
-    fn rejects_an_invalid_recipient() {
-        let err = build_message("domco@example.com", &outgoing("not-an-address")).unwrap_err();
+    #[tokio::test]
+    async fn rejects_an_invalid_recipient() {
+        let err = build_message("domco@example.com", &outgoing("not-an-address"))
+            .await
+            .unwrap_err();
 
         assert!(err.to_string().contains("recipient"));
     }
 
-    #[test]
-    fn rejects_an_empty_recipient_list() {
-        let err = build_message("domco@example.com", &outgoing("   ")).unwrap_err();
+    #[tokio::test]
+    async fn rejects_an_empty_recipient_list() {
+        let err = build_message("domco@example.com", &outgoing("   "))
+            .await
+            .unwrap_err();
 
         assert!(err.to_string().contains("recipient"));
     }

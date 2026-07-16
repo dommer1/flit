@@ -312,7 +312,7 @@ pub async fn queue_send(
     // invalid address must surface in the compose window immediately, not
     // as a failure badge eight seconds after the window closed.
     let account = storage::accounts::get(&state.pool, message.account_id).await?;
-    mail::smtp::build_message(&account.email, &message)?;
+    mail::smtp::build_message(&account.email, &message).await?;
 
     static SEND_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let id = SEND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -385,7 +385,7 @@ pub async fn undo_send(
 /// The one SMTP delivery path: account row → MIME → session cache → send.
 async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppError> {
     let account = storage::accounts::get(&state.pool, message.account_id).await?;
-    let mime = mail::smtp::build_message(&account.email, message)?;
+    let mime = mail::smtp::build_message(&account.email, message).await?;
     // why: the session cache reads the keychain at most once per account per
     // run; the password never reaches events or logs.
     let password = state.password(message.account_id).await?;
