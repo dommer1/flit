@@ -465,6 +465,51 @@ pub async fn schedule_send(
     Ok(())
 }
 
+/// Every parked send-later message, soonest first — pending and missed
+/// alike; the frontend splits them by status.
+#[tauri::command]
+pub async fn list_scheduled(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::models::ScheduledMessage>, AppError> {
+    storage::scheduled::list(&state.pool).await
+}
+
+/// "Send now" for one parked message (the catch-up dialog's confirm). The
+/// take() is the claim — if the scheduler beat us to it, this is a no-op.
+#[tauri::command]
+pub async fn send_scheduled_now(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), AppError> {
+    let Some(message) = storage::scheduled::take(&state.pool, id).await? else {
+        return Ok(());
+    };
+    app.emit("scheduled-changed", ())?;
+    // why spawn: delivery talks to the SMTP server — the dialog gets its
+    // answer now, progress arrives as the usual outbox badge events.
+    tauri::async_runtime::spawn(async move {
+        deliver_scheduled(&app, message.outgoing()).await;
+    });
+    Ok(())
+}
+
+/// Cancel one parked message: it leaves the schedule and reopens as a
+/// compose window, so nothing the user wrote is ever destroyed.
+#[tauri::command]
+pub async fn cancel_scheduled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), AppError> {
+    let Some(message) = storage::scheduled::take(&state.pool, id).await? else {
+        return Ok(());
+    };
+    app.emit("scheduled-changed", ())?;
+    open_compose_window(&app, message.outgoing()).await?;
+    Ok(())
+}
+
 /// A schedule time must be strictly in the future — "now" belongs to the
 /// ordinary send button.
 fn validate_scheduled_at(scheduled_at: i64, now: i64) -> Result<(), AppError> {
