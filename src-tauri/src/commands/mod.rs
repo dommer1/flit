@@ -332,6 +332,13 @@ pub async fn inspect_attachments(
     mail::attachments::inspect(paths).await
 }
 
+/// Best-effort thumbnail for one attachment as a data: URI; None means
+/// "show the generic file card". Never fails — previews are decoration.
+#[tauri::command]
+pub async fn attachment_preview(path: String) -> Result<Option<String>, AppError> {
+    Ok(mail::attachments::preview(path).await)
+}
+
 // note: there is deliberately no direct send command — every outgoing
 // message goes through the undoable queue below.
 

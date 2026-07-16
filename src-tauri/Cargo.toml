@@ -54,6 +54,13 @@ window-vibrancy = "0.7.1"
 # why: attachment Content-Type comes from the filename extension; recipients'
 # clients pick preview/open behavior from it.
 mime_guess = "2"
+# why: compose-window attachment thumbnails. Only the formats we preview
+# compile in — anything else simply gets no thumbnail.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+] }
 utf7-imap = "0.3.2"
 base64 = "0.22.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["native-tls"] }

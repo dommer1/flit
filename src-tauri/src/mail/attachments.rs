@@ -35,6 +35,51 @@ pub async fn inspect(paths: Vec<String>) -> Result<Vec<AttachmentInfo>, AppError
     Ok(infos)
 }
 
+/// Sources above this size get no thumbnail — decoding a huge image for a
+/// 256px preview is wasted work and a decompression-bomb risk.
+const MAX_PREVIEW_SOURCE_BYTES: u64 = 10 * 1024 * 1024;
+/// Longest edge of the generated thumbnail.
+const PREVIEW_EDGE: u32 = 256;
+
+/// Best-effort thumbnail for one attachment as a `data:image/png` URI.
+/// `None` for anything that is not a decodable raster image (only PNG, JPEG
+/// and WebP are compiled in) — the card then shows a generic placeholder.
+/// Never errors: a preview is decoration, not part of the message.
+pub async fn preview(path: String) -> Option<String> {
+    let meta = tokio::fs::metadata(&path).await.ok()?;
+    if !meta.is_file() || meta.len() > MAX_PREVIEW_SOURCE_BYTES {
+        return None;
+    }
+    // why spawn_blocking: decode + resize is CPU-bound; on the async runtime
+    // it would stall every other task for the duration.
+    tokio::task::spawn_blocking(move || render_thumbnail(&path))
+        .await
+        .ok()
+        .flatten()
+}
+
+fn render_thumbnail(path: &str) -> Option<String> {
+    // why with_guessed_format: sniffs the actual bytes instead of trusting
+    // the extension, so a mislabeled file can't pick a decoder we did not
+    // intend (and unsupported formats bail out to None here).
+    let img = image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    let thumb = img.thumbnail(PREVIEW_EDGE, PREVIEW_EDGE);
+    let mut buf = Vec::new();
+    thumb
+        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .ok()?;
+    use base64::Engine;
+    Some(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(buf)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,6 +122,36 @@ mod tests {
 
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].name, "kept.txt");
+    }
+
+    #[tokio::test]
+    async fn preview_thumbnails_a_png() {
+        let dir = std::env::temp_dir().join("flit-attach-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tiny.png");
+        image::RgbImage::from_pixel(4, 4, image::Rgb([200, 40, 40]))
+            .save(&path)
+            .unwrap();
+
+        let uri = preview(path.to_string_lossy().into_owned()).await;
+
+        assert!(uri.unwrap().starts_with("data:image/png;base64,"));
+    }
+
+    #[tokio::test]
+    async fn preview_declines_non_images() {
+        let path = temp_file("not-an-image.pdf", b"%PDF-1.4 nope");
+
+        assert_eq!(preview(path).await, None);
+    }
+
+    #[tokio::test]
+    async fn preview_declines_missing_and_oversized_files() {
+        assert_eq!(preview("/nonexistent/flit/img.png".to_string()).await, None);
+
+        let big = vec![0u8; (MAX_PREVIEW_SOURCE_BYTES + 1) as usize];
+        let path = temp_file("huge.png", &big);
+        assert_eq!(preview(path).await, None);
     }
 
     #[tokio::test]

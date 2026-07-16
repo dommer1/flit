@@ -95,6 +95,7 @@ pub fn run() {
             commands::inspect_attachments,
             commands::save_attachment,
             commands::save_all_attachments,
+            commands::attachment_preview,
             commands::queue_send,
             commands::undo_send,
             commands::schedule_send,
