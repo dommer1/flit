@@ -9,6 +9,7 @@
     takeComposeDraft,
   } from "./api";
   import type { Account, AttachmentInfo } from "./types";
+  import RichTextEditor from "./RichTextEditor.svelte";
 
   let accounts = $state<Account[]>([]);
   let accountId = $state<number | null>(null);
@@ -20,6 +21,12 @@
   let showCcBcc = $state(false);
   let subject = $state("");
   let body = $state("");
+  let bodyHtml = $state("");
+  /** The draft's plain text, handed to the editor exactly once at mount. */
+  let initialBody = $state("");
+  // why: the editor renders only after the draft resolved — Tiptap takes its
+  // content at construction, so mounting early would show an empty body.
+  let loaded = $state(false);
   let attachments = $state<AttachmentInfo[]>([]);
   /** A file drag is currently above the window — shows the drop overlay. */
   let dropHover = $state(false);
@@ -43,7 +50,9 @@
       bcc = draft?.bcc ?? "";
       showCcBcc = cc !== "" || bcc !== "";
       subject = draft?.subject ?? "";
-      body = draft?.body ?? "";
+      initialBody = draft?.body ?? "";
+      body = initialBody;
+      loaded = true;
       // why re-stat instead of trusting the draft: an undone/failed send may
       // reopen after the file changed or vanished — surface that now.
       if (draft?.attachments?.length) {
@@ -97,6 +106,9 @@
         bcc,
         subject,
         body,
+        // why || undefined: an empty editor reports "" — the wire format
+        // treats a missing field as "plain text only".
+        bodyHtml: bodyHtml || undefined,
         attachments: attachments.map(({ path, name }) => ({ path, name })),
       });
       await closeCompose();
@@ -200,12 +212,16 @@
     <p class="error" role="alert">{error}</p>
   {/if}
 
-  <textarea
-    aria-label="Message body"
-    class:with-attachments={attachments.length > 0}
-    bind:value={body}
-    disabled={queueing}
-  ></textarea>
+  {#if loaded}
+    <div class="body-area" class:with-attachments={attachments.length > 0}>
+      <RichTextEditor
+        initialText={initialBody}
+        bind:text={body}
+        bind:html={bodyHtml}
+        disabled={queueing}
+      />
+    </div>
+  {/if}
 
   {#if attachments.length > 0}
     <!-- Floating card pinned over the bottom of the body, so attachments
@@ -324,8 +340,7 @@
   }
 
   input:focus,
-  select:focus,
-  textarea:focus {
+  select:focus {
     outline: none;
   }
 
@@ -442,20 +457,14 @@
     color: #d9302c;
   }
 
-  textarea {
+  .body-area {
+    display: flex;
     flex: 1;
-    padding: 14px 20px;
-    border: none;
-    background: transparent;
-    font: inherit;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--text-primary);
-    resize: none;
+    min-height: 0;
   }
 
   /* Keep the last lines of text visible above the floating card. */
-  textarea.with-attachments {
+  .body-area.with-attachments :global(.tiptap) {
     padding-bottom: 72px;
   }
 </style>

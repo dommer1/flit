@@ -28,8 +28,10 @@
 
   function syncOut(editor: Editor) {
     // why blockSeparator "\n": textToHtml maps one line to one paragraph,
-    // so this exact separator makes text → editor → text a round-trip.
-    text = editor.getText({ blockSeparator: "\n" });
+    // so this separator turns paragraphs back into lines.
+    // why trim: nested blocks (list items) and the editor's own trailing
+    // paragraph leak extra separators at the edges of the fallback text.
+    text = editor.getText({ blockSeparator: "\n" }).trim();
     html = editor.isEmpty ? "" : editor.getHTML();
   }
 

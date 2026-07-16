@@ -82,7 +82,35 @@ it("prefills the form from the parked draft", async () => {
   );
   expect(screen.getByLabelText("To")).toHaveValue("alice@example.com");
   expect(screen.getByLabelText("Subject")).toHaveValue("Re: Weekend plans");
-  expect(screen.getByLabelText("Message body")).toHaveValue("> quoted");
+  expect(
+    await screen.findByRole("textbox", { name: "Message body" }),
+  ).toHaveTextContent("> quoted");
+});
+
+it("sends the html rendering alongside the plain text body", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    accountId: 1,
+    to: "alice@example.com",
+    subject: "Lists",
+    body: "hello",
+  });
+
+  render(ComposeWindow);
+
+  // Format the prefilled paragraph as a bullet list via the toolbar.
+  await fireEvent.click(
+    await screen.findByRole("button", { name: "Bullet list" }),
+  );
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "hello",
+        bodyHtml: expect.stringContaining("<ul"),
+      }),
+    ),
+  );
 });
 
 it("falls back to an empty draft from the first account", async () => {

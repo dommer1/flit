@@ -38,8 +38,10 @@ export interface OutgoingMessage {
   /** Bcc recipients — SMTP envelope only, never a visible header. */
   bcc?: string;
   subject: string;
-  /** Plain text only for now. */
+  /** Plain-text body; doubles as the fallback part of an HTML message. */
   body: string;
+  /** HTML rendering of the body; absent/empty = plain text only. */
+  bodyHtml?: string;
   /** Attached files; absent/empty = none. Bytes are read at send time. */
   attachments?: AttachmentRef[];
 }
