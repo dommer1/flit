@@ -141,10 +141,23 @@
         {@const color = accountColors[message.accountId] ?? null}
         {@const offset = swipeId === message.id ? swipeOffset : 0}
         <div class="swipe-row" onwheel={(e) => handleWheel(message, e)}>
+          <!-- why the width style: the backdrop spans exactly the revealed
+               strip, so it can never show through the row content above it
+               (hover tints the row translucent). -->
           {#if offset < 0}
-            <span class="swipe-bg archive" aria-hidden="true">Archive</span>
+            <span
+              class="swipe-bg archive"
+              aria-hidden="true"
+              style:width={`${-offset}px`}
+            >
+              Archive
+            </span>
           {:else if offset > 0}
-            <span class="swipe-bg read" aria-hidden="true">
+            <span
+              class="swipe-bg read"
+              aria-hidden="true"
+              style:width={`${offset}px`}
+            >
               {message.read ? "Mark Unread" : "Mark Read"}
             </span>
           {/if}
@@ -304,8 +317,12 @@
   }
 
   .swipe-bg {
+    /* why border-box: width comes in as the revealed offset in px — the
+       padding must eat into it, not widen the strip past the reveal. */
+    box-sizing: border-box;
     position: absolute;
-    inset: 0;
+    top: 0;
+    bottom: 0;
     display: flex;
     align-items: center;
     padding: 0 14px;
@@ -313,14 +330,20 @@
     font-size: 12px;
     font-weight: 600;
     color: #ffffff;
+    /* The label pins to the outer edge and clips while the strip is still
+       narrow, instead of overflowing into the row. */
+    overflow: hidden;
+    white-space: nowrap;
   }
 
   .swipe-bg.archive {
+    right: 0;
     justify-content: flex-end;
     background: #4f7cf7;
   }
 
   .swipe-bg.read {
+    left: 0;
     justify-content: flex-start;
     background: #f0a132;
   }
