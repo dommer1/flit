@@ -90,6 +90,21 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  function buildMessage(accountId: number) {
+    return {
+      accountId,
+      to,
+      cc,
+      bcc,
+      subject,
+      body,
+      // why || undefined: an empty editor reports "" — the wire format
+      // treats a missing field as "plain text only".
+      bodyHtml: bodyHtml || undefined,
+      attachments: attachments.map(({ path, name }) => ({ path, name })),
+    };
+  }
+
   // why: the backend queue owns the undo window — this window only hands
   // the message over (which validates addresses) and closes. The undo badge
   // lives in the main window from here on.
@@ -99,18 +114,7 @@
     queueing = true;
     error = null;
     try {
-      await queueSend({
-        accountId,
-        to,
-        cc,
-        bcc,
-        subject,
-        body,
-        // why || undefined: an empty editor reports "" — the wire format
-        // treats a missing field as "plain text only".
-        bodyHtml: bodyHtml || undefined,
-        attachments: attachments.map(({ path, name }) => ({ path, name })),
-      });
+      await queueSend(buildMessage(accountId));
       await closeCompose();
     } catch (err) {
       error = String(err);
