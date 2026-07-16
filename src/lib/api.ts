@@ -17,6 +17,7 @@ import type {
   ScheduledMessage,
   SendEvent,
   Signature,
+  SwipeActions,
 } from "./types";
 
 export function listAccounts(): Promise<Account[]> {
@@ -355,6 +356,16 @@ export function setAccountNotifications(
   sound: string | null,
 ): Promise<void> {
   return invoke<void>("set_account_notifications", { id, enabled, sound });
+}
+
+/** Configured swipe actions (left archives, right toggles read until
+ * the user picks otherwise). */
+export function getSwipeActions(): Promise<SwipeActions> {
+  return invoke<SwipeActions>("get_swipe_actions");
+}
+
+export function setSwipeActions(actions: SwipeActions): Promise<void> {
+  return invoke<void>("set_swipe_actions", { actions });
 }
 
 /** Fires whenever any window changes an app-wide setting. */

@@ -121,6 +121,16 @@ export interface NotificationSettings {
   syncIntervalMinutes: number;
 }
 
+/** What one direction of the message-list swipe gesture does;
+ * "none" disables that direction. */
+export type SwipeAction = "none" | "toggleRead" | "archive" | "trash" | "reply";
+
+/** The configured action for each swipe direction on message-list rows. */
+export interface SwipeActions {
+  left: SwipeAction;
+  right: SwipeAction;
+}
+
 /** `html`, when present, is a full sanitized srcdoc document from the backend. */
 export interface MessageBody {
   html: string | null;
