@@ -218,6 +218,38 @@ pub async fn move_message(session: &mut ImapSession, uid: i64, dest: &str) -> Re
     expunge_uid(session, &uid).await
 }
 
+/// Permanently remove one message by UID from the selected mailbox — no
+/// copy anywhere. This is how a superseded or sent draft version dies.
+pub async fn delete_message(session: &mut ImapSession, uid: i64) -> Result<(), AppError> {
+    expunge_uid(session, &uid.to_string()).await
+}
+
+/// Find the UID of the message carrying `message_id` in the selected
+/// mailbox; `None` when the server no longer has it. The highest UID wins
+/// if several match — later versions of a draft get later UIDs.
+pub async fn find_by_message_id(
+    session: &mut ImapSession,
+    message_id: &str,
+) -> Result<Option<i64>, AppError> {
+    let uids = session
+        .uid_search(message_id_query(message_id))
+        .await
+        .map_err(imap_err)?;
+    Ok(uids.into_iter().max().map(i64::from))
+}
+
+/// The SEARCH query matching one Message-ID header. Quoted so the id stays
+/// a single argument; quotes and backslashes are stripped rather than
+/// escaped — no real Message-ID contains them, and a broken id must not be
+/// able to smuggle extra search terms into the command.
+fn message_id_query(message_id: &str) -> String {
+    let clean: String = message_id
+        .chars()
+        .filter(|c| !matches!(c, '"' | '\\' | '\r' | '\n'))
+        .collect();
+    format!("HEADER Message-ID \"{clean}\"")
+}
+
 /// Mark one UID `\Deleted` and expunge it from the selected mailbox.
 async fn expunge_uid(session: &mut ImapSession, uid: &str) -> Result<(), AppError> {
     let updates = session
@@ -332,6 +364,22 @@ mod tests {
 
         let uids: Vec<i64> = filtered.iter().map(|h| h.uid).collect();
         assert_eq!(uids, vec![11, 12]);
+    }
+
+    #[test]
+    fn message_id_query_quotes_the_id() {
+        assert_eq!(
+            message_id_query("flit-draft-1-0@flit.local"),
+            "HEADER Message-ID \"flit-draft-1-0@flit.local\""
+        );
+    }
+
+    #[test]
+    fn message_id_query_strips_characters_that_break_out_of_the_quotes() {
+        assert_eq!(
+            message_id_query("evil\"\r\nid\\@x"),
+            "HEADER Message-ID \"evilid@x\""
+        );
     }
 
     #[test]
