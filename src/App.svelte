@@ -48,6 +48,12 @@
     messages.find((m) => m.id === selectedMessageId) ?? null,
   );
 
+  // accountId → color, so the list can dot each row with its account's color
+  // (most useful in the unified inbox, where accounts are interleaved).
+  let accountColors = $derived(
+    Object.fromEntries(accounts.map((a) => [a.id, a.color])),
+  );
+
   function selectMessage(id: number) {
     selectedMessageId = id;
     // why: opening an unread message marks it read (like Apple Mail) — the
@@ -378,6 +384,7 @@
       <MessageList
         title={listTitle}
         {messages}
+        {accountColors}
         selectedId={selectedMessageId}
         onSelect={selectMessage}
         onCompose={openNewMessage}

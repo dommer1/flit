@@ -632,6 +632,19 @@ it("does not touch the read state of an already-read message", async () => {
   expect(api.setMessageRead).not.toHaveBeenCalled();
 });
 
+it("tints each message row with its account's color", async () => {
+  currentAccounts = [{ ...accounts[0], color: "#ff9f0a" }, accounts[1]];
+  const { container } = render(App);
+  await screen.findByText("Weekend plans");
+
+  const bars = container.querySelectorAll<HTMLElement>(".account-bar");
+  expect(bars).toHaveLength(2);
+  // Account 1 is colored; account 2 has no color, so its bar stays transparent.
+  expect(bars[0].style.background).not.toBe("transparent");
+  expect(bars[0].style.background).not.toBe("");
+  expect(bars[1].style.background).toBe("transparent");
+});
+
 it("collapses and restores the sidebar with the toggle button", async () => {
   render(App);
   expect(

@@ -69,7 +69,12 @@
           selectedMailbox === "INBOX"}
         onclick={() => onSelect(account.id)}
       >
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+        <svg
+          class="icon"
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+          style:color={account.color ?? undefined}
+        >
           <rect
             x="1.75"
             y="3.25"

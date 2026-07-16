@@ -5,6 +5,7 @@
   let {
     title,
     messages,
+    accountColors = {},
     selectedId,
     onSelect,
     onCompose,
@@ -13,6 +14,8 @@
   }: {
     title: string;
     messages: MessageHeader[];
+    /** accountId → accent color (or null); drives the per-row color dot. */
+    accountColors?: Record<number, string | null>;
     selectedId: number | null;
     onSelect: (id: number) => void;
     onCompose: () => void;
@@ -98,6 +101,7 @@
       <p class="empty">No Messages</p>
     {:else}
       {#each messages as message (message.id)}
+        {@const color = accountColors[message.accountId] ?? null}
         <button
           role="option"
           aria-selected={selectedId === message.id}
@@ -105,6 +109,11 @@
           class:unread={!message.read}
           onclick={() => onSelect(message.id)}
         >
+          <span
+            class="account-bar"
+            aria-hidden="true"
+            style:background={color ?? "transparent"}
+          ></span>
           <span class="dot" aria-hidden="true"></span>
           <span class="content">
             <span class="row">
@@ -270,6 +279,16 @@
   button.selected {
     background: var(--accent);
     color: var(--accent-text);
+  }
+
+  /* A thin accent spine on the left, colored per account (transparent when
+     the account has no color, so rows stay aligned either way). */
+  .account-bar {
+    flex-shrink: 0;
+    align-self: stretch;
+    width: 3px;
+    margin-right: 5px;
+    border-radius: 2px;
   }
 
   .dot {
