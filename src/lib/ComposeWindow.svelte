@@ -5,6 +5,7 @@
     closeCompose,
     inspectAttachments,
     listAccounts,
+    listSignatures,
     onFileDrop,
     queueSend,
     saveDraft,
@@ -13,7 +14,13 @@
   } from "./api";
   import { debounce } from "./debounce";
   import { isDraftEmpty } from "./draft";
-  import type { Account, AttachmentInfo, OutgoingMessage } from "./types";
+  import { textToHtml } from "./richtext";
+  import type {
+    Account,
+    AttachmentInfo,
+    OutgoingMessage,
+    Signature,
+  } from "./types";
   import {
     presets,
     toDatetimeLocal,
@@ -35,9 +42,50 @@
   let bodyHtml = $state("");
   /** The draft's plain text, handed to the editor exactly once at mount. */
   let initialBody = $state("");
+  /** What the editor opens with: draft text (+ default signature). */
+  let initialHtml = $state("");
   // why: the editor renders only after the draft resolved — Tiptap takes its
   // content at construction, so mounting early would show an empty body.
   let loaded = $state(false);
+
+  let signatures = $state<Signature[]>([]);
+  let signatureId = $state<number | null>(null);
+  let editorRef = $state<
+    { swapBlock: (prev: string, next: string) => void } | undefined
+  >();
+  // Plain lets — bookkeeping only, never rendered.
+  /** The signature HTML currently sitting in the body (swap target). */
+  let appliedSigBody = "";
+  /** Once the user picks a signature by hand, From changes stop overriding it. */
+  let signatureTouched = false;
+
+  function defaultSignatureFor(id: number | null): Signature | null {
+    const account = accounts.find((a) => a.id === id);
+    return signatures.find((sig) => sig.id === account?.signatureId) ?? null;
+  }
+
+  /** Swap (or insert) the signature block inside the live editor. */
+  function applySignature(next: Signature | null) {
+    editorRef?.swapBlock(appliedSigBody, next?.body ?? "");
+    appliedSigBody = next?.body ?? "";
+    signatureId = next?.id ?? null;
+  }
+
+  function onSignaturePicked(event: Event) {
+    signatureTouched = true;
+    const raw = (event.currentTarget as HTMLSelectElement).value;
+    applySignature(
+      raw === ""
+        ? null
+        : (signatures.find((sig) => sig.id === Number(raw)) ?? null),
+    );
+  }
+
+  function onFromPicked(event: Event) {
+    if (signatureTouched) return;
+    const id = Number((event.currentTarget as HTMLSelectElement).value);
+    applySignature(defaultSignatureFor(id));
+  }
   let attachments = $state<AttachmentInfo[]>([]);
   /** A file drag is currently above the window — shows the drop overlay. */
   let dropHover = $state(false);
@@ -80,11 +128,13 @@
     let unlisten: (() => void) | undefined;
     let unlistenClose: (() => void) | undefined;
     void (async () => {
-      const [loadedAccounts, draft] = await Promise.all([
+      const [loadedAccounts, draft, loadedSignatures] = await Promise.all([
         listAccounts(),
         takeComposeDraft(),
+        listSignatures(),
       ]);
       accounts = loadedAccounts;
+      signatures = loadedSignatures;
       // why: a null draft (webview reload after pickup) degrades to a blank
       // message from the first account instead of a broken window.
       accountId = draft?.accountId ?? accounts[0]?.id ?? null;
@@ -100,6 +150,20 @@
       // its newest text may never have been autosaved.
       draftMessageId = draft?.draftMessageId ?? null;
       dirty = draftMessageId !== null;
+      if (draft?.bodyHtml) {
+        // A reopened draft (undo, failed send) already carries whatever
+        // signature it had — don't guess and don't insert another one.
+        initialHtml = draft.bodyHtml;
+        signatureTouched = true;
+      } else {
+        const sig = defaultSignatureFor(accountId);
+        signatureId = sig?.id ?? null;
+        appliedSigBody = sig?.body ?? "";
+        const bodyPart = textToHtml(initialBody) || "<p></p>";
+        initialHtml = sig?.body
+          ? `${bodyPart}<p></p>${sig.body}`
+          : bodyPart;
+      }
       loaded = true;
       // why re-stat instead of trusting the draft: an undone/failed send may
       // reopen after the file changed or vanished — surface that now.
@@ -379,6 +443,7 @@
     <select
       aria-label="From"
       bind:value={accountId}
+      onchange={onFromPicked}
       disabled={queueing}
     >
       {#each accounts as account (account.id)}
@@ -387,6 +452,23 @@
     </select>
     <span class="chevron" aria-hidden="true">⌄</span>
   </div>
+  {#if signatures.length > 0}
+    <div class="row">
+      <span class="key" aria-hidden="true">Signature:</span>
+      <select
+        aria-label="Signature"
+        value={signatureId ?? ""}
+        onchange={onSignaturePicked}
+        disabled={queueing}
+      >
+        <option value="">None</option>
+        {#each signatures as sig (sig.id)}
+          <option value={sig.id}>{sig.name}</option>
+        {/each}
+      </select>
+      <span class="chevron" aria-hidden="true">⌄</span>
+    </div>
+  {/if}
   <div class="row subject-row">
     <input
       class="subject"
@@ -406,7 +488,8 @@
   {#if loaded}
     <div class="body-area" class:with-attachments={attachments.length > 0}>
       <RichTextEditor
-        initialText={initialBody}
+        bind:this={editorRef}
+        {initialHtml}
         bind:text={body}
         bind:html={bodyHtml}
         disabled={queueing}

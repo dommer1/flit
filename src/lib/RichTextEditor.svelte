@@ -1,8 +1,16 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { Editor } from "@tiptap/core";
+  import { Editor, generateHTML, generateJSON } from "@tiptap/core";
   import StarterKit from "@tiptap/starter-kit";
   import { textToHtml } from "./richtext";
+
+  const EXTENSIONS = [StarterKit];
+
+  /** Any HTML → the exact string this editor's getHTML() would produce for
+   * it, so stored fragments become string-comparable with live content. */
+  function normalize(html: string): string {
+    return html ? generateHTML(generateJSON(html, EXTENSIONS), EXTENSIONS) : "";
+  }
 
   let {
     text = $bindable(""),
@@ -41,7 +49,7 @@
   onMount(() => {
     const editor = new Editor({
       element,
-      extensions: [StarterKit],
+      extensions: EXTENSIONS,
       content: initialHtml || textToHtml(initialText),
       editorProps: {
         attributes: { "aria-label": ariaLabel, role: "textbox" },
@@ -56,6 +64,28 @@
   });
 
   onDestroy(() => view.editor?.destroy());
+
+  /**
+   * Replace one HTML block with another (signature switching): the last
+   * occurrence of `previousHtml` is swapped for `nextHtml`. When the old
+   * block is gone (edited away, or there was none), the new one is appended
+   * after a blank paragraph instead — the least surprising fallback.
+   */
+  export function swapBlock(previousHtml: string, nextHtml: string) {
+    const editor = view.editor;
+    if (!editor) return;
+    const prev = normalize(previousHtml);
+    const next = normalize(nextHtml);
+    const current = editor.getHTML();
+    if (prev && current.includes(prev)) {
+      const at = current.lastIndexOf(prev);
+      editor.commands.setContent(
+        current.slice(0, at) + next + current.slice(at + prev.length),
+      );
+    } else if (next) {
+      editor.commands.setContent(`${current}<p></p>${next}`);
+    }
+  }
 
   $effect(() => {
     view.editor?.setEditable(!disabled);

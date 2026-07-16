@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import type { Account, OutgoingMessage } from "./types";
+import type { Account, OutgoingMessage, Signature } from "./types";
 
 const accounts: Account[] = [
   {
@@ -56,6 +56,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 vi.mock("./api", () => ({
   listAccounts: vi.fn(async () => accounts),
+  listSignatures: vi.fn(async (): Promise<Signature[]> => []),
   takeComposeDraft: vi.fn(async (): Promise<OutgoingMessage | null> => null),
   queueSend: vi.fn(async (): Promise<void> => undefined),
   scheduleSend: vi.fn(async (): Promise<void> => undefined),
@@ -497,4 +498,89 @@ it("keeps replacing the same server draft after an undo hands it back", async ()
     "draft-id-0@flit.local",
   );
   expect(destroyWindow).toHaveBeenCalled();
+});
+
+// --- signatures in compose ---
+
+const signatures: Signature[] = [
+  { id: 7, name: "Personal", body: "<p>— Dominik</p>" },
+  { id: 8, name: "Vocalio", body: "<p>Vocalio tím</p>" },
+];
+
+/** Accounts where the first one defaults to signature 7. */
+function accountsWithDefaults(): Account[] {
+  return [
+    { ...accounts[0], signatureId: 7 },
+    { ...accounts[1], signatureId: 8 },
+  ];
+}
+
+async function renderWithSignatures() {
+  vi.mocked(api.listAccounts).mockResolvedValueOnce(accountsWithDefaults());
+  vi.mocked(api.listSignatures).mockResolvedValueOnce(signatures);
+  render(ComposeWindow);
+  return await screen.findByRole("textbox", { name: "Message body" });
+}
+
+it("inserts the From account's default signature into a new message", async () => {
+  const box = await renderWithSignatures();
+
+  expect(box).toHaveTextContent("— Dominik");
+  expect(screen.getByLabelText("Signature")).toHaveValue("7");
+
+  await fireEvent.input(screen.getByLabelText("To"), {
+    target: { value: "bob@example.com" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.stringContaining("— Dominik"),
+        bodyHtml: expect.stringContaining("— Dominik"),
+      }),
+    ),
+  );
+});
+
+it("swaps the inserted block when another signature is picked", async () => {
+  const box = await renderWithSignatures();
+
+  await fireEvent.change(screen.getByLabelText("Signature"), {
+    target: { value: "8" },
+  });
+
+  expect(box).toHaveTextContent("Vocalio tím");
+  expect(box).not.toHaveTextContent("— Dominik");
+});
+
+it("removes the signature when None is picked", async () => {
+  const box = await renderWithSignatures();
+
+  await fireEvent.change(screen.getByLabelText("Signature"), {
+    target: { value: "" },
+  });
+
+  expect(box).not.toHaveTextContent("— Dominik");
+});
+
+it("follows the From account's default until touched by hand", async () => {
+  const box = await renderWithSignatures();
+
+  // Switching From swaps in the other account's default…
+  await fireEvent.change(screen.getByLabelText("From"), {
+    target: { value: "2" },
+  });
+  expect(box).toHaveTextContent("Vocalio tím");
+  expect(box).not.toHaveTextContent("— Dominik");
+
+  // …but once the user picked one explicitly, From changes leave it alone.
+  await fireEvent.change(screen.getByLabelText("Signature"), {
+    target: { value: "7" },
+  });
+  await fireEvent.change(screen.getByLabelText("From"), {
+    target: { value: "1" },
+  });
+  expect(box).toHaveTextContent("— Dominik");
+  expect(box).not.toHaveTextContent("Vocalio tím");
 });
