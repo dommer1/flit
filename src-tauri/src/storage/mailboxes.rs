@@ -91,6 +91,16 @@ pub async fn sent_name(pool: &SqlitePool, account_id: i64) -> Result<Option<Stri
     Ok(name)
 }
 
+/// Full IMAP name of the account's Trash folder, if discovery found one.
+pub async fn trash_name(pool: &SqlitePool, account_id: i64) -> Result<Option<String>, AppError> {
+    let name =
+        sqlx::query_scalar("SELECT name FROM mailboxes WHERE account_id = ? AND role = 'trash'")
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +263,28 @@ mod tests {
             .unwrap();
 
         assert_eq!(sent_name(&pool, id).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn trash_name_returns_the_trash_role_folder_or_none() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(&pool, id, &[found("INBOX", Some("inbox"))])
+            .await
+            .unwrap();
+        assert_eq!(trash_name(&pool, id).await.unwrap(), None);
+
+        replace(
+            &pool,
+            id,
+            &[found("INBOX", Some("inbox")), found("Kôš", Some("trash"))],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            trash_name(&pool, id).await.unwrap(),
+            Some("Kôš".to_string())
+        );
     }
 
     #[tokio::test]

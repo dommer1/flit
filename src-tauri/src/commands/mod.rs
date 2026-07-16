@@ -127,6 +127,49 @@ pub async fn set_message_read(
     Ok(())
 }
 
+/// Move one message to the account's Trash folder, then drop it from the
+/// local cache. Unlike the read flag this waits on the server — the row must
+/// not vanish from the list if the move failed.
+#[tauri::command]
+pub async fn move_to_trash(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<(), AppError> {
+    let loc = storage::messages::location(&state.pool, message_id).await?;
+    let Some(trash) = storage::mailboxes::trash_name(&state.pool, loc.account_id).await? else {
+        return Err(AppError::Imap("no trash folder discovered yet".to_string()));
+    };
+    // why: moving a message that already lives in Trash to Trash is a no-op
+    // (and some servers error on it) — just leave it be.
+    if loc.mailbox == trash {
+        return Ok(());
+    }
+
+    let account = storage::accounts::get(&state.pool, loc.account_id).await?;
+    let password = state.password(loc.account_id).await?;
+    let mut session = mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        &password,
+    )
+    .await?;
+    session
+        .select(&loc.mailbox)
+        .await
+        .map_err(|e| AppError::Imap(format!("select {}: {e}", loc.mailbox)))?;
+    let moved = mail::imap::move_message(&mut session, loc.uid, &trash).await;
+    let _ = session.logout().await;
+    moved?;
+
+    // why: only after the server confirms — the message left the source folder,
+    // so the cached row (and its images, via cascade) go too.
+    storage::messages::delete_by_id(&state.pool, message_id).await?;
+    app.emit("messages-changed", loc.account_id)?;
+    Ok(())
+}
+
 /// Connect, select the folder, flip the `\Seen` flag, log out.
 async fn push_seen_flag(
     account: &Account,

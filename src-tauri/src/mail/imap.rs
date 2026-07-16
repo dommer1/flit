@@ -196,6 +196,39 @@ pub async fn set_seen(session: &mut ImapSession, uid: i64, seen: bool) -> Result
     Ok(())
 }
 
+/// Move one message by UID to `dest` (e.g. the Trash folder). Prefers the
+/// atomic MOVE (RFC 6851); on servers without it, falls back to
+/// COPY + mark `\Deleted` + EXPUNGE, expunging only this UID where UIDPLUS
+/// allows so other clients' pending deletions are left untouched.
+pub async fn move_message(session: &mut ImapSession, uid: i64, dest: &str) -> Result<(), AppError> {
+    let uid = uid.to_string();
+    // why: read both capabilities up front — Capabilities is owned, so it
+    // holds no borrow on the session, unlike the expunge streams below.
+    let caps = session.capabilities().await.ok();
+    let supports = |name: &str| caps.as_ref().is_some_and(|c| c.has_str(name));
+
+    if supports("MOVE") {
+        return session.uid_mv(&uid, dest).await.map_err(imap_err);
+    }
+
+    session.uid_copy(&uid, dest).await.map_err(imap_err)?;
+    let updates = session
+        .uid_store(&uid, "+FLAGS.SILENT (\\Deleted)")
+        .await
+        .map_err(imap_err)?;
+    let _: Vec<Fetch> = updates.try_collect().await.map_err(imap_err)?;
+    // why: UID EXPUNGE removes only this message; without UIDPLUS the plain
+    // EXPUNGE clears the whole \Deleted set (the RFC's documented fallback).
+    if supports("UIDPLUS") {
+        let stream = session.uid_expunge(&uid).await.map_err(imap_err)?;
+        let _: Vec<_> = stream.try_collect().await.map_err(imap_err)?;
+    } else {
+        let stream = session.expunge().await.map_err(imap_err)?;
+        let _: Vec<_> = stream.try_collect().await.map_err(imap_err)?;
+    }
+    Ok(())
+}
+
 /// Upload one raw RFC-2822 message into a mailbox, already marked read —
 /// used to mirror SMTP-sent mail into the Sent folder.
 pub async fn append(

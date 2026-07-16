@@ -81,6 +81,7 @@ pub fn run() {
             commands::search_messages,
             commands::sync_account,
             commands::set_message_read,
+            commands::move_to_trash,
             commands::get_message_body,
             commands::queue_send,
             commands::undo_send,
