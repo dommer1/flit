@@ -225,6 +225,62 @@ impl Default for NotificationSettings {
     }
 }
 
+/// What one direction of the message-list swipe gesture does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SwipeAction {
+    /// That direction is disabled — no strip, no action.
+    None,
+    ToggleRead,
+    Archive,
+    Trash,
+    Reply,
+}
+
+impl SwipeAction {
+    /// The wire/storage form — matches the serde `camelCase` names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SwipeAction::None => "none",
+            SwipeAction::ToggleRead => "toggleRead",
+            SwipeAction::Archive => "archive",
+            SwipeAction::Trash => "trash",
+            SwipeAction::Reply => "reply",
+        }
+    }
+
+    /// why Option, not a default: the fallback for a corrupt value differs
+    /// per side (left → Archive, right → ToggleRead), so the caller picks.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(SwipeAction::None),
+            "toggleRead" => Some(SwipeAction::ToggleRead),
+            "archive" => Some(SwipeAction::Archive),
+            "trash" => Some(SwipeAction::Trash),
+            "reply" => Some(SwipeAction::Reply),
+            _ => None,
+        }
+    }
+}
+
+/// The configured action for each swipe direction on message-list rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwipeActions {
+    pub left: SwipeAction,
+    pub right: SwipeAction,
+}
+
+impl Default for SwipeActions {
+    /// The gesture as originally shipped: left archives, right toggles read.
+    fn default() -> Self {
+        SwipeActions {
+            left: SwipeAction::Archive,
+            right: SwipeAction::ToggleRead,
+        }
+    }
+}
+
 /// One autocomplete suggestion for a compose recipient field — an address
 /// harvested from cached or sent mail (see storage::contacts).
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]

@@ -1,12 +1,14 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::models::{NotificationSettings, RemoteImagePolicy};
+use crate::models::{NotificationSettings, RemoteImagePolicy, SwipeAction, SwipeActions};
 
 const REMOTE_IMAGES_KEY: &str = "remote_images";
 const NOTIFICATIONS_ENABLED_KEY: &str = "notifications_enabled";
 const NOTIFICATION_SOUND_KEY: &str = "notification_sound";
 const SYNC_INTERVAL_KEY: &str = "sync_interval_minutes";
+const SWIPE_LEFT_KEY: &str = "swipe_left";
+const SWIPE_RIGHT_KEY: &str = "swipe_right";
 
 async fn value(pool: &SqlitePool, key: &str) -> Result<Option<String>, AppError> {
     Ok(
@@ -99,6 +101,33 @@ pub async fn set_remote_image_policy(
     Ok(())
 }
 
+/// The configured swipe actions; a missing or corrupt side falls back to
+/// that side's shipped default (left = Archive, right = ToggleRead).
+pub async fn swipe_actions(pool: &SqlitePool) -> Result<SwipeActions, AppError> {
+    let defaults = SwipeActions::default();
+    Ok(SwipeActions {
+        left: swipe_side(pool, SWIPE_LEFT_KEY)
+            .await?
+            .unwrap_or(defaults.left),
+        right: swipe_side(pool, SWIPE_RIGHT_KEY)
+            .await?
+            .unwrap_or(defaults.right),
+    })
+}
+
+async fn swipe_side(pool: &SqlitePool, key: &str) -> Result<Option<SwipeAction>, AppError> {
+    Ok(value(pool, key)
+        .await?
+        .as_deref()
+        .and_then(SwipeAction::parse))
+}
+
+pub async fn set_swipe_actions(pool: &SqlitePool, actions: SwipeActions) -> Result<(), AppError> {
+    upsert(pool, SWIPE_LEFT_KEY, actions.left.as_str()).await?;
+    upsert(pool, SWIPE_RIGHT_KEY, actions.right.as_str()).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +163,62 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows, 1);
+    }
+
+    #[tokio::test]
+    async fn swipe_actions_default_and_roundtrip() {
+        let pool = test_pool().await;
+
+        // Nothing stored yet — the shipped defaults (today's hardcoded gesture).
+        assert_eq!(
+            swipe_actions(&pool).await.unwrap(),
+            SwipeActions {
+                left: SwipeAction::Archive,
+                right: SwipeAction::ToggleRead,
+            }
+        );
+
+        let chosen = SwipeActions {
+            left: SwipeAction::Trash,
+            right: SwipeAction::Reply,
+        };
+        set_swipe_actions(&pool, chosen).await.unwrap();
+        assert_eq!(swipe_actions(&pool).await.unwrap(), chosen);
+
+        // Saving again overwrites the two keys instead of duplicating them.
+        let again = SwipeActions {
+            left: SwipeAction::None,
+            right: SwipeAction::Archive,
+        };
+        set_swipe_actions(&pool, again).await.unwrap();
+        assert_eq!(swipe_actions(&pool).await.unwrap(), again);
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM settings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 2);
+    }
+
+    #[tokio::test]
+    async fn unknown_swipe_value_falls_back_per_side() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('swipe_left', 'yolo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('swipe_right', 'reply')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // The corrupt side falls back to its own default; the valid side sticks.
+        assert_eq!(
+            swipe_actions(&pool).await.unwrap(),
+            SwipeActions {
+                left: SwipeAction::Archive,
+                right: SwipeAction::Reply,
+            }
+        );
     }
 
     #[tokio::test]
