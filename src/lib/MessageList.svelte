@@ -187,6 +187,12 @@
     background: transparent;
   }
 
+  /* Hover on any row that isn't the selected one — the selected row keeps
+     its accent fill. */
+  button:not(.selected):hover {
+    background: var(--bg-hover);
+  }
+
   button.selected {
     background: var(--accent);
     color: var(--accent-text);
