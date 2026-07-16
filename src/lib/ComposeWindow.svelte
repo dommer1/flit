@@ -27,6 +27,7 @@
     toEpochSeconds,
     type SendLaterPreset,
   } from "./sendLater";
+  import RecipientField from "./RecipientField.svelte";
   import RichTextEditor from "./RichTextEditor.svelte";
 
   let accounts = $state<Account[]>([]);
@@ -410,8 +411,8 @@
        divided by hairlines, subject as a bold standalone line. -->
   <div class="row">
     <span class="key" aria-hidden="true">To:</span>
-    <input
-      aria-label="To"
+    <RecipientField
+      label="To"
       bind:value={to}
       required
       disabled={queueing}
@@ -431,11 +432,11 @@
   {#if showCcBcc}
     <div class="row">
       <span class="key" aria-hidden="true">Cc:</span>
-      <input aria-label="Cc" bind:value={cc} disabled={queueing} />
+      <RecipientField label="Cc" bind:value={cc} disabled={queueing} />
     </div>
     <div class="row">
       <span class="key" aria-hidden="true">Bcc:</span>
-      <input aria-label="Bcc" bind:value={bcc} disabled={queueing} />
+      <RecipientField label="Bcc" bind:value={bcc} disabled={queueing} />
     </div>
   {/if}
   <div class="row">

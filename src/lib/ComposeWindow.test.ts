@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import type { Account, OutgoingMessage, Signature } from "./types";
+import type { Account, Contact, OutgoingMessage, Signature } from "./types";
 
 const accounts: Account[] = [
   {
@@ -57,6 +57,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 vi.mock("./api", () => ({
   listAccounts: vi.fn(async () => accounts),
   listSignatures: vi.fn(async (): Promise<Signature[]> => []),
+  listContacts: vi.fn(async (): Promise<Contact[]> => []),
   takeComposeDraft: vi.fn(async (): Promise<OutgoingMessage | null> => null),
   queueSend: vi.fn(async (): Promise<void> => undefined),
   scheduleSend: vi.fn(async (): Promise<void> => undefined),
@@ -583,4 +584,68 @@ it("follows the From account's default until touched by hand", async () => {
   });
   expect(box).toHaveTextContent("— Dominik");
   expect(box).not.toHaveTextContent("Vocalio tím");
+});
+
+it("suggests known contacts in To and fills the field on pick", async () => {
+  vi.mocked(api.listContacts).mockResolvedValue([
+    { name: "Ann Boe", email: "ann@example.com" },
+    { name: "", email: "anton@example.sk" },
+  ]);
+  render(ComposeWindow);
+  const to = (await screen.findByLabelText("To")) as HTMLInputElement;
+
+  to.value = "an";
+  to.setSelectionRange(2, 2);
+  await fireEvent.input(to);
+
+  const option = await screen.findByRole("option", { name: /ann@example\.com/ });
+  expect(api.listContacts).toHaveBeenCalledWith("an");
+  await fireEvent.mouseDown(option);
+
+  expect(to.value).toBe("ann@example.com");
+  // Picking closes the dropdown.
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("option", { name: /ann@example\.com/ }),
+    ).not.toBeInTheDocument(),
+  );
+});
+
+it("navigates suggestions with arrows and picks with Enter", async () => {
+  vi.mocked(api.listContacts).mockResolvedValue([
+    { name: "Ann Boe", email: "ann@example.com" },
+    { name: "", email: "anton@example.sk" },
+  ]);
+  render(ComposeWindow);
+  const to = (await screen.findByLabelText("To")) as HTMLInputElement;
+
+  to.value = "existing@x.sk, an";
+  to.setSelectionRange(17, 17);
+  await fireEvent.input(to);
+  await screen.findByRole("option", { name: /ann@example\.com/ });
+
+  await fireEvent.keyDown(to, { key: "ArrowDown" });
+  await fireEvent.keyDown(to, { key: "Enter" });
+
+  // Only the fragment being typed is replaced; Enter must not submit.
+  expect(to.value).toBe("existing@x.sk, anton@example.sk");
+  expect(api.queueSend).not.toHaveBeenCalled();
+});
+
+it("closes the suggestions with Escape", async () => {
+  vi.mocked(api.listContacts).mockResolvedValue([
+    { name: "Ann Boe", email: "ann@example.com" },
+  ]);
+  render(ComposeWindow);
+  const to = (await screen.findByLabelText("To")) as HTMLInputElement;
+
+  to.value = "an";
+  to.setSelectionRange(2, 2);
+  await fireEvent.input(to);
+  await screen.findByRole("option", { name: /ann@example\.com/ });
+
+  await fireEvent.keyDown(to, { key: "Escape" });
+  expect(
+    screen.queryByRole("option", { name: /ann@example\.com/ }),
+  ).not.toBeInTheDocument();
 });
