@@ -97,6 +97,7 @@ mod tests {
             bcc: String::new(),
             subject: subject.to_string(),
             body: "hi".to_string(),
+            body_html: None,
             attachments: Vec::new(),
         }
     }

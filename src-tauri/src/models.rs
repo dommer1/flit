@@ -58,8 +58,12 @@ pub struct OutgoingMessage {
     #[serde(default)]
     pub bcc: String,
     pub subject: String,
-    /// Plain text only for now — no HTML composing.
+    /// Plain-text body; always present, doubles as the fallback part when
+    /// an HTML body rides along.
     pub body: String,
+    /// HTML version of the body; None (or blank) = plain-text-only message.
+    #[serde(default)]
+    pub body_html: Option<String>,
     /// Files attached by the user. Only paths travel through the app; the
     /// bytes are read from disk when the MIME message is built.
     #[serde(default)]

@@ -133,6 +133,7 @@ mod tests {
             bcc: String::new(),
             subject: "Pozvánka na obed".to_string(),
             body: "Ahoj, prídeš?".to_string(),
+            body_html: None,
             attachments: Vec::new(),
         }
     }

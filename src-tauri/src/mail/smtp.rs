@@ -82,7 +82,8 @@ fn parse_recipients(list: &str, field: &str) -> Result<Vec<Mailbox>, AppError> {
 }
 
 /// Build the MIME message for an outgoing mail. `to`/`cc`/`bcc` accept
-/// comma-separated recipient lists; the body is plain text for now.
+/// comma-separated recipient lists. A draft with an HTML body goes out as
+/// multipart/alternative (plain text + HTML); otherwise plain text only.
 // why async: attachment bytes will be read from disk here — file I/O must
 // not block the runtime, so the signature is async ahead of that change.
 pub async fn build_message(
@@ -115,15 +116,36 @@ pub async fn build_message(
         builder = builder.bcc(recipient);
     }
 
+    // why filter on trim: an editor that was opened but left empty may emit
+    // a stray blank string upstream — that must not force a pointless
+    // multipart body.
+    let html = outgoing
+        .body_html
+        .as_deref()
+        .filter(|h| !h.trim().is_empty());
+
     if outgoing.attachments.is_empty() {
-        return builder
-            .header(ContentType::TEXT_PLAIN)
-            .body(outgoing.body.clone())
-            .map_err(|e| AppError::Smtp(e.to_string()));
+        return match html {
+            Some(html) => builder.multipart(MultiPart::alternative_plain_html(
+                outgoing.body.clone(),
+                html.to_string(),
+            )),
+            None => builder
+                .header(ContentType::TEXT_PLAIN)
+                .body(outgoing.body.clone()),
+        }
+        .map_err(|e| AppError::Smtp(e.to_string()));
     }
 
-    // multipart/mixed: the typed text first, then one part per file.
-    let mut parts = MultiPart::mixed().singlepart(SinglePart::plain(outgoing.body.clone()));
+    // multipart/mixed: the typed text first, then one part per file. An HTML
+    // draft nests its plain+HTML pair as multipart/alternative inside.
+    let mut parts = match html {
+        Some(html) => MultiPart::mixed().multipart(MultiPart::alternative_plain_html(
+            outgoing.body.clone(),
+            html.to_string(),
+        )),
+        None => MultiPart::mixed().singlepart(SinglePart::plain(outgoing.body.clone())),
+    };
     let mut total = 0usize;
     for attachment in &outgoing.attachments {
         parts = parts.singlepart(load_attachment(attachment, &mut total).await?);
@@ -226,6 +248,7 @@ mod tests {
             bcc: String::new(),
             subject: "Hello".to_string(),
             body: "Hi there".to_string(),
+            body_html: None,
             attachments: Vec::new(),
         }
     }
@@ -238,6 +261,50 @@ mod tests {
             path: path.to_string_lossy().into_owned(),
             name: name.to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn html_body_becomes_multipart_alternative() {
+        let mut out = outgoing("alice@example.com");
+        out.body_html = Some("<p>Hi <b>there</b></p>".to_string());
+
+        let message = build_message("domco@example.com", &out).await.unwrap();
+
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(raw.contains("multipart/alternative"));
+        assert!(raw.contains("text/plain"));
+        assert!(raw.contains("text/html"));
+        // Both renderings travel in the same message.
+        assert!(raw.contains("Hi there"));
+        assert!(raw.contains("<p>Hi <b>there</b></p>"));
+    }
+
+    #[tokio::test]
+    async fn html_with_attachments_nests_alternative_inside_mixed() {
+        let mut out = outgoing("alice@example.com");
+        out.body_html = Some("<p>Hi <b>there</b></p>".to_string());
+        out.attachments = vec![temp_attachment("note.txt", b"hello")];
+
+        let message = build_message("domco@example.com", &out).await.unwrap();
+
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(raw.contains("multipart/mixed"));
+        assert!(raw.contains("multipart/alternative"));
+        assert!(raw.contains("<p>Hi <b>there</b></p>"));
+        assert!(raw.contains("Hi there"));
+        assert!(raw.contains("Content-Disposition: attachment; filename=\"note.txt\""));
+    }
+
+    #[tokio::test]
+    async fn blank_html_body_stays_plain_text() {
+        let mut out = outgoing("alice@example.com");
+        out.body_html = Some("   ".to_string());
+
+        let message = build_message("domco@example.com", &out).await.unwrap();
+
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(!raw.contains("multipart/alternative"));
+        assert!(raw.contains("Hi there"));
     }
 
     #[tokio::test]
