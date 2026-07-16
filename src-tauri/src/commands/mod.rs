@@ -166,6 +166,23 @@ pub async fn archive_message(
     move_to_special_folder(&app, &state, message_id, &["archive", "all"], "archive").await
 }
 
+/// Move one message to a user-chosen folder of its account, then drop it
+/// from the local cache. The destination must be a folder discovery has
+/// mirrored — an unknown name fails before any IMAP command runs.
+#[tauri::command]
+pub async fn move_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+    mailbox: String,
+) -> Result<(), AppError> {
+    let loc = storage::messages::location(&state.pool, message_id).await?;
+    if !storage::mailboxes::exists(&state.pool, loc.account_id, &mailbox).await? {
+        return Err(AppError::Imap(format!("no folder named {mailbox}")));
+    }
+    move_to_mailbox(&app, &state, message_id, loc, &mailbox).await
+}
+
 /// Move a message to the account's folder for the first matching special-use
 /// `role`, then drop it from the local cache. Unlike the read flag this waits
 /// on the server — the row must not vanish from the list if the move failed.
