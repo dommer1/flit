@@ -189,6 +189,19 @@ async fn move_to_special_folder(
     let Some(dest) = dest else {
         return Err(AppError::Imap(format!("no {label} folder discovered yet")));
     };
+    move_to_mailbox(app, state, message_id, loc, &dest).await
+}
+
+/// The one server-confirmed move path: select the source folder, UID MOVE
+/// into `dest`, and only then drop the cached row — it must not vanish from
+/// the list if the move failed.
+async fn move_to_mailbox(
+    app: &AppHandle,
+    state: &AppState,
+    message_id: i64,
+    loc: storage::messages::MessageLocation,
+    dest: &str,
+) -> Result<(), AppError> {
     // why: moving a message into the folder it already lives in is a no-op
     // (and some servers error on it) — just leave it be.
     if loc.mailbox == dest {
@@ -208,7 +221,7 @@ async fn move_to_special_folder(
         .select(&loc.mailbox)
         .await
         .map_err(|e| AppError::Imap(format!("select {}: {e}", loc.mailbox)))?;
-    let moved = mail::imap::move_message(&mut session, loc.uid, &dest).await;
+    let moved = mail::imap::move_message(&mut session, loc.uid, dest).await;
     let _ = session.logout().await;
     moved?;
 
