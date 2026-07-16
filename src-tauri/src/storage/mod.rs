@@ -4,6 +4,7 @@ pub mod messages;
 pub mod scheduled;
 pub mod search;
 pub mod settings;
+pub mod signatures;
 
 use std::path::Path;
 use std::time::Duration;

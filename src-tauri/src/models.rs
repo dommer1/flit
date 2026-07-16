@@ -21,6 +21,18 @@ pub struct Account {
     pub checked_at: Option<i64>,
     /// User-chosen accent color (e.g. "#ff9f0a"); `None` = no color set.
     pub color: Option<String>,
+    /// Default signature for mail composed from this account; `None` = none.
+    pub signature_id: Option<i64>,
+}
+
+/// One reusable e-mail signature. `body` is editor HTML — the compose editor
+/// inserts it verbatim into the message body.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct Signature {
+    pub id: i64,
+    pub name: String,
+    pub body: String,
 }
 
 /// Payload for creating an account. Deliberately has no password field —
