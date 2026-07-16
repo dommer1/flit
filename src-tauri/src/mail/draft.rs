@@ -287,6 +287,59 @@ mod tests {
         assert!(err.to_string().contains("gone.txt"));
     }
 
+    #[tokio::test]
+    async fn a_saved_draft_parses_back_into_the_same_compose_fields() {
+        let path = std::env::temp_dir().join("flit-draft-roundtrip.txt");
+        std::fs::write(&path, b"data").unwrap();
+        let mut out = outgoing();
+        out.to = "Ján Novák <jan@example.sk>, maria".to_string();
+        out.bcc = "hidden@example.com".to_string();
+        out.attachments = vec![AttachmentRef {
+            path: path.to_string_lossy().into_owned(),
+            name: "roundtrip.txt".to_string(),
+        }];
+
+        let raw = build_draft("domco@example.com", &out, "rt-id@flit.local")
+            .await
+            .unwrap();
+        let parsed = crate::mail::parse::parse_draft(&raw);
+
+        assert_eq!(parsed.to, "Ján Novák <jan@example.sk>, maria");
+        assert_eq!(parsed.bcc, "hidden@example.com");
+        assert_eq!(parsed.subject, "Pozvánka na obed");
+        assert_eq!(parsed.body.trim_end(), "Ahoj, prídeš?");
+        assert_eq!(parsed.message_id.as_deref(), Some("rt-id@flit.local"));
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(parsed.attachments[0].name, "roundtrip.txt");
+        assert_eq!(parsed.attachments[0].data, b"data");
+    }
+
+    #[tokio::test]
+    async fn parse_draft_neutralizes_a_traversal_attachment_name() {
+        // A foreign draft could carry "../../evil" as a filename; the parsed
+        // name is later joined onto a temp dir and must not escape it.
+        let raw = concat!(
+            "Message-ID: <x@y>\r\n",
+            "Subject: t\r\n",
+            "MIME-Version: 1.0\r\n",
+            "Content-Type: multipart/mixed; boundary=\"b\"\r\n",
+            "\r\n",
+            "--b\r\n",
+            "Content-Type: text/plain\r\n\r\nhi\r\n",
+            "--b\r\n",
+            "Content-Type: application/octet-stream\r\n",
+            "Content-Disposition: attachment; filename=\"../../evil\"\r\n",
+            "\r\npayload\r\n",
+            "--b--\r\n",
+        );
+
+        let parsed = crate::mail::parse::parse_draft(raw.as_bytes());
+
+        assert_eq!(parsed.attachments.len(), 1);
+        assert!(!parsed.attachments[0].name.contains('/'));
+        assert!(!parsed.attachments[0].name.contains('\\'));
+    }
+
     #[test]
     fn message_ids_are_unique_and_addressable() {
         let a = generate_message_id();

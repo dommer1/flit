@@ -151,6 +151,57 @@ pub fn safe_filename(name: &str) -> String {
     }
 }
 
+/// One attachment of a reopened draft: filename plus decoded bytes, ready
+/// to be re-staged as a local temp file for the compose window.
+#[derive(Debug, PartialEq)]
+pub struct DraftAttachment {
+    pub name: String,
+    pub data: Vec<u8>,
+}
+
+/// The compose-shaped fields of a draft message being reopened for editing.
+#[derive(Debug, Default, PartialEq)]
+pub struct ParsedDraft {
+    pub to: String,
+    pub cc: String,
+    pub bcc: String,
+    pub subject: String,
+    pub body: String,
+    /// Message-ID without angle brackets — the handle under which the next
+    /// save replaces this server version.
+    pub message_id: Option<String>,
+    pub attachments: Vec<DraftAttachment>,
+}
+
+/// Parse a raw draft back into compose fields — the inverse of
+/// `mail::draft::build_draft`. Bcc and half-typed recipients come back
+/// verbatim; an HTML-only body degrades to mail-parser's text rendering
+/// (the compose editor takes plain text).
+pub fn parse_draft(raw: &[u8]) -> ParsedDraft {
+    let Some(message) = MessageParser::default().parse(raw) else {
+        return ParsedDraft::default();
+    };
+    ParsedDraft {
+        to: format_addr_list(message.to()),
+        cc: format_addr_list(message.cc()),
+        bcc: format_addr_list(message.bcc()),
+        subject: message.subject().unwrap_or_default().to_string(),
+        body: message
+            .body_text(0)
+            .map(|t| t.into_owned())
+            .unwrap_or_default(),
+        message_id: message.message_id().map(str::to_string),
+        attachments: message
+            .attachments()
+            .filter(|part| !is_inline_image(part))
+            .map(|part| DraftAttachment {
+                name: safe_filename(part.attachment_name().unwrap_or("attachment")),
+                data: part.contents().to_vec(),
+            })
+            .collect(),
+    }
+}
+
 /// Every attachment that an `<img src="cid:...">` could reference: an image
 /// part carrying a Content-ID. Anything else (no id, not an image) can't
 /// render inline and is left for a future attachment list.

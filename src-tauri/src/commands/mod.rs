@@ -921,6 +921,81 @@ async fn sanitized_body(
     })
 }
 
+/// Reopen a message from a Drafts folder for editing: fetch the raw draft,
+/// parse it back into compose fields, and open a compose window that keeps
+/// replacing this server version (via its Message-ID) on every save.
+#[tauri::command]
+pub async fn open_draft(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<(), AppError> {
+    let loc = storage::messages::location(&state.pool, message_id).await?;
+    let account = storage::accounts::get(&state.pool, loc.account_id).await?;
+    let password = state.password(loc.account_id).await?;
+
+    let mut session = mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        &password,
+    )
+    .await?;
+    let fetched = async {
+        session
+            .select(&loc.mailbox)
+            .await
+            .map_err(|e| AppError::Imap(format!("select {}: {e}", loc.mailbox)))?;
+        mail::imap::fetch_body(&mut session, loc.uid).await
+    }
+    .await;
+    let _ = session.logout().await;
+    let raw =
+        fetched?.ok_or_else(|| AppError::Imap("draft no longer on the server".to_string()))?;
+
+    let parsed = mail::parse::parse_draft(&raw);
+    let attachments = stash_draft_attachments(message_id, parsed.attachments).await?;
+    open_compose_window(
+        &app,
+        OutgoingMessage {
+            account_id: loc.account_id,
+            to: parsed.to,
+            cc: parsed.cc,
+            bcc: parsed.bcc,
+            subject: parsed.subject,
+            body: parsed.body,
+            // The compose editor takes plain text; a draft's HTML part is
+            // regenerated from it on the next save.
+            body_html: None,
+            attachments,
+            draft_message_id: parsed.message_id,
+        },
+    )
+    .await
+}
+
+/// Write a reopened draft's attachment bytes into per-message temp files,
+/// so the compose window can treat them exactly like freshly dropped files
+/// (only paths travel through the app). Names were sanitized by parse_draft,
+/// so the files always land inside the temp directory.
+async fn stash_draft_attachments(
+    message_id: i64,
+    parts: Vec<mail::parse::DraftAttachment>,
+) -> Result<Vec<crate::models::AttachmentRef>, AppError> {
+    let mut refs = Vec::with_capacity(parts.len());
+    for (index, part) in parts.into_iter().enumerate() {
+        let dir = std::env::temp_dir().join(format!("flit-draft-{message_id}-{index}"));
+        tokio::fs::create_dir_all(&dir).await?;
+        let path = dir.join(&part.name);
+        tokio::fs::write(&path, &part.data).await?;
+        refs.push(crate::models::AttachmentRef {
+            path: path.to_string_lossy().into_owned(),
+            name: part.name,
+        });
+    }
+    Ok(refs)
+}
+
 /// Open a native compose window seeded with `draft`. Every call opens its
 /// own window (unique label), so several drafts can be in flight at once.
 #[tauri::command]
