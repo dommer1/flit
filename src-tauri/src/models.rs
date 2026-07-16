@@ -139,6 +139,8 @@ pub struct MessageHeader {
     pub to: String,
     /// Cc recipients, same shape; empty when there were none.
     pub cc: String,
+    /// Reply-To recipients, same shape; empty when the header was absent.
+    pub reply_to: String,
     pub subject: String,
     pub snippet: String,
     // why: RFC3339 string for now — sorts chronologically as plain text and

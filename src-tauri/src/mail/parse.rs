@@ -9,6 +9,9 @@ pub struct ParsedHeader {
     /// Cc recipients, comma-separated — kept apart from `to` so a reply-all
     /// can rebuild the original To/Cc split.
     pub cc: String,
+    /// Reply-To recipients, comma-separated; empty when the header is absent.
+    /// Shown in the message detail so the user sees where a reply would go.
+    pub reply_to: String,
     pub subject: String,
     /// RFC3339, or empty when the Date header is missing/unparsable —
     /// empty sorts last in the date-desc list instead of inventing a date.
@@ -46,6 +49,7 @@ pub fn parse_header(raw: &[u8]) -> ParsedHeader {
         from: format_from(&message),
         to: format_addr_list(message.to()),
         cc: format_addr_list(message.cc()),
+        reply_to: format_addr_list(message.reply_to()),
         subject: message.subject().unwrap_or_default().to_string(),
         date: message.date().map(|d| d.to_rfc3339()).unwrap_or_default(),
     }
@@ -176,6 +180,17 @@ mod tests {
 
         assert_eq!(header.to, "Bob <bob@example.com>, carol@example.com");
         assert_eq!(header.cc, "Dana <dana@example.com>");
+        assert_eq!(header.reply_to, "");
+    }
+
+    #[test]
+    fn parses_reply_to_when_present() {
+        let raw = b"From: Newsletter <no-reply@example.com>\r\n\
+                    Reply-To: Support <support@example.com>\r\n\
+                    Subject: Hi\r\n\
+                    \r\n";
+
+        assert_eq!(parse_header(raw).reply_to, "Support <support@example.com>");
     }
 
     #[test]

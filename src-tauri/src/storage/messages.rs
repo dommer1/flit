@@ -12,6 +12,7 @@ pub struct FetchedHeader {
     pub from: String,
     pub to: String,
     pub cc: String,
+    pub reply_to: String,
     pub subject: String,
     pub date: String,
     pub snippet: String,
@@ -29,8 +30,8 @@ pub async fn upsert_headers(
     for header in headers {
         sqlx::query(
             "INSERT INTO messages
-               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, cc_addr, subject, date, snippet, read)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, cc_addr, reply_to_addr, subject, date, snippet, read)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (account_id, mailbox, uid) DO UPDATE SET read = excluded.read",
         )
         .bind(account_id)
@@ -40,6 +41,7 @@ pub async fn upsert_headers(
         .bind(&header.from)
         .bind(&header.to)
         .bind(&header.cc)
+        .bind(&header.reply_to)
         .bind(&header.subject)
         .bind(&header.date)
         .bind(&header.snippet)
@@ -90,7 +92,7 @@ pub async fn list(
         Some(id) => {
             sqlx::query_as(
                 r#"SELECT id, account_id, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
-                          subject, snippet, date, read
+                          reply_to_addr AS reply_to, subject, snippet, date, read
                    FROM messages WHERE account_id = ? AND mailbox = ? ORDER BY date DESC"#,
             )
             .bind(id)
@@ -101,7 +103,7 @@ pub async fn list(
         None => {
             sqlx::query_as(
                 r#"SELECT id, account_id, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
-                          subject, snippet, date, read
+                          reply_to_addr AS reply_to, subject, snippet, date, read
                    FROM messages WHERE mailbox = ? ORDER BY date DESC"#,
             )
             .bind(mailbox)
@@ -344,6 +346,7 @@ mod tests {
             from: "Alice <alice@example.com>".to_string(),
             to: "Bob <bob@example.com>".to_string(),
             cc: "Cara <cara@example.com>".to_string(),
+            reply_to: "Alice Reply <reply@example.com>".to_string(),
             subject: subject.to_string(),
             date: date.to_string(),
             snippet: format!("snippet of {subject}"),
@@ -364,13 +367,14 @@ mod tests {
         .await
         .unwrap();
 
-        let (to, cc): (String, String) =
-            sqlx::query_as("SELECT to_addr, cc_addr FROM messages WHERE uid = 1")
+        let (to, cc, reply_to): (String, String, String) =
+            sqlx::query_as("SELECT to_addr, cc_addr, reply_to_addr FROM messages WHERE uid = 1")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(to, "Bob <bob@example.com>");
         assert_eq!(cc, "Cara <cara@example.com>");
+        assert_eq!(reply_to, "Alice Reply <reply@example.com>");
     }
 
     #[tokio::test]

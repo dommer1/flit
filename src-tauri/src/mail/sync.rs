@@ -268,6 +268,7 @@ fn to_fetched(raw: &imap::RawHeader, uid_validity: i64) -> FetchedHeader {
         from: parsed.from,
         to: parsed.to,
         cc: parsed.cc,
+        reply_to: parsed.reply_to,
         subject: parsed.subject,
         date: parsed.date,
         // why: header fetches carry no body — the snippet is filled in when
@@ -335,6 +336,7 @@ mod tests {
             header: b"From: Alice <alice@example.com>\r\n\
                       To: Bob <bob@example.com>\r\n\
                       Cc: Cara <cara@example.com>\r\n\
+                      Reply-To: Alice Team <team@example.com>\r\n\
                       Subject: Hi\r\n\
                       Date: Tue, 07 Jul 2026 09:15:00 +0000\r\n\r\n"
                 .to_vec(),
@@ -347,6 +349,7 @@ mod tests {
         assert_eq!(fetched.from, "Alice <alice@example.com>");
         assert_eq!(fetched.to, "Bob <bob@example.com>");
         assert_eq!(fetched.cc, "Cara <cara@example.com>");
+        assert_eq!(fetched.reply_to, "Alice Team <team@example.com>");
         assert_eq!(fetched.subject, "Hi");
         assert!(fetched.read);
         assert_eq!(fetched.snippet, "");
