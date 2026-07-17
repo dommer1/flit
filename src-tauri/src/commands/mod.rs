@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::error::AppError;
 use crate::models::{
     Account, Alias, Mailbox, MessageBody, MessageHeader, NewAccount, NotificationSettings,
-    OutgoingMessage, RemoteImagePolicy, Signature, SwipeActions,
+    OutgoingMessage, RemoteImagePolicy, Signature, SwipeActions, ThreadOrder,
 };
 use crate::state::AppState;
 use crate::{auth, mail, storage};
@@ -1317,6 +1317,24 @@ pub async fn set_swipe_actions(
     storage::settings::set_swipe_actions(&state.pool, actions).await?;
     // why: the settings window mutates, the main window's message list
     // listens and re-reads the gesture config.
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_thread_order(state: State<'_, AppState>) -> Result<ThreadOrder, AppError> {
+    storage::settings::thread_order(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_thread_order(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    order: ThreadOrder,
+) -> Result<(), AppError> {
+    storage::settings::set_thread_order(&state.pool, order).await?;
+    // why: the settings window mutates, the main window's conversation view
+    // listens and re-reads the order.
     app.emit("settings-changed", ())?;
     Ok(())
 }

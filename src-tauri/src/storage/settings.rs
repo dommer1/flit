@@ -1,9 +1,12 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::models::{NotificationSettings, RemoteImagePolicy, SwipeAction, SwipeActions};
+use crate::models::{
+    NotificationSettings, RemoteImagePolicy, SwipeAction, SwipeActions, ThreadOrder,
+};
 
 const REMOTE_IMAGES_KEY: &str = "remote_images";
+const THREAD_ORDER_KEY: &str = "thread_order";
 const NOTIFICATIONS_ENABLED_KEY: &str = "notifications_enabled";
 const NOTIFICATION_SOUND_KEY: &str = "notification_sound";
 const SYNC_INTERVAL_KEY: &str = "sync_interval_minutes";
@@ -99,6 +102,20 @@ pub async fn set_remote_image_policy(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// The stored conversation-view order; missing or corrupt values fall back
+/// to the default (newest message at the bottom).
+pub async fn thread_order(pool: &SqlitePool) -> Result<ThreadOrder, AppError> {
+    Ok(value(pool, THREAD_ORDER_KEY)
+        .await?
+        .as_deref()
+        .map(ThreadOrder::parse)
+        .unwrap_or_default())
+}
+
+pub async fn set_thread_order(pool: &SqlitePool, order: ThreadOrder) -> Result<(), AppError> {
+    upsert(pool, THREAD_ORDER_KEY, order.as_str()).await
 }
 
 /// The configured swipe actions; a missing or corrupt side falls back to
@@ -233,6 +250,40 @@ mod tests {
             remote_image_policy(&pool).await.unwrap(),
             RemoteImagePolicy::Ask
         );
+    }
+
+    #[tokio::test]
+    async fn thread_order_defaults_to_newest_last_and_roundtrips() {
+        let pool = test_pool().await;
+
+        assert_eq!(thread_order(&pool).await.unwrap(), ThreadOrder::NewestLast);
+
+        set_thread_order(&pool, ThreadOrder::NewestFirst)
+            .await
+            .unwrap();
+        assert_eq!(thread_order(&pool).await.unwrap(), ThreadOrder::NewestFirst);
+
+        // Changing it again overwrites instead of duplicating the key.
+        set_thread_order(&pool, ThreadOrder::NewestLast)
+            .await
+            .unwrap();
+        assert_eq!(thread_order(&pool).await.unwrap(), ThreadOrder::NewestLast);
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM settings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    #[tokio::test]
+    async fn corrupt_thread_order_falls_back_to_newest_last() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('thread_order', 'yolo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(thread_order(&pool).await.unwrap(), ThreadOrder::NewestLast);
     }
 
     #[tokio::test]

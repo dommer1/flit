@@ -264,6 +264,36 @@ impl Default for NotificationSettings {
     }
 }
 
+/// Order of messages in the conversation view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadOrder {
+    /// Default: chronological — the newest message sits at the bottom.
+    #[default]
+    NewestLast,
+    /// Newest message on top.
+    NewestFirst,
+}
+
+impl ThreadOrder {
+    /// The wire/storage form — matches the serde `camelCase` names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThreadOrder::NewestLast => "newestLast",
+            ThreadOrder::NewestFirst => "newestFirst",
+        }
+    }
+
+    /// why: unknown strings fall back to the default — a corrupt row must
+    /// never break the conversation view.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "newestFirst" => ThreadOrder::NewestFirst,
+            _ => ThreadOrder::NewestLast,
+        }
+    }
+}
+
 /// What one direction of the message-list swipe gesture does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

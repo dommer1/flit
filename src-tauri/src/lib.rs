@@ -118,6 +118,8 @@ pub fn run() {
             commands::preview_notification_sound,
             commands::get_swipe_actions,
             commands::set_swipe_actions,
+            commands::get_thread_order,
+            commands::set_thread_order,
             commands::list_signatures,
             commands::create_signature,
             commands::update_signature,
