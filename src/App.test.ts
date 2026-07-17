@@ -170,6 +170,8 @@ vi.mock("./lib/api", () => ({
   // why: a canned single-hit result — App tests only assert the wiring
   // (what was called with what); real matching is covered by Rust tests.
   searchMessages: vi.fn(async () => [currentMessages[1]]),
+  // The view's conversation fetch: empty = fall back to the selected row.
+  listThread: vi.fn(async () => []),
   getMessageBody: vi.fn(async () => ({
     html: null,
     text: "body text",

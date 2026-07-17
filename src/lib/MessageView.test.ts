@@ -23,6 +23,10 @@ vi.mock("./api", () => ({
   })),
   saveAttachment: vi.fn(async () => {}),
   saveAllAttachments: vi.fn(async () => {}),
+  // Default: the conversation is just the selected message (the view falls
+  // back to it when the thread comes back empty).
+  listThread: vi.fn(async () => []),
+  setMessageRead: vi.fn(async () => {}),
 }));
 
 import * as api from "./api";
@@ -86,11 +90,13 @@ it("shows an error when the body fetch fails", async () => {
 
 it("shows the empty state and fetches nothing without a message", () => {
   vi.mocked(api.getMessageBody).mockClear();
+  vi.mocked(api.listThread).mockClear();
 
   render(MessageView, { props: { message: null } });
 
   expect(screen.getByText("Select a message")).toBeInTheDocument();
   expect(api.getMessageBody).not.toHaveBeenCalled();
+  expect(api.listThread).not.toHaveBeenCalled();
 });
 
 it("offers to load remote images and re-renders with them", async () => {
@@ -215,5 +221,75 @@ it("shows no attachment strip when a message has none", async () => {
   expect(
     screen.queryByRole("button", { name: "Save All" }),
   ).not.toBeInTheDocument();
+});
+
+// ── Conversation view ──────────────────────────────────────────────────
+
+const conversation: MessageHeader[] = [
+  { ...message, id: 1, snippet: "the original", read: true },
+  {
+    ...message,
+    id: 2,
+    from: "Me <me@example.com>",
+    mailbox: "Sent",
+    snippet: "my reply",
+    read: true,
+  },
+  {
+    ...message,
+    id: 3,
+    snippet: "their answer",
+    read: false,
+  },
+];
+
+it("renders older messages collapsed and opens the newest", async () => {
+  vi.mocked(api.getMessageBody).mockClear();
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
+    body({ text: "their answer in full" }),
+  );
+
+  render(MessageView, { props: { message: { ...message, id: 3 } } });
+
+  // The newest message is open with its body…
+  expect(await screen.findByText("their answer in full")).toBeInTheDocument();
+  // …the older two are collapsed rows showing their snippets.
+  expect(screen.getByText("the original")).toBeInTheDocument();
+  expect(screen.getByText("my reply")).toBeInTheDocument();
+  // Only the open card fetched a body.
+  expect(api.getMessageBody).toHaveBeenCalledTimes(1);
+  expect(api.getMessageBody).toHaveBeenCalledWith(3);
+});
+
+it("marks the opened unread message read", async () => {
+  vi.mocked(api.setMessageRead).mockClear();
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+
+  render(MessageView, { props: { message: { ...message, id: 3 } } });
+
+  await waitFor(() => {
+    expect(api.setMessageRead).toHaveBeenCalledWith(3, true);
+  });
+});
+
+it("expands a collapsed message on click and fetches its body", async () => {
+  vi.mocked(api.getMessageBody).mockClear();
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  vi.mocked(api.getMessageBody)
+    .mockResolvedValueOnce(body({ text: "their answer in full" }))
+    .mockResolvedValueOnce(body({ text: "the original in full" }));
+
+  render(MessageView, { props: { message: { ...message, id: 3 } } });
+  await screen.findByText("their answer in full");
+
+  await fireEvent.click(
+    screen.getByRole("button", { name: /the original/ }),
+  );
+
+  expect(await screen.findByText("the original in full")).toBeInTheDocument();
+  expect(api.getMessageBody).toHaveBeenLastCalledWith(1);
+  // The accordion collapsed the previously open message back to a row.
+  expect(screen.getByText("their answer")).toBeInTheDocument();
 });
 
