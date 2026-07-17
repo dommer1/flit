@@ -6,7 +6,7 @@ use std::time::Duration;
 use lettre::message::header::ContentType;
 use lettre::message::{Attachment, Mailbox, Mailboxes, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
-use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+use lettre::{Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 use crate::error::AppError;
 use crate::models::{AttachmentRef, OutgoingMessage};
@@ -87,12 +87,17 @@ fn parse_recipients(list: &str, field: &str) -> Result<Vec<Mailbox>, AppError> {
 // why async: attachment bytes will be read from disk here — file I/O must
 // not block the runtime, so the signature is async ahead of that change.
 pub async fn build_message(
+    from_name: &str,
     from_email: &str,
     outgoing: &OutgoingMessage,
 ) -> Result<Message, AppError> {
-    let from: Mailbox = from_email
+    let address: Address = from_email
         .parse()
         .map_err(|e| AppError::Smtp(format!("invalid from address: {e}")))?;
+    // why Mailbox::new, not parsing "Name <addr>": a display name containing
+    // commas or quotes must never corrupt the header — lettre encodes it.
+    let name = from_name.trim();
+    let from = Mailbox::new((!name.is_empty()).then(|| name.to_string()), address);
     let to = parse_recipients(&outgoing.to, "to")?;
     if to.is_empty() {
         return Err(AppError::Smtp("no recipient given".to_string()));
@@ -293,7 +298,7 @@ mod tests {
         let mut out = outgoing("alice@example.com");
         out.body_html = Some("<p>Hi <b>there</b></p>".to_string());
 
-        let message = build_message("domco@example.com", &out).await.unwrap();
+        let message = build_message("", "domco@example.com", &out).await.unwrap();
 
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(raw.contains("multipart/alternative"));
@@ -310,7 +315,7 @@ mod tests {
         out.body_html = Some("<p>Hi <b>there</b></p>".to_string());
         out.attachments = vec![temp_attachment("note.txt", b"hello")];
 
-        let message = build_message("domco@example.com", &out).await.unwrap();
+        let message = build_message("", "domco@example.com", &out).await.unwrap();
 
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(raw.contains("multipart/mixed"));
@@ -325,7 +330,7 @@ mod tests {
         let mut out = outgoing("alice@example.com");
         out.body_html = Some("   ".to_string());
 
-        let message = build_message("domco@example.com", &out).await.unwrap();
+        let message = build_message("", "domco@example.com", &out).await.unwrap();
 
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(!raw.contains("multipart/alternative"));
@@ -334,7 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn builds_a_plain_text_message() {
-        let message = build_message("domco@example.com", &outgoing("alice@example.com"))
+        let message = build_message("", "domco@example.com", &outgoing("alice@example.com"))
             .await
             .unwrap();
 
@@ -351,7 +356,7 @@ mod tests {
         out.in_reply_to = Some("parent@example.com".to_string());
         out.references = Some("root@example.com parent@example.com".to_string());
 
-        let message = build_message("domco@example.com", &out).await.unwrap();
+        let message = build_message("", "domco@example.com", &out).await.unwrap();
 
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(raw.contains("In-Reply-To: <parent@example.com>"));
@@ -360,7 +365,7 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_mail_has_no_threading_headers() {
-        let message = build_message("domco@example.com", &outgoing("alice@example.com"))
+        let message = build_message("", "domco@example.com", &outgoing("alice@example.com"))
             .await
             .unwrap();
 
@@ -370,8 +375,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn from_header_carries_the_display_name() {
+        let message = build_message(
+            "Dominik Mery",
+            "domco@example.com",
+            &outgoing("a@example.com"),
+        )
+        .await
+        .unwrap();
+
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(raw.contains("From: \"Dominik Mery\" <domco@example.com>"));
+    }
+
+    #[tokio::test]
+    async fn encodes_a_display_name_with_a_comma() {
+        let message = build_message(
+            "Mery, Dominik",
+            "domco@example.com",
+            &outgoing("a@example.com"),
+        )
+        .await
+        .unwrap();
+
+        // why: lettre RFC-2047-encodes names with specials — a raw comma
+        // must never reach the header, where it would read as a second
+        // (empty) sender.
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(!raw.contains("Mery, Dominik"));
+        assert!(raw.contains("From: =?utf-8?b?"));
+        assert!(raw.contains("<domco@example.com>"));
+    }
+
+    #[tokio::test]
     async fn accepts_a_comma_separated_recipient_list() {
         let message = build_message(
+            "",
             "domco@example.com",
             &outgoing("alice@example.com, Bob <bob@example.com>"),
         )
@@ -388,7 +427,7 @@ mod tests {
         let mut out = outgoing("alice@example.com");
         out.cc = "Carol <carol@example.com>, dan@example.com".to_string();
 
-        let message = build_message("domco@example.com", &out).await.unwrap();
+        let message = build_message("", "domco@example.com", &out).await.unwrap();
 
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(raw.contains("Cc:"));
@@ -401,7 +440,7 @@ mod tests {
         let mut out = outgoing("alice@example.com");
         out.bcc = "hidden@example.com".to_string();
 
-        let message = build_message("domco@example.com", &out).await.unwrap();
+        let message = build_message("", "domco@example.com", &out).await.unwrap();
 
         // The transmitted bytes (also the Sent copy) must not name the
         // hidden recipient anywhere.
@@ -420,7 +459,7 @@ mod tests {
 
     #[tokio::test]
     async fn plain_messages_stay_single_part() {
-        let message = build_message("domco@example.com", &outgoing("alice@example.com"))
+        let message = build_message("", "domco@example.com", &outgoing("alice@example.com"))
             .await
             .unwrap();
 
@@ -436,7 +475,7 @@ mod tests {
         let mut out = outgoing("alice@example.com");
         out.attachments = vec![temp_attachment("report.pdf", contents)];
 
-        let message = build_message("domco@example.com", &out).await.unwrap();
+        let message = build_message("", "domco@example.com", &out).await.unwrap();
 
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(raw.contains("multipart/mixed"));
@@ -455,7 +494,7 @@ mod tests {
         let mut out = outgoing("alice@example.com");
         out.attachments = vec![temp_attachment("data.flitblob", b"\x00\x01\x02")];
 
-        let message = build_message("domco@example.com", &out).await.unwrap();
+        let message = build_message("", "domco@example.com", &out).await.unwrap();
 
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(raw.contains("application/octet-stream"));
@@ -469,7 +508,9 @@ mod tests {
             name: "gone.txt".to_string(),
         }];
 
-        let err = build_message("domco@example.com", &out).await.unwrap_err();
+        let err = build_message("", "domco@example.com", &out)
+            .await
+            .unwrap_err();
 
         assert!(err.to_string().contains("gone.txt"));
     }
@@ -484,7 +525,7 @@ mod tests {
     async fn rejects_an_invalid_cc_or_bcc() {
         let mut out = outgoing("alice@example.com");
         out.cc = "not-an-address".to_string();
-        assert!(build_message("domco@example.com", &out)
+        assert!(build_message("", "domco@example.com", &out)
             .await
             .unwrap_err()
             .to_string()
@@ -492,7 +533,7 @@ mod tests {
 
         let mut out = outgoing("alice@example.com");
         out.bcc = "also bad".to_string();
-        assert!(build_message("domco@example.com", &out)
+        assert!(build_message("", "domco@example.com", &out)
             .await
             .unwrap_err()
             .to_string()
@@ -501,7 +542,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_an_invalid_recipient() {
-        let err = build_message("domco@example.com", &outgoing("not-an-address"))
+        let err = build_message("", "domco@example.com", &outgoing("not-an-address"))
             .await
             .unwrap_err();
 
@@ -510,7 +551,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_an_empty_recipient_list() {
-        let err = build_message("domco@example.com", &outgoing("   "))
+        let err = build_message("", "domco@example.com", &outgoing("   "))
             .await
             .unwrap_err();
 
