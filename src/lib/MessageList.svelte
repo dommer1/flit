@@ -236,6 +236,23 @@
                 {/if}
                 <span class="from">{senderName(message.from)}</span>
                 <span class="end">
+                  {#if message.hasAttachments}
+                    <svg
+                      class="clip"
+                      viewBox="0 0 20 20"
+                      width="12"
+                      height="12"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.7"
+                      aria-hidden="true"
+                    >
+                      <title>Has attachments</title>
+                      <path
+                        d="M15.5 9.5 9.9 15a3.5 3.5 0 0 1-5-5l6.4-6.3a2.3 2.3 0 0 1 3.3 3.3L8.3 13.2a1.2 1.2 0 0 1-1.7-1.7l5.2-5.1"
+                      />
+                    </svg>
+                  {/if}
                   {#if message.threadCount > 1}
                     <span
                       class="thread-count"
@@ -433,6 +450,15 @@
     height: 7px;
     flex-shrink: 0;
     border-radius: 50%;
+  }
+
+  .end .clip {
+    flex-shrink: 0;
+    color: var(--text-secondary);
+  }
+
+  .selected .end .clip {
+    color: var(--accent-text);
   }
 
   /* Conversation size badge, e.g. "3" — a quiet outline, per the design. */

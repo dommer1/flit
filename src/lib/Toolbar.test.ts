@@ -20,6 +20,7 @@ const message: MessageHeader = {
   snippet: "Hey",
   date: "2026-07-07T09:15:00Z",
   read: false,
+  hasAttachments: false,
 };
 
 const folders: Mailbox[] = [

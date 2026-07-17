@@ -52,6 +52,7 @@ const message: MessageHeader = {
   snippet: "Hey",
   date: "2026-07-07T09:15:00Z",
   read: false,
+  hasAttachments: false,
 };
 
 function renderView(props: Record<string, unknown> = {}) {
@@ -198,6 +199,7 @@ function conversationForName(): MessageHeader[] {
       from: "Old Sender <old@example.com>",
       snippet: "the original",
       read: true,
+    hasAttachments: false,
     },
     { ...message, id: 2, snippet: "the answer", read: true },
   ];
@@ -287,12 +289,14 @@ const conversation: MessageHeader[] = [
     mailbox: "Sent",
     snippet: "my reply",
     read: true,
+    hasAttachments: false,
   },
   {
     ...message,
     id: 3,
     snippet: "their answer",
     read: false,
+    hasAttachments: false,
   },
 ];
 

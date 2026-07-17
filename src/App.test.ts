@@ -70,6 +70,7 @@ const allMessages: MessageHeader[] = [
     snippet: "Are we still on for Saturday?",
     date: "2026-07-07T09:15:00Z",
     read: false,
+    hasAttachments: false,
   },
   {
     id: 2,
@@ -88,6 +89,7 @@ const allMessages: MessageHeader[] = [
     snippet: "Payment went out this morning.",
     date: "2026-07-08T07:45:00Z",
     read: true,
+    hasAttachments: false,
   },
 ];
 
@@ -110,6 +112,7 @@ const archivedMessages: MessageHeader[] = [
     snippet: "Filed away long ago.",
     date: "2026-06-01T00:00:00Z",
     read: true,
+    hasAttachments: false,
   },
 ];
 
@@ -544,6 +547,7 @@ it("refreshes the list on messages-changed and keeps the selection", async () =>
       snippet: "",
       date: "2026-07-09T00:00:00Z",
       read: false,
+    hasAttachments: false,
     },
   ];
   messagesChanged?.();
@@ -1032,6 +1036,7 @@ it("opens a drafts-folder message in compose instead of the viewer", async () =>
       snippet: "",
       date: "2026-07-10T00:00:00Z",
       read: true,
+    hasAttachments: false,
     },
   ];
   render(App);

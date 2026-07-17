@@ -224,6 +224,9 @@ export interface MessageHeader {
   snippet: string;
   date: string;
   read: boolean;
+  /** Whether the message (in threaded lists: any message of the
+   * conversation) carries attachments — drives the list's paperclip. */
+  hasAttachments: boolean;
   /** Message-ID without angle brackets; empty when the sender set none. */
   messageId: string;
   /** Space-joined ancestor Message-IDs — a reply appends messageId to this

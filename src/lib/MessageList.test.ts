@@ -21,6 +21,7 @@ function header(id: number, from: string, read: boolean): MessageHeader {
     snippet: "…",
     date: "2026-07-07T09:15:00Z",
     read,
+    hasAttachments: false,
   };
 }
 
@@ -235,6 +236,20 @@ it("labels the swipe backdrop Move to Inbox for archived rows", async () => {
   expect(screen.getByText("Move to Inbox")).toBeInTheDocument();
 
   vi.advanceTimersByTime(200); // snap back, nothing fired
+});
+
+it("shows a paperclip on rows whose conversation has attachments", () => {
+  renderList({
+    messages: [
+      { ...header(1, "Alice <alice@example.com>", true), hasAttachments: true },
+      header(2, "Bob <bob@example.com>", true),
+    ],
+  });
+
+  const withFile = screen.getByRole("option", { name: /Alice/ });
+  expect(withFile.querySelector(".clip")).not.toBeNull();
+  const without = screen.getByRole("option", { name: /Bob/ });
+  expect(without.querySelector(".clip")).toBeNull();
 });
 
 it("badges a conversation row with its message count", () => {
