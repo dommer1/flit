@@ -52,13 +52,18 @@
               adding = false;
             }}
           >
-            <span class="name">
-              {account.name}
-              {#if account.lastError}
-                <span class="warning" title="Connection problem">⚠︎</span>
-              {/if}
+            <span
+              class="dot"
+              aria-hidden="true"
+              style:background={account.color ?? undefined}
+            ></span>
+            <span class="text">
+              <span class="name">{account.name}</span>
+              <span class="email">{account.email}</span>
             </span>
-            <span class="email">{account.email}</span>
+            {#if account.lastError}
+              <span class="warning" title="Connection problem"></span>
+            {/if}
           </button>
         </li>
       {/each}
@@ -145,55 +150,90 @@
   aside {
     display: flex;
     flex-direction: column;
-    width: 14rem;
-    border-right: 1px solid #e5e5e5;
-    background: #fafafa;
+    width: 200px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--hairline);
   }
 
   ul {
     display: flex;
     flex-direction: column;
-    gap: 0.125rem;
+    gap: 2px;
     flex: 1;
     margin: 0;
-    padding: 0.5rem;
+    padding: 12px 8px;
     list-style: none;
     overflow-y: auto;
   }
 
   .account {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.125rem;
+    align-items: center;
+    gap: 8px;
     width: 100%;
-    padding: 0.5rem 0.625rem;
+    padding: 8px 9px;
     border: none;
-    border-radius: 0.375rem;
+    border-radius: 7px;
     background: none;
     font: inherit;
     text-align: left;
-    cursor: pointer;
+    cursor: default;
   }
 
   .account:hover {
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--bg-hover);
   }
 
+  /* The selected account fills with the accent, like the design. */
   .account.active {
-    background: rgba(0, 0, 0, 0.08);
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  /* The account's identity color (the swatch below); gray when unset. */
+  .dot {
+    flex-shrink: 0;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+  }
+
+  .text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .text > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .name {
+    font-size: 12.5px;
     font-weight: 600;
   }
 
   .email {
-    font-size: 0.75rem;
-    font-weight: 400;
-    color: #666;
+    font-size: 10.5px;
+    color: var(--text-secondary);
   }
 
+  .active .email {
+    color: inherit;
+    opacity: 0.7;
+  }
+
+  /* Connection trouble marker on the row — details live in the status. */
   .warning {
-    margin-left: 0.25rem;
-    color: #b26b00;
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #f5a623;
   }
 
   .status::before {
@@ -201,65 +241,71 @@
   }
 
   .status.ok::before {
-    color: #2e7d32;
+    color: #34c759;
   }
 
   .status.broken {
-    color: #8a1f1f;
+    color: #d9302c;
   }
 
   .status.unknown::before {
-    color: #999;
+    color: var(--text-tertiary);
   }
 
   .checked-at {
-    margin-left: 0.375rem;
-    font-size: 0.75rem;
-    color: #666;
+    margin-left: 6px;
+    font-size: 11.5px;
+    color: var(--text-secondary);
   }
 
   .actions {
     display: flex;
-    gap: 0.25rem;
-    padding: 0.375rem 0.5rem;
-    border-top: 1px solid #e5e5e5;
+    gap: 4px;
+    padding: 4px 10px 10px;
   }
 
   .actions button {
-    width: 1.5rem;
-    height: 1.5rem;
-    border: 1px solid #d4d4d4;
-    border-radius: 0.25rem;
-    background: #fff;
+    width: 26px;
+    height: 24px;
+    border: 1px solid var(--border-chrome);
+    border-radius: 6px;
+    background: var(--bg-window);
     font: inherit;
+    font-size: 14px;
     line-height: 1;
-    cursor: pointer;
+    color: var(--text-primary);
+    cursor: default;
+  }
+
+  .actions button:hover:not(:disabled) {
+    background: var(--bg-hover);
   }
 
   .actions button:disabled {
     opacity: 0.4;
-    cursor: default;
   }
 
   .detail {
     flex: 1;
-    padding: 1.25rem;
+    padding: 20px 24px;
     overflow-y: auto;
   }
 
+  /* Stacked field-label-over-value rows, like the design's form. */
   dl {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.5rem 1rem;
     margin: 0;
   }
 
   dt {
-    color: #666;
+    margin-bottom: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
   }
 
   dd {
-    margin: 0;
+    margin: 0 0 13px;
+    font-size: 13px;
   }
 
   .colors {
@@ -269,19 +315,27 @@
   }
 
   .swatch {
-    width: 1.15rem;
-    height: 1.15rem;
+    width: 20px;
+    height: 20px;
     padding: 0;
     border: 1px solid rgba(0, 0, 0, 0.15);
     border-radius: 50%;
-    cursor: pointer;
+    cursor: default;
   }
 
-  /* The selected swatch gets a ring: a window-colored gap, then the accent. */
+  /* The selected swatch gets a ring: a canvas-colored gap, then the accent. */
   .swatch.selected {
     box-shadow:
-      0 0 0 2px #fff,
-      0 0 0 3.5px #007aff;
+      0 0 0 2px #f5f5f7,
+      0 0 0 3.5px var(--accent);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .swatch.selected {
+      box-shadow:
+        0 0 0 2px #232326,
+        0 0 0 3.5px var(--accent);
+    }
   }
 
   .swatch.none {
