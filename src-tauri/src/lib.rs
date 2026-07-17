@@ -121,7 +121,12 @@ pub fn run() {
             commands::create_signature,
             commands::update_signature,
             commands::delete_signature,
-            commands::set_signature_accounts
+            commands::set_signature_accounts,
+            commands::list_aliases,
+            commands::add_alias,
+            commands::update_alias,
+            commands::delete_alias,
+            commands::set_default_alias
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

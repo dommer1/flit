@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::models::{
-    Account, Mailbox, MessageBody, MessageHeader, NewAccount, NotificationSettings,
+    Account, Alias, Mailbox, MessageBody, MessageHeader, NewAccount, NotificationSettings,
     OutgoingMessage, RemoteImagePolicy, Signature, SwipeActions,
 };
 use crate::state::AppState;
@@ -1312,6 +1312,64 @@ pub async fn set_signature_accounts(
 ) -> Result<(), AppError> {
     storage::signatures::set_default_for_accounts(&state.pool, id, &account_ids).await?;
     // why: defaults live on the account rows, so account listeners refetch.
+    app.emit("accounts-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_aliases(state: State<'_, AppState>) -> Result<Vec<Alias>, AppError> {
+    storage::aliases::list(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn add_alias(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    account_id: i64,
+    name: String,
+    email: String,
+) -> Result<Alias, AppError> {
+    let added = storage::aliases::add(&state.pool, account_id, &name, &email).await?;
+    // why: aliases are part of an account's send identity — the settings
+    // pane and the compose From picker listen on the same account event.
+    app.emit("accounts-changed", ())?;
+    Ok(added)
+}
+
+#[tauri::command]
+pub async fn update_alias(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    name: String,
+    email: String,
+) -> Result<(), AppError> {
+    storage::aliases::update(&state.pool, id, &name, &email).await?;
+    app.emit("accounts-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_alias(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), AppError> {
+    storage::aliases::delete(&state.pool, id).await?;
+    app.emit("accounts-changed", ())?;
+    Ok(())
+}
+
+/// Pick the identity new mail from this account starts with;
+/// `None` = the account's own address.
+#[tauri::command]
+pub async fn set_default_alias(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    account_id: i64,
+    alias_id: Option<i64>,
+) -> Result<(), AppError> {
+    storage::aliases::set_default(&state.pool, account_id, alias_id).await?;
     app.emit("accounts-changed", ())?;
     Ok(())
 }

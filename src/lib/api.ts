@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import type {
   Account,
+  Alias,
   AttachmentInfo,
   Contact,
   Mailbox,
@@ -438,6 +439,39 @@ export function setSignatureAccounts(
   accountIds: number[],
 ): Promise<void> {
   return invoke<void>("set_signature_accounts", { id, accountIds });
+}
+
+export function listAliases(): Promise<Alias[]> {
+  return invoke<Alias[]>("list_aliases");
+}
+
+export function addAlias(
+  accountId: number,
+  name: string,
+  email: string,
+): Promise<Alias> {
+  return invoke<Alias>("add_alias", { accountId, name, email });
+}
+
+export function updateAlias(
+  id: number,
+  name: string,
+  email: string,
+): Promise<void> {
+  return invoke<void>("update_alias", { id, name, email });
+}
+
+export function deleteAlias(id: number): Promise<void> {
+  return invoke<void>("delete_alias", { id });
+}
+
+/** Pick the identity new mail from this account starts with;
+ * null = the account's own address. */
+export function setDefaultAlias(
+  accountId: number,
+  aliasId: number | null,
+): Promise<void> {
+  return invoke<void>("set_default_alias", { accountId, aliasId });
 }
 
 /** Fires whenever any window mutates the signature list. */

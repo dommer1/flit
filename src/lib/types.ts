@@ -25,6 +25,16 @@ export interface Account {
   defaultAliasId: number | null;
 }
 
+/** One send-as alias: an extra address the account's mail server accepts
+ * as sender. Only stored aliases may appear as From. */
+export interface Alias {
+  id: number;
+  accountId: number;
+  /** Display name for the From header; empty = address only. */
+  name: string;
+  email: string;
+}
+
 /** One reusable e-mail signature; `body` is editor HTML. */
 export interface Signature {
   id: number;
