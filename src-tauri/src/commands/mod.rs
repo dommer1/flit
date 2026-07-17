@@ -196,7 +196,47 @@ pub async fn move_message(
     if !storage::mailboxes::exists(&state.pool, loc.account_id, &mailbox).await? {
         return Err(AppError::Imap(format!("no folder named {mailbox}")));
     }
-    move_to_mailbox(&app, &state, message_id, loc, &mailbox).await
+    let rows = vec![(message_id, loc.uid)];
+    move_rows_to_mailbox(&app, &state, loc.account_id, &loc.mailbox, &rows, &mailbox).await
+}
+
+/// Trash a whole conversation as shown in its folder — every thread member
+/// sharing the anchor's mailbox. Flat views (trash/junk/drafts) keep using
+/// the single-message commands; the frontend picks per row.
+#[tauri::command]
+pub async fn trash_thread(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<(), AppError> {
+    move_thread_to_special_folder(&app, &state, message_id, &["trash"], "trash").await
+}
+
+/// Archive a whole conversation as shown in its folder (Gmail: All Mail).
+#[tauri::command]
+pub async fn archive_thread(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<(), AppError> {
+    move_thread_to_special_folder(&app, &state, message_id, &["archive", "all"], "archive").await
+}
+
+/// Move a whole conversation (as shown in the anchor's folder) to a
+/// user-chosen folder of its account.
+#[tauri::command]
+pub async fn move_thread(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+    mailbox: String,
+) -> Result<(), AppError> {
+    let loc = storage::messages::location(&state.pool, message_id).await?;
+    if !storage::mailboxes::exists(&state.pool, loc.account_id, &mailbox).await? {
+        return Err(AppError::Imap(format!("no folder named {mailbox}")));
+    }
+    let rows = storage::messages::thread_rows_in_mailbox(&state.pool, message_id).await?;
+    move_rows_to_mailbox(&app, &state, loc.account_id, &loc.mailbox, &rows, &mailbox).await
 }
 
 /// Move a message to the account's folder for the first matching special-use
@@ -210,39 +250,64 @@ async fn move_to_special_folder(
     label: &str,
 ) -> Result<(), AppError> {
     let loc = storage::messages::location(&state.pool, message_id).await?;
-    let mut dest = None;
-    for role in roles {
-        if let Some(name) =
-            storage::mailboxes::name_for_role(&state.pool, loc.account_id, role).await?
-        {
-            dest = Some(name);
-            break;
-        }
-    }
-    let Some(dest) = dest else {
-        return Err(AppError::Imap(format!("no {label} folder discovered yet")));
-    };
-    move_to_mailbox(app, state, message_id, loc, &dest).await
+    let dest = special_folder_dest(state, loc.account_id, roles, label).await?;
+    let rows = vec![(message_id, loc.uid)];
+    move_rows_to_mailbox(app, state, loc.account_id, &loc.mailbox, &rows, &dest).await
 }
 
-/// The one server-confirmed move path: select the source folder, UID MOVE
-/// into `dest`, and only then drop the cached row — it must not vanish from
-/// the list if the move failed.
-async fn move_to_mailbox(
+/// Like `move_to_special_folder`, but for the anchor's whole conversation
+/// as shown in its folder — every thread member sharing the mailbox moves
+/// in one server session.
+async fn move_thread_to_special_folder(
     app: &AppHandle,
     state: &AppState,
     message_id: i64,
-    loc: storage::messages::MessageLocation,
+    roles: &[&str],
+    label: &str,
+) -> Result<(), AppError> {
+    let loc = storage::messages::location(&state.pool, message_id).await?;
+    let dest = special_folder_dest(state, loc.account_id, roles, label).await?;
+    let rows = storage::messages::thread_rows_in_mailbox(&state.pool, message_id).await?;
+    move_rows_to_mailbox(app, state, loc.account_id, &loc.mailbox, &rows, &dest).await
+}
+
+/// The account's folder name for the first matching special-use role.
+async fn special_folder_dest(
+    state: &AppState,
+    account_id: i64,
+    roles: &[&str],
+    label: &str,
+) -> Result<String, AppError> {
+    for role in roles {
+        if let Some(name) = storage::mailboxes::name_for_role(&state.pool, account_id, role).await?
+        {
+            return Ok(name);
+        }
+    }
+    Err(AppError::Imap(format!("no {label} folder discovered yet")))
+}
+
+/// The one server-confirmed move path: select the source folder, UID MOVE
+/// each `(row id, uid)` into `dest`, and drop cached rows only for confirmed
+/// moves — a row must not vanish from the list if its move failed. A failure
+/// mid-batch keeps the earlier moves (they already happened server-side) and
+/// surfaces the error.
+async fn move_rows_to_mailbox(
+    app: &AppHandle,
+    state: &AppState,
+    account_id: i64,
+    source: &str,
+    rows: &[(i64, i64)],
     dest: &str,
 ) -> Result<(), AppError> {
     // why: moving a message into the folder it already lives in is a no-op
     // (and some servers error on it) — just leave it be.
-    if loc.mailbox == dest {
+    if source == dest || rows.is_empty() {
         return Ok(());
     }
 
-    let account = storage::accounts::get(&state.pool, loc.account_id).await?;
-    let password = state.password(loc.account_id).await?;
+    let account = storage::accounts::get(&state.pool, account_id).await?;
+    let password = state.password(account_id).await?;
     let mut session = mail::imap::connect(
         &account.imap_host,
         account.imap_port,
@@ -251,18 +316,32 @@ async fn move_to_mailbox(
     )
     .await?;
     session
-        .select(&loc.mailbox)
+        .select(source)
         .await
-        .map_err(|e| AppError::Imap(format!("select {}: {e}", loc.mailbox)))?;
-    let moved = mail::imap::move_message(&mut session, loc.uid, dest).await;
+        .map_err(|e| AppError::Imap(format!("select {source}: {e}")))?;
+    let mut outcome = Ok(());
+    let mut moved: Vec<i64> = Vec::new();
+    for (row_id, uid) in rows {
+        match mail::imap::move_message(&mut session, *uid, dest).await {
+            Ok(()) => moved.push(*row_id),
+            Err(err) => {
+                outcome = Err(err);
+                break;
+            }
+        }
+    }
     let _ = session.logout().await;
-    moved?;
 
-    // why: only after the server confirms — the message left the source folder,
-    // so the cached row (and its images, via cascade) go too.
-    storage::messages::delete_by_id(&state.pool, message_id).await?;
-    app.emit("messages-changed", loc.account_id)?;
-    Ok(())
+    // why: only after the server confirms — each confirmed message left the
+    // source folder, so its cached row (and images, via cascade) go too.
+    let emit = !moved.is_empty();
+    for row_id in moved {
+        storage::messages::delete_by_id(&state.pool, row_id).await?;
+    }
+    if emit {
+        app.emit("messages-changed", account_id)?;
+    }
+    outcome
 }
 
 /// Connect, select the folder, flip the `\Seen` flag, log out.

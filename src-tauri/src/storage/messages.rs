@@ -331,6 +331,25 @@ pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<Message
     Ok(rows)
 }
 
+/// `(row id, uid)` of every thread member sharing the anchor's folder,
+/// anchor included — the unit a thread-row action (archive/trash/move)
+/// operates on. Keyless anchors act alone.
+pub async fn thread_rows_in_mailbox(
+    pool: &SqlitePool,
+    message_id: i64,
+) -> Result<Vec<(i64, i64)>, AppError> {
+    Ok(sqlx::query_as(
+        "SELECT m.id, m.uid FROM messages m
+         JOIN messages a ON a.id = ?
+         WHERE m.account_id = a.account_id AND m.mailbox = a.mailbox
+           AND (m.id = a.id OR (a.thread_key IS NOT NULL AND m.thread_key = a.thread_key))
+         ORDER BY m.uid",
+    )
+    .bind(message_id)
+    .fetch_all(pool)
+    .await?)
+}
+
 /// Highest cached UID for incremental sync; `None` when nothing is cached.
 pub async fn max_uid(
     pool: &SqlitePool,
@@ -1020,6 +1039,61 @@ mod tests {
         let mids: Vec<&str> = thread.iter().map(|m| m.message_id.as_str()).collect();
         // Oldest first, Sent included, Trash excluded.
         assert_eq!(mids, vec!["a@x", "b@x", "c@x"]);
+    }
+
+    #[tokio::test]
+    async fn thread_rows_in_mailbox_covers_only_the_anchors_folder() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                threaded(1, "a@x", "", &[]),
+                threaded(2, "b@x", "a@x", &["a@x"]),
+                threaded(3, "other@x", "", &[]),
+            ],
+        )
+        .await
+        .unwrap();
+        upsert_headers(&pool, id, "Sent", &[threaded(1, "c@x", "a@x", &["a@x"])])
+            .await
+            .unwrap();
+        let anchor = list(&pool, Some(id), "INBOX")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.message_id == "b@x")
+            .unwrap()
+            .id;
+
+        let rows = thread_rows_in_mailbox(&pool, anchor).await.unwrap();
+
+        // Both inbox members, not the Sent sibling, not the unrelated mail.
+        let uids: Vec<i64> = rows.iter().map(|(_, uid)| *uid).collect();
+        assert_eq!(uids, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn thread_rows_for_a_keyless_message_is_just_itself() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "", "", &[]), threaded(2, "", "", &[])],
+        )
+        .await
+        .unwrap();
+        let anchor = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+
+        let rows = thread_rows_in_mailbox(&pool, anchor).await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, anchor);
     }
 
     #[tokio::test]
