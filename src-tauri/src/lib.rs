@@ -4,6 +4,7 @@ pub mod error;
 pub mod mail;
 mod models;
 mod notify;
+mod poller;
 mod scheduler;
 pub mod state;
 pub mod storage;
@@ -29,6 +30,11 @@ pub fn run() {
             // The send-later scheduler: delivers parked messages when their
             // time comes; runs for the whole life of the app.
             scheduler::spawn(app.handle().clone());
+
+            // The background new-mail poll — syncs accounts on the interval
+            // configured in Settings › Notifications so notifications work
+            // while the app idles.
+            poller::spawn(app.handle().clone());
 
             // why: the main window is transparent (tauri.conf.json) and this
             // NSVisualEffectView provides the actual backdrop — the frontend
