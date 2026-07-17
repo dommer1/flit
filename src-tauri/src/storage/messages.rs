@@ -14,6 +14,7 @@ pub struct FetchedHeader {
     pub cc: String,
     pub reply_to: String,
     pub bcc: String,
+    pub has_attachments: bool,
     pub subject: String,
     pub date: String,
     pub snippet: String,
@@ -57,9 +58,9 @@ pub async fn upsert_headers(
         let thread_key = assign_thread_key(pool, account_id, header).await?;
         sqlx::query(
             "INSERT INTO messages
-               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, cc_addr, reply_to_addr, bcc_addr, subject, date, snippet, read,
+               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, cc_addr, reply_to_addr, bcc_addr, subject, date, snippet, read, has_attachments,
                 message_id_hdr, in_reply_to_hdr, references_hdr, thread_key)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (account_id, mailbox, uid) DO UPDATE SET read = excluded.read",
         )
         .bind(account_id)
@@ -75,6 +76,7 @@ pub async fn upsert_headers(
         .bind(&header.date)
         .bind(&header.snippet)
         .bind(header.read)
+        .bind(header.has_attachments)
         .bind(&header.message_id)
         .bind(&header.in_reply_to)
         .bind(header.references.join(" "))
@@ -237,7 +239,7 @@ pub async fn list(
         Some(id) => {
             sqlx::query_as(
                 r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
-                          cc_addr AS cc, reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read,
+                          cc_addr AS cc, reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read, has_attachments,
                           COALESCE(message_id_hdr, '') AS message_id,
                           references_hdr AS "references"
                    FROM messages WHERE account_id = ? AND mailbox = ? ORDER BY date DESC"#,
@@ -250,7 +252,7 @@ pub async fn list(
         None => {
             sqlx::query_as(
                 r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
-                          cc_addr AS cc, reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read,
+                          cc_addr AS cc, reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read, has_attachments,
                           COALESCE(message_id_hdr, '') AS message_id,
                           references_hdr AS "references"
                    FROM messages WHERE mailbox = ? ORDER BY date DESC"#,
@@ -284,7 +286,7 @@ pub async fn list_threaded(
              SELECT t.account_id,
                     COALESCE(t.thread_key, 'row:' || t.id) AS tkey,
                     COALESCE(NULLIF(t.message_id_hdr, ''), 'row:' || t.id) AS mkey,
-                    t.read
+                    t.read, t.has_attachments
              FROM messages t
              LEFT JOIN mailboxes b ON b.account_id = t.account_id AND b.name = t.mailbox
              WHERE COALESCE(b.role, '') NOT IN ('trash', 'junk', 'drafts')
@@ -292,7 +294,8 @@ pub async fn list_threaded(
            stats AS (
              SELECT account_id, tkey,
                     COUNT(DISTINCT mkey) AS thread_count,
-                    MAX(CASE WHEN read = 0 THEN 1 ELSE 0 END) AS thread_unread
+                    MAX(CASE WHEN read = 0 THEN 1 ELSE 0 END) AS thread_unread,
+                    MAX(has_attachments) AS thread_attachments
              FROM visible
              GROUP BY account_id, tkey
            ),
@@ -307,7 +310,7 @@ pub async fn list_threaded(
            SELECT r.id, r.account_id, r.mailbox, r.from_addr AS "from", r.to_addr AS "to",
                   r.cc_addr AS cc, r.reply_to_addr AS reply_to, r.bcc_addr AS bcc,
                   r.subject, r.snippet,
-                  r.date, r.read,
+                  r.date, r.read, s.thread_attachments AS has_attachments,
                   COALESCE(r.message_id_hdr, '') AS message_id,
                   r.references_hdr AS "references",
                   s.thread_count, s.thread_unread
@@ -335,12 +338,12 @@ pub async fn list_threaded(
 pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<MessageHeader>, AppError> {
     let rows = sqlx::query_as(
         r#"SELECT id, account_id, mailbox, "from", "to", cc, reply_to, bcc, subject, snippet,
-                  date, read, message_id, "references"
+                  date, read, has_attachments, message_id, "references"
            FROM (
              SELECT m.id, m.account_id, m.mailbox, m.from_addr AS "from", m.to_addr AS "to",
                     m.cc_addr AS cc, m.reply_to_addr AS reply_to, m.bcc_addr AS bcc,
                     m.subject, m.snippet,
-                    m.date, m.read,
+                    m.date, m.read, m.has_attachments,
                     COALESCE(m.message_id_hdr, '') AS message_id,
                     m.references_hdr AS "references",
                     ROW_NUMBER() OVER (
@@ -457,11 +460,12 @@ pub async fn set_body(
     // harvests attachment metadata, so no rescan is ever needed for it.
     sqlx::query(
         "UPDATE messages SET body_text = ?, body_html = ?, snippet = ?,
-                             attachments_scanned = 1 WHERE id = ?",
+                             has_attachments = ?, attachments_scanned = 1 WHERE id = ?",
     )
     .bind(text.unwrap_or(""))
     .bind(html)
     .bind(snippet)
+    .bind(!attachments.is_empty())
     .bind(message_id)
     .execute(pool)
     .await?;
@@ -1183,6 +1187,33 @@ mod tests {
             .map(|m| (m.message_id.as_str(), m.mailbox.as_str()))
             .collect();
         assert_eq!(shown, vec![("a@x", "INBOX"), ("b@x", "INBOX")]);
+    }
+
+    #[tokio::test]
+    async fn thread_row_surfaces_attachments_of_any_member() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        // The OLDER message carries the file; the newest (the row's
+        // representative) does not — the paperclip must still show.
+        let mut with_file = threaded(1, "a@x", "", &[]);
+        with_file.has_attachments = true;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[with_file, threaded(2, "b@x", "a@x", &["a@x"])],
+        )
+        .await
+        .unwrap();
+
+        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].has_attachments);
+        // The conversation view reports per message, not per thread.
+        let thread = thread_of(&pool, rows[0].id).await.unwrap();
+        assert!(thread[0].has_attachments);
+        assert!(!thread[1].has_attachments);
     }
 
     #[tokio::test]

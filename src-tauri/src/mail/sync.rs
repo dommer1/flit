@@ -341,6 +341,7 @@ fn to_fetched(raw: &imap::RawHeader, uid_validity: i64) -> FetchedHeader {
         cc: parsed.cc,
         reply_to: parsed.reply_to,
         bcc: parsed.bcc,
+        has_attachments: raw.has_attachments,
         subject: parsed.subject,
         date: parsed.date,
         // why: header fetches carry no body — the snippet is filled in when
@@ -441,6 +442,7 @@ mod tests {
         let raw = imap::RawHeader {
             uid: 12,
             read: true,
+            has_attachments: true,
             header: b"From: Alice <alice@example.com>\r\n\
                       To: Bob <bob@example.com>\r\n\
                       Cc: Cara <cara@example.com>\r\n\

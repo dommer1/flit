@@ -437,6 +437,9 @@ pub struct MessageHeader {
     // serializes cleanly; becomes a real timestamp with SQLite in Phase 1.
     pub date: String,
     pub read: bool,
+    /// Whether the message (in threaded lists: any message of the
+    /// conversation) carries attachments — the list's paperclip.
+    pub has_attachments: bool,
     /// Message-ID without angle brackets; empty when the sender set none.
     /// A reply to this message sends it back as In-Reply-To.
     pub message_id: String,

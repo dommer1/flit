@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use async_imap::imap_proto;
 use async_imap::types::{Fetch, Flag, Name, NameAttribute};
 use async_imap::Session;
 use async_native_tls::TlsStream;
@@ -16,13 +17,17 @@ use crate::storage::mailboxes::DiscoveredMailbox;
 pub type ImapSession = Session<TlsStream<TcpStream>>;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-const HEADER_QUERY: &str = "(UID FLAGS BODY.PEEK[HEADER])";
+// why BODYSTRUCTURE: it rides along for free and tells whether a message
+// carries attachments before any body is downloaded (the list's paperclip).
+const HEADER_QUERY: &str = "(UID FLAGS BODYSTRUCTURE BODY.PEEK[HEADER])";
 
 /// One fetched message header, still raw — parsing lives in mail::parse.
 #[derive(Debug)]
 pub struct RawHeader {
     pub uid: i64,
     pub read: bool,
+    /// From BODYSTRUCTURE — an approximation refined by the body parse.
+    pub has_attachments: bool,
     pub header: Vec<u8>,
 }
 
@@ -305,8 +310,38 @@ fn raw_header(fetch: &Fetch) -> Option<RawHeader> {
     Some(RawHeader {
         uid: i64::from(fetch.uid?),
         read: fetch.flags().any(|f| matches!(f, Flag::Seen)),
+        has_attachments: fetch.bodystructure().is_some_and(structure_has_attachments),
         header: fetch.header()?.to_vec(),
     })
+}
+
+/// Whether a BODYSTRUCTURE describes any real attachment — good enough for
+/// the list's paperclip before a body exists; parsing the fetched body
+/// later (set_body) replaces it with the exact truth.
+fn structure_has_attachments(structure: &imap_proto::types::BodyStructure<'_>) -> bool {
+    use imap_proto::types::BodyStructure;
+    match structure {
+        BodyStructure::Multipart { bodies, .. } => bodies.iter().any(structure_has_attachments),
+        // A message nested inside the mail (message/rfc822) is an attachment.
+        BodyStructure::Message { .. } => true,
+        // Text parts are body alternatives unless explicitly detached.
+        BodyStructure::Text { common, .. } => {
+            disposition_is(common.disposition.as_ref(), "attachment")
+        }
+        // Non-text leaves (application/pdf, images…): attachments unless
+        // explicitly inline; an undecorated image is treated as embedded.
+        BodyStructure::Basic { common, .. } => match common.disposition.as_ref() {
+            Some(disposition) => disposition.ty.eq_ignore_ascii_case("attachment"),
+            None => !common.ty.ty.eq_ignore_ascii_case("image"),
+        },
+    }
+}
+
+fn disposition_is(
+    disposition: Option<&imap_proto::types::ContentDisposition<'_>>,
+    ty: &str,
+) -> bool {
+    disposition.is_some_and(|d| d.ty.eq_ignore_ascii_case(ty))
 }
 
 /// Sequence range covering the newest `count` messages of a mailbox holding
@@ -336,8 +371,120 @@ mod tests {
         RawHeader {
             uid,
             read: false,
+            has_attachments: false,
             header: Vec::new(),
         }
+    }
+
+    use imap_proto::types::{
+        BodyContentCommon, BodyContentSinglePart, BodyStructure, ContentDisposition,
+        ContentEncoding, ContentType,
+    };
+    use std::borrow::Cow;
+
+    fn part(
+        ty: &'static str,
+        subtype: &'static str,
+        disposition: Option<&'static str>,
+    ) -> BodyStructure<'static> {
+        let common = BodyContentCommon {
+            ty: ContentType {
+                ty: Cow::Borrowed(ty),
+                subtype: Cow::Borrowed(subtype),
+                params: None,
+            },
+            disposition: disposition.map(|d| ContentDisposition {
+                ty: Cow::Borrowed(d),
+                params: None,
+            }),
+            language: None,
+            location: None,
+        };
+        let other = BodyContentSinglePart {
+            id: None,
+            md5: None,
+            description: None,
+            transfer_encoding: ContentEncoding::Base64,
+            octets: 0,
+        };
+        if ty.eq_ignore_ascii_case("text") {
+            BodyStructure::Text {
+                common,
+                other,
+                lines: 1,
+                extension: None,
+            }
+        } else {
+            BodyStructure::Basic {
+                common,
+                other,
+                extension: None,
+            }
+        }
+    }
+
+    fn multipart(bodies: Vec<BodyStructure<'static>>) -> BodyStructure<'static> {
+        BodyStructure::Multipart {
+            common: BodyContentCommon {
+                ty: ContentType {
+                    ty: Cow::Borrowed("multipart"),
+                    subtype: Cow::Borrowed("mixed"),
+                    params: None,
+                },
+                disposition: None,
+                language: None,
+                location: None,
+            },
+            bodies,
+            extension: None,
+        }
+    }
+
+    #[test]
+    fn plain_and_alternative_bodies_have_no_attachments() {
+        assert!(!structure_has_attachments(&part("text", "plain", None)));
+        assert!(!structure_has_attachments(&multipart(vec![
+            part("text", "plain", None),
+            part("text", "html", None),
+        ])));
+    }
+
+    #[test]
+    fn detached_files_count_as_attachments() {
+        // The classic: text body + a PDF with an attachment disposition.
+        assert!(structure_has_attachments(&multipart(vec![
+            part("text", "plain", None),
+            part("application", "pdf", Some("attachment")),
+        ])));
+        // A csv exported as text also announces itself via disposition.
+        assert!(structure_has_attachments(&multipart(vec![
+            part("text", "plain", None),
+            part("text", "csv", Some("attachment")),
+        ])));
+        // A PDF without any disposition is still a file, not a body.
+        assert!(structure_has_attachments(&multipart(vec![
+            part("text", "plain", None),
+            part("application", "pdf", None),
+        ])));
+    }
+
+    #[test]
+    fn embedded_images_do_not_count() {
+        // multipart/related html mail with cid images: inline disposition…
+        assert!(!structure_has_attachments(&multipart(vec![
+            part("text", "html", None),
+            part("image", "png", Some("inline")),
+        ])));
+        // …or none at all — undecorated images are treated as embedded.
+        assert!(!structure_has_attachments(&multipart(vec![
+            part("text", "html", None),
+            part("image", "jpeg", None),
+        ])));
+        // An image the sender explicitly detached still counts.
+        assert!(structure_has_attachments(&multipart(vec![
+            part("text", "plain", None),
+            part("image", "jpeg", Some("attachment")),
+        ])));
     }
 
     #[test]

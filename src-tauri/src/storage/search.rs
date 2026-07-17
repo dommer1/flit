@@ -104,7 +104,7 @@ pub async fn search(
     // (SqlSafeStr), and a single shape keeps the query plan cached.
     let rows = sqlx::query_as(
         r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
-                  reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read,
+                  reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read, has_attachments,
                   COALESCE(message_id_hdr, '') AS message_id,
                   references_hdr AS "references"
            FROM messages

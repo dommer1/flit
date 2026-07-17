@@ -51,6 +51,17 @@ pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
         eprintln!("backfilled {fixed} message snippet(s) to strip leading URLs");
     }
 
+    // why: rows cached before the has_attachments column existed know their
+    // attachments only through the metadata table — adopt that once
+    // (idempotent; new rows are kept in sync by upsert/set_body).
+    sqlx::query(
+        "UPDATE messages SET has_attachments = 1
+         WHERE has_attachments = 0
+           AND id IN (SELECT DISTINCT message_id FROM message_attachments)",
+    )
+    .execute(&pool)
+    .await?;
+
     // why: sync only harvests headers it newly fetches — messages cached
     // before the contacts table existed seed it here, once (no-op after).
     let seeded = contacts::backfill(&pool).await?;
