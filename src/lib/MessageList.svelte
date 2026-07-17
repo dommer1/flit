@@ -231,11 +231,19 @@
           >
             <span class="content">
               <span class="row">
-                {#if !message.read}
+                {#if !message.read || message.threadUnread}
                   <span class="dot" aria-hidden="true"></span>
                 {/if}
                 <span class="from">{senderName(message.from)}</span>
                 <span class="end">
+                  {#if message.threadCount > 1}
+                    <span
+                      class="thread-count"
+                      title="{message.threadCount} messages in conversation"
+                    >
+                      {message.threadCount}
+                    </span>
+                  {/if}
                   {#if color}
                     <span
                       class="account-dot"
@@ -422,6 +430,23 @@
     height: 7px;
     flex-shrink: 0;
     border-radius: 50%;
+  }
+
+  /* Conversation size badge, e.g. "3" — quiet, next to the date. */
+  .thread-count {
+    flex-shrink: 0;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--bg-hover);
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 16px;
+    color: var(--text-secondary);
+  }
+
+  .selected .thread-count {
+    background: rgb(255 255 255 / 22%);
+    color: var(--accent-text);
   }
 
   .date {

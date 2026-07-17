@@ -235,3 +235,33 @@ it("labels the swipe backdrop Move to Inbox for archived rows", async () => {
 
   vi.advanceTimersByTime(200); // snap back, nothing fired
 });
+
+it("badges a conversation row with its message count", () => {
+  renderList({
+    messages: [
+      { ...header(1, "Alice <alice@example.com>", true), threadCount: 3 },
+      header(2, "Bob <bob@example.com>", true),
+    ],
+  });
+
+  const thread = screen.getByRole("option", { name: /Alice/ });
+  expect(thread.textContent).toContain("3");
+  // A single message shows no count badge.
+  const single = screen.getByRole("option", { name: /Bob/ });
+  expect(single.querySelector(".thread-count")).toBeNull();
+});
+
+it("dots a read representative whose conversation is unread elsewhere", () => {
+  renderList({
+    messages: [
+      {
+        ...header(1, "Alice <alice@example.com>", true),
+        threadCount: 2,
+        threadUnread: true,
+      },
+    ],
+  });
+
+  const row = screen.getByRole("option", { name: /Alice/ });
+  expect(row.querySelector(".dot")).not.toBeNull();
+});
