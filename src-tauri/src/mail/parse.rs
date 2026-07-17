@@ -201,6 +201,10 @@ pub struct ParsedDraft {
     /// Message-ID without angle brackets — the handle under which the next
     /// save replaces this server version.
     pub message_id: Option<String>,
+    /// Threading identity of a reply draft, as OutgoingMessage carries it:
+    /// the answered Message-ID and the space-joined ancestor chain.
+    pub in_reply_to: Option<String>,
+    pub references: Option<String>,
     pub attachments: Vec<DraftAttachment>,
 }
 
@@ -222,6 +226,11 @@ pub fn parse_draft(raw: &[u8]) -> ParsedDraft {
             .map(|t| t.into_owned())
             .unwrap_or_default(),
         message_id: message.message_id().map(str::to_string),
+        in_reply_to: id_list(message.in_reply_to()).into_iter().next(),
+        references: {
+            let refs = id_list(message.references());
+            (!refs.is_empty()).then(|| refs.join(" "))
+        },
         attachments: message
             .attachments()
             .filter(|part| !is_inline_image(part))

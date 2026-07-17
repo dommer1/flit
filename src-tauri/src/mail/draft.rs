@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mail_builder::headers::address::Address;
+use mail_builder::headers::message_id::MessageId;
 use mail_builder::MessageBuilder;
 
 use crate::error::AppError;
@@ -60,6 +61,25 @@ pub async fn build_draft(
     }
     if let Some(bcc) = recipient_list(&outgoing.bcc) {
         builder = builder.bcc(bcc);
+    }
+    // A reply draft keeps its threading identity, so sending it later (or
+    // from another client that picks the draft up) still threads.
+    if let Some(parent) = outgoing
+        .in_reply_to
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        builder = builder.in_reply_to(parent);
+    }
+    let references: Vec<&str> = outgoing
+        .references
+        .as_deref()
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect();
+    if !references.is_empty() {
+        builder = builder.references(MessageId::new_list(references.into_iter()));
     }
     let mut total = 0usize;
     for attachment in &outgoing.attachments {
@@ -170,6 +190,32 @@ mod tests {
             Some("Ahoj, prídeš?"),
             "diacritics must survive the round trip"
         );
+    }
+
+    #[tokio::test]
+    async fn threading_headers_round_trip_through_a_draft() {
+        let mut out = outgoing();
+        out.in_reply_to = Some("parent@x".to_string());
+        out.references = Some("root@x parent@x".to_string());
+
+        let raw = build_draft("domco@example.com", &out, "id@flit.local")
+            .await
+            .unwrap();
+        let parsed = crate::mail::parse::parse_draft(&raw);
+
+        assert_eq!(parsed.in_reply_to.as_deref(), Some("parent@x"));
+        assert_eq!(parsed.references.as_deref(), Some("root@x parent@x"));
+    }
+
+    #[tokio::test]
+    async fn fresh_drafts_round_trip_without_threading_headers() {
+        let raw = build_draft("domco@example.com", &outgoing(), "id@flit.local")
+            .await
+            .unwrap();
+        let parsed = crate::mail::parse::parse_draft(&raw);
+
+        assert_eq!(parsed.in_reply_to, None);
+        assert_eq!(parsed.references, None);
     }
 
     #[tokio::test]
