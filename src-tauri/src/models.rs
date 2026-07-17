@@ -378,4 +378,10 @@ pub struct MessageHeader {
     // serializes cleanly; becomes a real timestamp with SQLite in Phase 1.
     pub date: String,
     pub read: bool,
+    /// Message-ID without angle brackets; empty when the sender set none.
+    /// A reply to this message sends it back as In-Reply-To.
+    pub message_id: String,
+    /// Space-joined ancestor Message-IDs — a reply appends `message_id` to
+    /// this chain to form its own References header.
+    pub references: String,
 }

@@ -229,7 +229,9 @@ pub async fn list(
         Some(id) => {
             sqlx::query_as(
                 r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
-                          cc_addr AS cc, reply_to_addr AS reply_to, subject, snippet, date, read
+                          cc_addr AS cc, reply_to_addr AS reply_to, subject, snippet, date, read,
+                          COALESCE(message_id_hdr, '') AS message_id,
+                          references_hdr AS "references"
                    FROM messages WHERE account_id = ? AND mailbox = ? ORDER BY date DESC"#,
             )
             .bind(id)
@@ -240,7 +242,9 @@ pub async fn list(
         None => {
             sqlx::query_as(
                 r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
-                          cc_addr AS cc, reply_to_addr AS reply_to, subject, snippet, date, read
+                          cc_addr AS cc, reply_to_addr AS reply_to, subject, snippet, date, read,
+                          COALESCE(message_id_hdr, '') AS message_id,
+                          references_hdr AS "references"
                    FROM messages WHERE mailbox = ? ORDER BY date DESC"#,
             )
             .bind(mailbox)
@@ -748,6 +752,30 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_exposes_threading_identity_for_replies() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                threaded(1, "a@x", "", &[]),
+                threaded(2, "b@x", "a@x", &["a@x"]),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let all = list(&pool, Some(id), "INBOX").await.unwrap();
+
+        let reply = all.iter().find(|m| m.message_id == "b@x").unwrap();
+        assert_eq!(reply.references, "a@x");
+        let root = all.iter().find(|m| m.message_id == "a@x").unwrap();
+        assert_eq!(root.references, "");
     }
 
     #[tokio::test]
