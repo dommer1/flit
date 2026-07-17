@@ -91,6 +91,7 @@ pub fn run() {
             commands::archive_thread,
             commands::move_thread,
             commands::get_message_body,
+            commands::thread_bodies,
             commands::inspect_attachments,
             commands::save_attachment,
             commands::save_all_attachments,

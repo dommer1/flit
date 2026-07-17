@@ -908,6 +908,96 @@ pub async fn get_message_body(
     Ok(body)
 }
 
+/// Bodies for a whole conversation in one call — the conversation view's
+/// bulk load. Cached bodies come straight from SQLite; everything missing
+/// is fetched over a SINGLE IMAP session, grouped by folder, instead of one
+/// TLS connect per message (which made long threads crawl open).
+#[tauri::command]
+pub async fn thread_bodies(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<std::collections::HashMap<i64, MessageBody>, AppError> {
+    let thread = storage::messages::thread_of(&state.pool, message_id).await?;
+
+    // Members whose body is not cached yet, grouped by the folder to select.
+    let mut missing: std::collections::BTreeMap<String, Vec<(i64, i64)>> = Default::default();
+    let mut fetch_account = None;
+    for header in &thread {
+        let row = storage::messages::get_body(&state.pool, header.id).await?;
+        if row.body_text.is_none() && row.body_html.is_none() {
+            fetch_account = Some(row.account_id);
+            missing
+                .entry(row.mailbox)
+                .or_default()
+                .push((header.id, row.uid));
+        }
+    }
+
+    if let Some(account_id) = fetch_account {
+        let account = storage::accounts::get(&state.pool, account_id).await?;
+        let password = state.password(account_id).await?;
+        let mut session = mail::imap::connect(
+            &account.imap_host,
+            account.imap_port,
+            &account.username,
+            &password,
+        )
+        .await?;
+        let fetched = async {
+            for (mailbox, entries) in &missing {
+                session
+                    .select(mailbox)
+                    .await
+                    .map_err(|e| AppError::Imap(format!("select {mailbox}: {e}")))?;
+                for (id, uid) in entries {
+                    // why skip: a uid can vanish mid-run (deleted elsewhere) —
+                    // the rest of the conversation must still load.
+                    let Some(raw) = mail::imap::fetch_body(&mut session, *uid).await? else {
+                        continue;
+                    };
+                    let parsed = mail::parse::parse_body(&raw);
+                    storage::messages::set_body(
+                        &state.pool,
+                        *id,
+                        parsed.text.as_deref(),
+                        parsed.html.as_deref(),
+                        &parsed.snippet,
+                        &parsed.images,
+                        &parsed.attachments,
+                    )
+                    .await?;
+                }
+            }
+            Ok::<(), AppError>(())
+        }
+        .await;
+        let _ = session.logout().await;
+        fetched?;
+        // why: snippets just became real — lists should refresh.
+        app.emit("messages-changed", account_id)?;
+    }
+
+    let policy = storage::settings::remote_image_policy(&state.pool).await?;
+    let mut bodies = std::collections::HashMap::new();
+    for header in &thread {
+        let row = storage::messages::get_body(&state.pool, header.id).await?;
+        let images = storage::messages::images(&state.pool, header.id).await?;
+        let mut body = sanitized_body(
+            &state.pool,
+            row.body_html,
+            row.body_text,
+            &images,
+            policy,
+            None,
+        )
+        .await?;
+        body.attachments = storage::messages::attachments(&state.pool, header.id).await?;
+        bodies.insert(header.id, body);
+    }
+    Ok(bodies)
+}
+
 /// Download the raw RFC822 bytes of one cached message from its server.
 async fn fetch_raw_message(
     state: &AppState,
