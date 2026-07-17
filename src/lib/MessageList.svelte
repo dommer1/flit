@@ -295,6 +295,9 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    /* why: overflow-y auto alone computes overflow-x to auto — the list
+       must clip sideways, never scroll (swipes translate rows, not panes). */
+    overflow-x: hidden;
   }
 
   .empty {

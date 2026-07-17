@@ -183,6 +183,7 @@
     gap: 18px;
     padding: 20px 26px;
     overflow-y: auto;
+    overflow-x: hidden;
   }
 
   /* White grouped boxes on the settings canvas, like the other tabs. */

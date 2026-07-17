@@ -60,6 +60,9 @@
 
 body {
   margin: 0;
+  /* why: a native window never scrolls sideways — if a pane's fixed width
+     outgrows the window, content clips instead of scrolling the chrome. */
+  overflow-x: hidden;
   background: var(--bg-window);
   font-family: var(--font-ui);
   font-size: 13px;

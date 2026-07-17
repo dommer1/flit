@@ -164,6 +164,7 @@
     padding: 12px 8px;
     list-style: none;
     overflow-y: auto;
+    overflow-x: hidden;
   }
 
   .account {
@@ -289,6 +290,7 @@
     flex: 1;
     padding: 20px 24px;
     overflow-y: auto;
+    overflow-x: hidden;
   }
 
   /* Stacked field-label-over-value rows, like the design's form. */

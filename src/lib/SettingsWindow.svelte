@@ -320,6 +320,7 @@
   .content {
     padding: 20px 26px;
     overflow-y: auto;
+    overflow-x: hidden;
   }
 
   .section-label {

@@ -642,8 +642,12 @@
     height: calc(100vh - var(--toolbar-height));
   }
 
+  /* why overflow-x hidden everywhere: overflow-y auto alone computes
+     overflow-x to auto, so a squeezed pane (narrow window, panes dragged
+     wide) grows a horizontal scrollbar — panes must only ever clip. */
   aside {
     overflow-y: auto;
+    overflow-x: hidden;
     background: var(--bg-sidebar);
   }
 
@@ -657,6 +661,7 @@
     /* why relative: the Outbox badges anchor to this pane's bottom edge. */
     position: relative;
     overflow-y: auto;
+    overflow-x: hidden;
   }
 
   /* Replaces the old border-right lines: a 1px grid column that doubles as
@@ -686,5 +691,6 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    overflow-x: hidden;
   }
 </style>

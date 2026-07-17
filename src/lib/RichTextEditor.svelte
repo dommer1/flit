@@ -182,6 +182,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
   }
 
   /* :global — Tiptap renders its own .tiptap contenteditable inside. Match

@@ -223,6 +223,7 @@
     margin: 0;
     padding: 12px 8px;
     overflow-y: auto;
+    overflow-x: hidden;
     list-style: none;
   }
 
@@ -288,6 +289,7 @@
     min-width: 0;
     padding: 18px 22px;
     overflow-y: auto;
+    overflow-x: hidden;
   }
 
   /* White editor box on the grouped-gray canvas. */
