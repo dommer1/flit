@@ -84,22 +84,44 @@
    * inside the frame can exploit the shared origin.
    */
   function autoSize(frame: HTMLIFrameElement) {
+    let observer: ResizeObserver | null = null;
     const size = () => {
       // why optional: jsdom (tests) has no srcdoc layout — leave the CSS
       // fallback height alone when there is nothing to measure.
-      const height = frame.contentDocument?.documentElement?.scrollHeight ?? 0;
-      const next = `${height + 4}px`;
-      if (height > 0 && frame.style.height !== next) {
-        frame.style.height = next;
+      const body = frame.contentDocument?.body;
+      if (!body || body.scrollHeight === 0) return;
+      // why measure the body, not documentElement: the document element's
+      // scrollHeight is clamped to the frame's own viewport, so measuring
+      // it feeds the height we just set back into the next measurement —
+      // the frame grows forever. The body's box follows only its content.
+      // Its margins sit outside scrollHeight, so they are added explicitly.
+      const styles = frame.contentWindow?.getComputedStyle(body);
+      const margins = styles
+        ? parseFloat(styles.marginTop) + parseFloat(styles.marginBottom)
+        : 0;
+      const height = Math.ceil(body.scrollHeight + (margins || 0)) + 2;
+      // why the 2px hysteresis: sub-pixel rounding (or viewport-tracking
+      // content like 100vh blocks) must never re-trigger a resize cascade.
+      if (Math.abs(height - frame.offsetHeight) > 2) {
+        frame.style.height = `${height}px`;
       }
     };
-    frame.addEventListener("load", size);
-    // Re-measure when the pane width changes — reflowed text changes height.
-    const observer = new ResizeObserver(size);
-    observer.observe(frame);
+    // (Re)attach to the current document: "Load Images" swaps the srcdoc,
+    // which replaces the whole document — and with it the observed body.
+    // Observing the body (not the frame) keeps the loop one-directional;
+    // the frame's own height never changes the body's layout.
+    const hook = () => {
+      size();
+      observer?.disconnect();
+      observer = new ResizeObserver(size);
+      const body = frame.contentDocument?.body;
+      if (body) observer.observe(body);
+    };
+    frame.addEventListener("load", hook);
+    hook();
     return {
       destroy() {
-        observer.disconnect();
+        observer?.disconnect();
       },
     };
   }
