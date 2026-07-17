@@ -200,16 +200,12 @@
   {:else if tab === "notifications"}
     <NotificationsPane {accounts} />
   {:else if tab === "swipes"}
-    <section class="swipes">
-      <fieldset>
-        <legend>Swipe actions in the message list</legend>
-        <p class="explain">
-          What a two-finger swipe on a message row does. Pick None to turn a
-          direction off.
-        </p>
+    <section class="content">
+      <div class="section-label">Swipe actions in the message list</div>
+      <div class="group">
         {#each [{ side: "left", label: "Swipe left" }, { side: "right", label: "Swipe right" }] as const as row (row.side)}
-          <div class="swipe-setting">
-            <label for="swipe-{row.side}">{row.label}</label>
+          <div class="row">
+            <label class="row-label" for="swipe-{row.side}">{row.label}</label>
             <select
               id="swipe-{row.side}"
               value={swipes[row.side]}
@@ -225,17 +221,16 @@
             </select>
           </div>
         {/each}
-      </fieldset>
+      </div>
+      <p class="explain">
+        What a two-finger swipe on a message row does. Pick None to turn a
+        direction off.
+      </p>
     </section>
   {:else}
-    <section class="privacy">
-      <fieldset>
-        <legend>Remote images in messages</legend>
-        <p class="explain">
-          Remote images can tell the sender when, where and on what device a
-          message was opened. Known tracking images are always removed.
-          Images attached inside the message always show.
-        </p>
+    <section class="content">
+      <div class="section-label">Remote images in messages</div>
+      <div class="group">
         {#each POLICIES as option (option.value)}
           <div class="choice">
             <input
@@ -252,7 +247,12 @@
             </span>
           </div>
         {/each}
-      </fieldset>
+      </div>
+      <p class="explain">
+        Remote images can tell the sender when, where and on what device a
+        message was opened. Known tracking images are always removed. Images
+        attached inside the message always show.
+      </p>
     </section>
   {/if}
 </div>
@@ -267,88 +267,128 @@
 {/if}
 
 <style>
+  /* The grouped-settings canvas the white group boxes sit on. */
   .window {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    background: #f5f5f7;
   }
 
+  @media (prefers-color-scheme: dark) {
+    .window {
+      background: #232326;
+    }
+  }
+
+  /* macOS-preferences chrome: same gradient strip as the main toolbar,
+     with the centered tab pills. */
   header {
     display: flex;
     justify-content: center;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid #e5e5e5;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 8px 12px;
+    background: linear-gradient(
+      var(--bg-toolbar-top),
+      var(--bg-toolbar-bottom)
+    );
+    border-bottom: 1px solid var(--border-chrome);
   }
 
   .tab {
-    padding: 0.375rem 0.75rem;
+    padding: 5px 14px;
     border: none;
-    border-radius: 0.375rem;
+    border-radius: 7px;
     background: none;
     font: inherit;
-    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: default;
+  }
+
+  .tab:hover {
+    background: var(--bg-hover);
   }
 
   .tab.active {
-    background: rgba(0, 0, 0, 0.08);
-    font-weight: 600;
+    background: var(--bg-selected-muted);
+    color: var(--text-primary);
   }
 
-  .privacy,
-  .swipes {
-    padding: 1rem 1.25rem;
+  .content {
+    padding: 20px 26px;
     overflow-y: auto;
   }
 
-  .swipe-setting {
+  .section-label {
+    margin-bottom: 7px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+
+  /* A white grouped box of setting rows. */
+  .group {
+    display: flex;
+    flex-direction: column;
+    max-width: 520px;
+    padding: 3px 0;
+    border: 1px solid var(--hairline);
+    border-radius: 9px;
+    background: var(--bg-window);
+  }
+
+  .row {
     display: flex;
     align-items: center;
-    gap: 1rem;
-    padding: 0.375rem 0;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 8px 12px;
   }
 
-  .swipe-setting label {
-    width: 6.5rem;
+  .row-label {
+    font-size: 13px;
+    font-weight: 500;
   }
 
-  .swipe-setting select {
-    min-width: 11rem;
+  .row select {
+    max-width: 220px;
+    padding: 3px 8px;
+    border: 1px solid var(--border-chrome);
+    border-radius: 6px;
+    background: var(--bg-window);
     font: inherit;
-  }
-
-  fieldset {
-    margin: 0;
-    padding: 0;
-    border: none;
-  }
-
-  legend {
-    padding: 0;
-    font-weight: 600;
+    font-size: 12.5px;
   }
 
   .explain {
-    margin: 0.375rem 0 0.75rem;
-    max-width: 34rem;
-    font-size: 0.8125rem;
-    color: #6e6e73;
+    margin: 8px 2px 0;
+    max-width: 520px;
+    font-size: 11.5px;
+    color: var(--text-secondary);
   }
 
   .choice {
     display: flex;
     align-items: baseline;
-    gap: 0.5rem;
-    padding: 0.25rem 0;
+    gap: 10px;
+    padding: 9px 12px;
   }
 
   .choice label {
-    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
   }
 
   .choice small {
     display: block;
-    font-size: 0.75rem;
-    color: #6e6e73;
+    margin-top: 1px;
+    font-size: 11.5px;
+    color: var(--text-secondary);
   }
 
   .error-banner {
