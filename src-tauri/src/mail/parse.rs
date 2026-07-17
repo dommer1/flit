@@ -12,6 +12,9 @@ pub struct ParsedHeader {
     /// Reply-To recipients, comma-separated; empty when the header is absent.
     /// Shown in the message detail so the user sees where a reply would go.
     pub reply_to: String,
+    /// Bcc recipients, comma-separated; almost always empty (transports
+    /// strip the header) — Sent copies from other clients can carry it.
+    pub bcc: String,
     pub subject: String,
     /// RFC3339, or empty when the Date header is missing/unparsable —
     /// empty sorts last in the date-desc list instead of inventing a date.
@@ -73,6 +76,7 @@ pub fn parse_header(raw: &[u8]) -> ParsedHeader {
         to: format_addr_list(message.to()),
         cc: format_addr_list(message.cc()),
         reply_to: format_addr_list(message.reply_to()),
+        bcc: format_addr_list(message.bcc()),
         subject: message.subject().unwrap_or_default().to_string(),
         date: message.date().map(|d| d.to_rfc3339()).unwrap_or_default(),
         message_id: clean_id(message.message_id().unwrap_or_default()),
@@ -366,6 +370,21 @@ mod tests {
                     \r\n";
 
         assert_eq!(parse_header(raw).reply_to, "Support <support@example.com>");
+    }
+
+    #[test]
+    fn parses_bcc_when_a_stored_copy_carries_it() {
+        let raw = b"From: Me <me@example.com>\r\n\
+                    To: Client <client@example.com>\r\n\
+                    Bcc: Archive <archiv@example.com>\r\n\
+                    Subject: Hi\r\n\
+                    \r\n";
+
+        let header = parse_header(raw);
+
+        assert_eq!(header.bcc, "Archive <archiv@example.com>");
+        // Ordinary deliveries carry no Bcc — it parses to empty, not junk.
+        assert_eq!(parse_header(b"From: a@x\r\n\r\n").bcc, "");
     }
 
     #[test]

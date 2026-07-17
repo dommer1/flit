@@ -13,6 +13,7 @@ pub struct FetchedHeader {
     pub to: String,
     pub cc: String,
     pub reply_to: String,
+    pub bcc: String,
     pub subject: String,
     pub date: String,
     pub snippet: String,
@@ -56,9 +57,9 @@ pub async fn upsert_headers(
         let thread_key = assign_thread_key(pool, account_id, header).await?;
         sqlx::query(
             "INSERT INTO messages
-               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, cc_addr, reply_to_addr, subject, date, snippet, read,
+               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, cc_addr, reply_to_addr, bcc_addr, subject, date, snippet, read,
                 message_id_hdr, in_reply_to_hdr, references_hdr, thread_key)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (account_id, mailbox, uid) DO UPDATE SET read = excluded.read",
         )
         .bind(account_id)
@@ -69,6 +70,7 @@ pub async fn upsert_headers(
         .bind(&header.to)
         .bind(&header.cc)
         .bind(&header.reply_to)
+        .bind(&header.bcc)
         .bind(&header.subject)
         .bind(&header.date)
         .bind(&header.snippet)
@@ -83,7 +85,13 @@ pub async fn upsert_headers(
         // keeps the contacts book fed no matter how headers arrive.
         crate::storage::contacts::harvest(
             pool,
-            &[&header.from, &header.to, &header.cc, &header.reply_to],
+            &[
+                &header.from,
+                &header.to,
+                &header.cc,
+                &header.reply_to,
+                &header.bcc,
+            ],
             &header.date,
         )
         .await?;
@@ -229,7 +237,7 @@ pub async fn list(
         Some(id) => {
             sqlx::query_as(
                 r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
-                          cc_addr AS cc, reply_to_addr AS reply_to, subject, snippet, date, read,
+                          cc_addr AS cc, reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read,
                           COALESCE(message_id_hdr, '') AS message_id,
                           references_hdr AS "references"
                    FROM messages WHERE account_id = ? AND mailbox = ? ORDER BY date DESC"#,
@@ -242,7 +250,7 @@ pub async fn list(
         None => {
             sqlx::query_as(
                 r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
-                          cc_addr AS cc, reply_to_addr AS reply_to, subject, snippet, date, read,
+                          cc_addr AS cc, reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read,
                           COALESCE(message_id_hdr, '') AS message_id,
                           references_hdr AS "references"
                    FROM messages WHERE mailbox = ? ORDER BY date DESC"#,
@@ -297,7 +305,8 @@ pub async fn list_threaded(
              WHERE m.mailbox = ?2 AND (?1 IS NULL OR m.account_id = ?1)
            )
            SELECT r.id, r.account_id, r.mailbox, r.from_addr AS "from", r.to_addr AS "to",
-                  r.cc_addr AS cc, r.reply_to_addr AS reply_to, r.subject, r.snippet,
+                  r.cc_addr AS cc, r.reply_to_addr AS reply_to, r.bcc_addr AS bcc,
+                  r.subject, r.snippet,
                   r.date, r.read,
                   COALESCE(r.message_id_hdr, '') AS message_id,
                   r.references_hdr AS "references",
@@ -325,11 +334,12 @@ pub async fn list_threaded(
 /// copy outside the all/archive containers.
 pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<MessageHeader>, AppError> {
     let rows = sqlx::query_as(
-        r#"SELECT id, account_id, mailbox, "from", "to", cc, reply_to, subject, snippet,
+        r#"SELECT id, account_id, mailbox, "from", "to", cc, reply_to, bcc, subject, snippet,
                   date, read, message_id, "references"
            FROM (
              SELECT m.id, m.account_id, m.mailbox, m.from_addr AS "from", m.to_addr AS "to",
-                    m.cc_addr AS cc, m.reply_to_addr AS reply_to, m.subject, m.snippet,
+                    m.cc_addr AS cc, m.reply_to_addr AS reply_to, m.bcc_addr AS bcc,
+                    m.subject, m.snippet,
                     m.date, m.read,
                     COALESCE(m.message_id_hdr, '') AS message_id,
                     m.references_hdr AS "references",

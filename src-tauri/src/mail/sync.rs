@@ -340,6 +340,7 @@ fn to_fetched(raw: &imap::RawHeader, uid_validity: i64) -> FetchedHeader {
         to: parsed.to,
         cc: parsed.cc,
         reply_to: parsed.reply_to,
+        bcc: parsed.bcc,
         subject: parsed.subject,
         date: parsed.date,
         // why: header fetches carry no body — the snippet is filled in when
