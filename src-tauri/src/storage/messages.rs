@@ -262,42 +262,50 @@ pub async fn list(
 ///
 /// why 'row:'||id as the fallback key: rows without a Message-ID can never
 /// thread, so each groups under a synthetic key only it can match.
+/// why COUNT(DISTINCT mkey): servers list one RFC message in several folders
+/// (Gmail's All Mail, aliased Sent) — copies share a Message-ID and must
+/// count once. Stats come from one GROUP BY pass instead of two correlated
+/// subqueries per row, which re-scanned the whole account for every row.
 pub async fn list_threaded(
     pool: &SqlitePool,
     account_id: Option<i64>,
     mailbox: &str,
 ) -> Result<Vec<MessageHeader>, AppError> {
     let rows = sqlx::query_as(
-        r#"WITH grouped AS (
-             SELECT m.id, m.account_id, m.mailbox, m.from_addr, m.to_addr, m.cc_addr,
-                    m.reply_to_addr, m.subject, m.snippet, m.date, m.read,
-                    m.message_id_hdr, m.references_hdr,
-                    ROW_NUMBER() OVER (
+        r#"WITH visible AS (
+             SELECT t.account_id,
+                    COALESCE(t.thread_key, 'row:' || t.id) AS tkey,
+                    COALESCE(NULLIF(t.message_id_hdr, ''), 'row:' || t.id) AS mkey,
+                    t.read
+             FROM messages t
+             LEFT JOIN mailboxes b ON b.account_id = t.account_id AND b.name = t.mailbox
+             WHERE COALESCE(b.role, '') NOT IN ('trash', 'junk', 'drafts')
+           ),
+           stats AS (
+             SELECT account_id, tkey,
+                    COUNT(DISTINCT mkey) AS thread_count,
+                    MAX(CASE WHEN read = 0 THEN 1 ELSE 0 END) AS thread_unread
+             FROM visible
+             GROUP BY account_id, tkey
+           ),
+           ranked AS (
+             SELECT m.*, ROW_NUMBER() OVER (
                       PARTITION BY m.account_id, COALESCE(m.thread_key, 'row:' || m.id)
                       ORDER BY m.date DESC, m.id DESC
-                    ) AS rn,
-                    (SELECT COUNT(*) FROM messages t
-                       LEFT JOIN mailboxes b ON b.account_id = t.account_id AND b.name = t.mailbox
-                     WHERE t.account_id = m.account_id
-                       AND COALESCE(t.thread_key, 'row:' || t.id) = COALESCE(m.thread_key, 'row:' || m.id)
-                       AND COALESCE(b.role, '') NOT IN ('trash', 'junk', 'drafts')
-                    ) AS thread_count,
-                    EXISTS (SELECT 1 FROM messages t
-                       LEFT JOIN mailboxes b ON b.account_id = t.account_id AND b.name = t.mailbox
-                     WHERE t.account_id = m.account_id
-                       AND COALESCE(t.thread_key, 'row:' || t.id) = COALESCE(m.thread_key, 'row:' || m.id)
-                       AND t.read = 0
-                       AND COALESCE(b.role, '') NOT IN ('trash', 'junk', 'drafts')
-                    ) AS thread_unread
+                    ) AS rn
              FROM messages m
              WHERE m.mailbox = ?2 AND (?1 IS NULL OR m.account_id = ?1)
            )
-           SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
-                  cc_addr AS cc, reply_to_addr AS reply_to, subject, snippet, date, read,
-                  COALESCE(message_id_hdr, '') AS message_id,
-                  references_hdr AS "references",
-                  thread_count, thread_unread
-           FROM grouped WHERE rn = 1 ORDER BY date DESC"#,
+           SELECT r.id, r.account_id, r.mailbox, r.from_addr AS "from", r.to_addr AS "to",
+                  r.cc_addr AS cc, r.reply_to_addr AS reply_to, r.subject, r.snippet,
+                  r.date, r.read,
+                  COALESCE(r.message_id_hdr, '') AS message_id,
+                  r.references_hdr AS "references",
+                  s.thread_count, s.thread_unread
+           FROM ranked r
+           JOIN stats s ON s.account_id = r.account_id
+                       AND s.tkey = COALESCE(r.thread_key, 'row:' || r.id)
+           WHERE r.rn = 1 ORDER BY r.date DESC"#,
     )
     .bind(account_id)
     .bind(mailbox)
@@ -310,20 +318,34 @@ pub async fn list_threaded(
 /// the thread view shows (everything but trash/junk/drafts). The anchor
 /// itself is always included — even keyless or sitting in Trash — so the
 /// viewer never comes up empty for the message the user clicked.
+///
+/// why the copy_rank window: one RFC message can be cached from several
+/// folders (Gmail's All Mail lists everything again, some servers alias
+/// Sent under two names) — the conversation shows it once, preferring the
+/// copy outside the all/archive containers.
 pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<MessageHeader>, AppError> {
     let rows = sqlx::query_as(
-        r#"SELECT m.id, m.account_id, m.mailbox, m.from_addr AS "from", m.to_addr AS "to",
-                  m.cc_addr AS cc, m.reply_to_addr AS reply_to, m.subject, m.snippet,
-                  m.date, m.read,
-                  COALESCE(m.message_id_hdr, '') AS message_id,
-                  m.references_hdr AS "references"
-           FROM messages m
-           JOIN messages a ON a.id = ?1 AND m.account_id = a.account_id
-           LEFT JOIN mailboxes b ON b.account_id = m.account_id AND b.name = m.mailbox
-           WHERE m.id = a.id
-              OR (a.thread_key IS NOT NULL AND m.thread_key = a.thread_key
-                  AND COALESCE(b.role, '') NOT IN ('trash', 'junk', 'drafts'))
-           ORDER BY m.date ASC, m.id ASC"#,
+        r#"SELECT id, account_id, mailbox, "from", "to", cc, reply_to, subject, snippet,
+                  date, read, message_id, "references"
+           FROM (
+             SELECT m.id, m.account_id, m.mailbox, m.from_addr AS "from", m.to_addr AS "to",
+                    m.cc_addr AS cc, m.reply_to_addr AS reply_to, m.subject, m.snippet,
+                    m.date, m.read,
+                    COALESCE(m.message_id_hdr, '') AS message_id,
+                    m.references_hdr AS "references",
+                    ROW_NUMBER() OVER (
+                      PARTITION BY COALESCE(NULLIF(m.message_id_hdr, ''), 'row:' || m.id)
+                      ORDER BY (COALESCE(b.role, '') IN ('all', 'archive')), m.id
+                    ) AS copy_rank
+             FROM messages m
+             JOIN messages a ON a.id = ?1 AND m.account_id = a.account_id
+             LEFT JOIN mailboxes b ON b.account_id = m.account_id AND b.name = m.mailbox
+             WHERE m.id = a.id
+                OR (a.thread_key IS NOT NULL AND m.thread_key = a.thread_key
+                    AND COALESCE(b.role, '') NOT IN ('trash', 'junk', 'drafts'))
+           )
+           WHERE copy_rank = 1
+           ORDER BY date ASC, id ASC"#,
     )
     .bind(message_id)
     .fetch_all(pool)
@@ -1094,6 +1116,110 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, anchor);
+    }
+
+    #[tokio::test]
+    async fn thread_of_shows_a_server_side_copy_only_once() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        use crate::storage::mailboxes::DiscoveredMailbox;
+        crate::storage::mailboxes::replace(
+            &pool,
+            id,
+            &[
+                DiscoveredMailbox {
+                    name: "INBOX".to_string(),
+                    role: Some("inbox".to_string()),
+                },
+                DiscoveredMailbox {
+                    name: "[Gmail]/All Mail".to_string(),
+                    role: Some("all".to_string()),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+        // Gmail lists every message twice: once in its folder, once in
+        // All Mail. Same Message-ID = same RFC message.
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                threaded(1, "a@x", "", &[]),
+                threaded(2, "b@x", "a@x", &["a@x"]),
+            ],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "[Gmail]/All Mail",
+            &[
+                threaded(1, "a@x", "", &[]),
+                threaded(2, "b@x", "a@x", &["a@x"]),
+            ],
+        )
+        .await
+        .unwrap();
+        let anchor = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+
+        let thread = thread_of(&pool, anchor).await.unwrap();
+
+        // Two messages, not four — and the INBOX copies are the ones shown.
+        let shown: Vec<(&str, &str)> = thread
+            .iter()
+            .map(|m| (m.message_id.as_str(), m.mailbox.as_str()))
+            .collect();
+        assert_eq!(shown, vec![("a@x", "INBOX"), ("b@x", "INBOX")]);
+    }
+
+    #[tokio::test]
+    async fn thread_counts_ignore_server_side_copies() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        use crate::storage::mailboxes::DiscoveredMailbox;
+        crate::storage::mailboxes::replace(
+            &pool,
+            id,
+            &[
+                DiscoveredMailbox {
+                    name: "INBOX".to_string(),
+                    role: Some("inbox".to_string()),
+                },
+                DiscoveredMailbox {
+                    name: "[Gmail]/All Mail".to_string(),
+                    role: Some("all".to_string()),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                threaded(1, "a@x", "", &[]),
+                threaded(2, "b@x", "a@x", &["a@x"]),
+            ],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "[Gmail]/All Mail",
+            &[threaded(1, "a@x", "", &[])],
+        )
+        .await
+        .unwrap();
+
+        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].thread_count, 2);
     }
 
     #[tokio::test]
