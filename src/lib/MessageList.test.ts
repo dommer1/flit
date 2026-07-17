@@ -12,6 +12,8 @@ function header(id: number, from: string, read: boolean): MessageHeader {
     to: "me@example.com",
     cc: "",
     replyTo: "",
+    messageId: "",
+    references: "",
     subject: `Subject ${id}`,
     snippet: "…",
     date: "2026-07-07T09:15:00Z",

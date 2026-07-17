@@ -11,6 +11,8 @@ const message: MessageHeader = {
   to: "me@example.com",
   cc: "",
   replyTo: "",
+  messageId: "",
+  references: "",
   subject: "Weekend plans",
   snippet: "Hey",
   date: "2026-07-07T09:15:00Z",

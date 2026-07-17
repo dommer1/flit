@@ -60,6 +60,12 @@ export interface OutgoingMessage {
   /** Message-ID of this message's autosaved server draft version, if any —
    * the backend deletes it from the Drafts folder after a successful send. */
   draftMessageId?: string;
+  /** Message-ID (no angle brackets) of the mail this one answers — becomes
+   * the In-Reply-To header. Absent for fresh mail. */
+  inReplyTo?: string;
+  /** Space-separated ancestor Message-IDs for the References header,
+   * oldest first, ending with `inReplyTo`. */
+  references?: string;
 }
 
 /** One file attached to an outgoing message, referenced by path. */
@@ -193,4 +199,9 @@ export interface MessageHeader {
   snippet: string;
   date: string;
   read: boolean;
+  /** Message-ID without angle brackets; empty when the sender set none. */
+  messageId: string;
+  /** Space-joined ancestor Message-IDs — a reply appends messageId to this
+   * chain to form its own References header. */
+  references: string;
 }

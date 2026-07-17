@@ -10,6 +10,8 @@ const message: MessageHeader = {
   to: "Me <me@example.com>",
   cc: "",
   replyTo: "",
+  messageId: "",
+  references: "",
   subject: "Weekend plans",
   snippet: "Are we still on?",
   date: "2026-07-07T09:15:00Z",
@@ -49,6 +51,28 @@ describe("replyDraft", () => {
 
   it("leaves the body empty when the original has no text", () => {
     expect(replyDraft(message, null).body).toBe("");
+  });
+
+  it("stamps the reply with the original's threading identity", () => {
+    const threaded = { ...message, messageId: "mid@x", references: "root@x" };
+
+    const draft = replyDraft(threaded, null);
+
+    expect(draft.inReplyTo).toBe("mid@x");
+    expect(draft.references).toBe("root@x mid@x");
+  });
+
+  it("starts the chain at the original when it had no References", () => {
+    const first = { ...message, messageId: "mid@x" };
+
+    expect(replyDraft(first, null).references).toBe("mid@x");
+  });
+
+  it("omits threading when the original has no Message-ID", () => {
+    const draft = replyDraft(message, null);
+
+    expect(draft.inReplyTo).toBeUndefined();
+    expect(draft.references).toBeUndefined();
   });
 });
 
@@ -119,6 +143,15 @@ describe("replyAllDraft", () => {
     expect(draft.body).toContain("> Hello");
     expect(draft.accountId).toBe(2);
   });
+
+  it("stamps reply-all with the original's threading identity", () => {
+    const threaded = { ...group, messageId: "mid@x", references: "root@x" };
+
+    const draft = replyAllDraft(threaded, null, "me@example.com");
+
+    expect(draft.inReplyTo).toBe("mid@x");
+    expect(draft.references).toBe("root@x mid@x");
+  });
 });
 
 describe("forwardDraft", () => {
@@ -158,6 +191,15 @@ describe("forwardDraft", () => {
 
     expect(body).toContain("---------- Forwarded message ----------");
     expect(body).toContain("From: Alice Doe <alice@example.com>");
+  });
+
+  it("starts a fresh thread — no threading headers", () => {
+    const threaded = { ...message, messageId: "mid@x", references: "root@x" };
+
+    const draft = forwardDraft(threaded, null);
+
+    expect(draft.inReplyTo).toBeUndefined();
+    expect(draft.references).toBeUndefined();
   });
 });
 

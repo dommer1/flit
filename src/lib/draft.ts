@@ -68,6 +68,21 @@ function quote(message: MessageHeader, bodyText: string): string {
   return `\n\n${attribution}\n${quoted}\n`;
 }
 
+/** Threading identity a reply carries so recipients (and our own Sent copy)
+ * group it into the conversation: answer the original's Message-ID and
+ * extend its References chain. Empty when the original has no Message-ID —
+ * there is nothing to thread on. */
+function threading(
+  message: MessageHeader,
+): Pick<OutgoingMessage, "inReplyTo" | "references"> {
+  if (!message.messageId) return {};
+  const chain = message.references.split(/\s+/).filter(Boolean);
+  return {
+    inReplyTo: message.messageId,
+    references: [...chain, message.messageId].join(" "),
+  };
+}
+
 /** Reply goes from the account the message arrived on, to its sender. */
 export function replyDraft(
   message: MessageHeader,
@@ -78,6 +93,7 @@ export function replyDraft(
     to: senderAddress(message.from),
     subject: replySubject(message.subject),
     body: bodyText ? quote(message, bodyText) : "",
+    ...threading(message),
   };
 }
 
@@ -105,6 +121,7 @@ export function replyAllDraft(
     cc: cc.join(", "),
     subject: replySubject(message.subject),
     body: bodyText ? quote(message, bodyText) : "",
+    ...threading(message),
   };
 }
 
