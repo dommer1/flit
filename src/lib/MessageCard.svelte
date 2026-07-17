@@ -83,8 +83,15 @@
    * exists for — see the iframe below. Scripts stay blocked, so nothing
    * inside the frame can exploit the shared origin.
    */
+  /** Ceiling for a measured body: viewport-tracking content (100vh blocks)
+   * makes the content-driven measurement follow the frame itself — such a
+   * pathological mail stops here and scrolls inside instead of growing the
+   * frame forever. */
+  const MAX_BODY_HEIGHT = 20000;
+
   function autoSize(frame: HTMLIFrameElement) {
-    let observer: ResizeObserver | null = null;
+    let bodyObserver: ResizeObserver | null = null;
+
     const size = () => {
       // why optional: jsdom (tests) has no srcdoc layout — leave the CSS
       // fallback height alone when there is nothing to measure.
@@ -99,29 +106,49 @@
       const margins = styles
         ? parseFloat(styles.marginTop) + parseFloat(styles.marginBottom)
         : 0;
-      const height = Math.ceil(body.scrollHeight + (margins || 0)) + 2;
-      // why the 2px hysteresis: sub-pixel rounding (or viewport-tracking
-      // content like 100vh blocks) must never re-trigger a resize cascade.
-      if (Math.abs(height - frame.offsetHeight) > 2) {
+      const height = Math.min(
+        Math.ceil(body.scrollHeight + (margins || 0)) + 2,
+        MAX_BODY_HEIGHT,
+      );
+      const current = frame.offsetHeight;
+      // why asymmetric: any undershoot leaves an inner scrollbar (the
+      // "double scroll"), so growing applies immediately; shrinking
+      // tolerates 2px so sub-pixel rounding never oscillates.
+      if (height > current || height < current - 2) {
         frame.style.height = `${height}px`;
       }
     };
-    // (Re)attach to the current document: "Load Images" swaps the srcdoc,
-    // which replaces the whole document — and with it the observed body.
-    // Observing the body (not the frame) keeps the loop one-directional;
-    // the frame's own height never changes the body's layout.
+
+    // (Re)attach to the current document: the srcdoc replaces the initial
+    // about:blank document ("Load Images" swaps it again later), orphaning
+    // anything bound to the previous document's body.
     const hook = () => {
       size();
-      observer?.disconnect();
-      observer = new ResizeObserver(size);
-      const body = frame.contentDocument?.body;
-      if (body) observer.observe(body);
+      bodyObserver?.disconnect();
+      bodyObserver = new ResizeObserver(size);
+      const doc = frame.contentDocument;
+      if (doc?.body) bodyObserver.observe(doc.body);
+      // why: inline data: images can report their intrinsic size after the
+      // document's load event — each late decode reflows the body, so every
+      // finished image re-measures. Parent-attached listeners work without
+      // any script running inside the frame.
+      for (const image of Array.from(doc?.images ?? [])) {
+        image.addEventListener("load", size);
+      }
     };
+
     frame.addEventListener("load", hook);
     hook();
+    // why also observe the frame: it fires on insertion (covering a load
+    // event the listener attached too late for) and on pane resizes. The
+    // measurement is content-driven, so this can re-trigger size() but
+    // never feed back into it.
+    const frameObserver = new ResizeObserver(size);
+    frameObserver.observe(frame);
     return {
       destroy() {
-        observer?.disconnect();
+        bodyObserver?.disconnect();
+        frameObserver.disconnect();
       },
     };
   }
