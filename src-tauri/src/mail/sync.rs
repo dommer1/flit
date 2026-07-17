@@ -140,7 +140,43 @@ async fn sync_mailbox(
     for (id, read) in plan.flag {
         messages::set_read(pool, id, read).await?;
     }
+
+    backfill_thread_headers(pool, account_id, session, mailbox).await?;
     Ok(if incremental { headers } else { Vec::new() })
+}
+
+/// One-time repair for rows cached before the threading columns existed:
+/// re-fetch just their headers and compute their thread keys. A no-op once
+/// every cached row carries a message_id_hdr, i.e. on every sync but the
+/// first after updating.
+async fn backfill_thread_headers(
+    pool: &SqlitePool,
+    account_id: i64,
+    session: &mut imap::ImapSession,
+    mailbox: &str,
+) -> Result<(), AppError> {
+    let missing = messages::rows_missing_threading(pool, account_id, mailbox).await?;
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let uid_set = missing
+        .iter()
+        .map(|(_, uid)| uid.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let fetched = imap::fetch_headers_by_uid(session, &uid_set).await?;
+    let row_by_uid: std::collections::HashMap<i64, i64> =
+        missing.into_iter().map(|(id, uid)| (uid, id)).collect();
+    for raw in &fetched {
+        // A uid the cache no longer knows (or that vanished server-side
+        // mid-run) is simply skipped; reconciliation owns deletions.
+        let Some(&row_id) = row_by_uid.get(&raw.uid) else {
+            continue;
+        };
+        let header = to_fetched(raw, 0);
+        messages::backfill_threading(pool, account_id, row_id, &header).await?;
+    }
+    Ok(())
 }
 
 /// What reconciliation must change locally: rows to drop (the message left

@@ -145,6 +145,50 @@ pub(crate) async fn assign_thread_key(
     Ok(Some(adopted.clone()))
 }
 
+/// Rows cached before the threading migration, `(row id, uid)` — their
+/// header ids were never parsed (message_id_hdr IS NULL; new inserts always
+/// store at least ''). Oldest first, so roots get keyed before replies when
+/// the backfill walks them.
+pub async fn rows_missing_threading(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+) -> Result<Vec<(i64, i64)>, AppError> {
+    Ok(sqlx::query_as(
+        "SELECT id, uid FROM messages
+         WHERE account_id = ? AND mailbox = ? AND message_id_hdr IS NULL
+         ORDER BY date",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Repair one pre-migration row: store its re-fetched header ids and key it
+/// into a thread with the same adoption/merge logic fresh inserts use.
+pub async fn backfill_threading(
+    pool: &SqlitePool,
+    account_id: i64,
+    row_id: i64,
+    header: &FetchedHeader,
+) -> Result<(), AppError> {
+    let thread_key = assign_thread_key(pool, account_id, header).await?;
+    sqlx::query(
+        "UPDATE messages
+         SET message_id_hdr = ?, in_reply_to_hdr = ?, references_hdr = ?, thread_key = ?
+         WHERE id = ?",
+    )
+    .bind(&header.message_id)
+    .bind(&header.in_reply_to)
+    .bind(header.references.join(" "))
+    .bind(&thread_key)
+    .bind(row_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Recompute stored snippets that still carry a URL, using the current
 /// `snippet_of` rules. Runs once at startup: rows already cached by an older
 /// build kept the raw URL the parser now strips, and a re-fetch would never
@@ -638,6 +682,72 @@ mod tests {
         let keys = thread_keys(&pool, id).await;
         assert_eq!(keys[0], keys[1]);
         assert_eq!(keys[1], keys[2]);
+    }
+
+    /// Simulate a row cached by a build without the threading columns.
+    async fn null_out_threading(pool: &SqlitePool, account_id: i64, uid: i64) {
+        sqlx::query(
+            "UPDATE messages SET message_id_hdr = NULL, in_reply_to_hdr = '',
+             references_hdr = '', thread_key = NULL WHERE account_id = ? AND uid = ?",
+        )
+        .bind(account_id)
+        .bind(uid)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn rows_missing_threading_lists_only_unparsed_rows() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "a@x", "", &[]), threaded(2, "", "", &[])],
+        )
+        .await
+        .unwrap();
+        null_out_threading(&pool, id, 1).await;
+
+        let missing = rows_missing_threading(&pool, id, "INBOX").await.unwrap();
+
+        // uid 2 was parsed (its sender just set no Message-ID) — only the
+        // NULLed pre-migration row needs a backfill.
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].1, 1);
+    }
+
+    #[tokio::test]
+    async fn backfill_threading_joins_a_legacy_row_to_its_thread() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                threaded(1, "a@x", "", &[]),
+                threaded(2, "b@x", "a@x", &["a@x"]),
+            ],
+        )
+        .await
+        .unwrap();
+        null_out_threading(&pool, id, 2).await;
+        let (row_id, _) = rows_missing_threading(&pool, id, "INBOX").await.unwrap()[0];
+
+        backfill_threading(&pool, id, row_id, &threaded(2, "b@x", "a@x", &["a@x"]))
+            .await
+            .unwrap();
+
+        let keys = thread_keys(&pool, id).await;
+        assert_eq!(keys[0], keys[1]);
+        assert!(keys[0].is_some());
+        assert!(rows_missing_threading(&pool, id, "INBOX")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
