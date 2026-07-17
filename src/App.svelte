@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import {
     archiveMessage,
+    archiveThread,
     cancelScheduled,
     getMessageBody,
     getSwipeActions,
@@ -10,7 +11,9 @@
     listMessages,
     listScheduled,
     moveMessage,
+    moveThread,
     moveToTrash,
+    trashThread,
     onAccountsChanged,
     onMessagesChanged,
     onSettingsChanged,
@@ -127,8 +130,15 @@
     });
   }
 
+  // Thread rows (a grouped conversation) act on every member in the
+  // current folder; single rows — including all rows of the flat
+  // trash/junk/drafts views, where threadCount is 0 — act on one message.
+  function isThreadRow(id: number): boolean {
+    return (messages.find((m) => m.id === id)?.threadCount ?? 0) > 1;
+  }
+
   function handleTrash(id: number) {
-    evictMessage(id, moveToTrash);
+    evictMessage(id, isThreadRow(id) ? trashThread : moveToTrash);
   }
 
   // What the list's swipe gesture does per direction — user-configurable in
@@ -175,19 +185,21 @@
   // would be a silent server no-op while the row vanished from the list.
   function handleArchive(id: number) {
     const message = messages.find((m) => m.id === id);
+    const thread = isThreadRow(id);
     if (message && isArchived(message)) {
       const inbox =
         (mailboxesByAccount[message.accountId] ?? []).find(
           (m) => m.role === "inbox",
         )?.name ?? "INBOX";
-      evictMessage(id, (messageId) => moveMessage(messageId, inbox));
+      handleMove(id, inbox);
     } else {
-      evictMessage(id, archiveMessage);
+      evictMessage(id, thread ? archiveThread : archiveMessage);
     }
   }
 
   function handleMove(id: number, mailbox: string) {
-    evictMessage(id, (messageId) => moveMessage(messageId, mailbox));
+    const move = isThreadRow(id) ? moveThread : moveMessage;
+    evictMessage(id, (messageId) => move(messageId, mailbox));
   }
 
   // Arrow Up / Down walk the list. Ignored while typing in a field (search,

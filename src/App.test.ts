@@ -186,6 +186,9 @@ vi.mock("./lib/api", () => ({
   moveToTrash: vi.fn(async () => undefined),
   archiveMessage: vi.fn(async () => undefined),
   moveMessage: vi.fn(async () => undefined),
+  trashThread: vi.fn(async () => undefined),
+  archiveThread: vi.fn(async () => undefined),
+  moveThread: vi.fn(async () => undefined),
   openCompose: vi.fn(async () => undefined),
   openDraft: vi.fn(async () => undefined),
   openSettings: vi.fn(async () => undefined),
@@ -780,6 +783,21 @@ it("trashes the open message and steps to its neighbour", async () => {
   // The row leaves the list at once (optimistic), selection steps to the next.
   expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
   await screen.findByRole("heading", { name: "Re: Invoice" });
+});
+
+it("routes a thread row's trash and archive to the whole conversation", async () => {
+  currentMessages = [
+    { ...allMessages[0], threadCount: 2, threadUnread: false },
+    allMessages[1],
+  ];
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  await screen.findByRole("heading", { name: "Weekend plans" });
+
+  await fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+
+  expect(api.trashThread).toHaveBeenCalledWith(1);
+  expect(api.moveToTrash).not.toHaveBeenCalled();
 });
 
 it("archives the open message and steps to its neighbour", async () => {

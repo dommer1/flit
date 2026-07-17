@@ -134,6 +134,21 @@ export function moveToTrash(messageId: number): Promise<void> {
   return invoke<void>("move_to_trash", { messageId });
 }
 
+/** Trash the whole conversation as shown in the message's folder. */
+export function trashThread(messageId: number): Promise<void> {
+  return invoke<void>("trash_thread", { messageId });
+}
+
+/** Archive the whole conversation as shown in the message's folder. */
+export function archiveThread(messageId: number): Promise<void> {
+  return invoke<void>("archive_thread", { messageId });
+}
+
+/** Move the whole conversation (as shown in the message's folder). */
+export function moveThread(messageId: number, mailbox: string): Promise<void> {
+  return invoke<void>("move_thread", { messageId, mailbox });
+}
+
 /**
  * Archive a message: move it to the account's Archive folder on the server,
  * then drop it from the local cache. Rejects (and keeps the row) if there is
