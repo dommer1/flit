@@ -14,6 +14,8 @@ function header(id: number, from: string, read: boolean): MessageHeader {
     replyTo: "",
     messageId: "",
     references: "",
+    threadCount: 1,
+    threadUnread: false,
     subject: `Subject ${id}`,
     snippet: "…",
     date: "2026-07-07T09:15:00Z",

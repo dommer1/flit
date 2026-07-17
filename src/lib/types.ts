@@ -207,4 +207,9 @@ export interface MessageHeader {
   /** Space-joined ancestor Message-IDs — a reply appends messageId to this
    * chain to form its own References header. */
   references: string;
+  /** Messages in this row's conversation (all folders except trash, junk
+   * and drafts). Always ≥ 1 in threaded lists; 0 in flat views. */
+  threadCount: number;
+  /** Whether any message of the conversation is unread. */
+  threadUnread: boolean;
 }

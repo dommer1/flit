@@ -79,6 +79,12 @@ export function listMessages(
   return invoke<MessageHeader[]>("list_messages", { accountId, mailbox });
 }
 
+/** The full conversation of one message (all folders except trash, junk
+ * and drafts), oldest first — what the conversation view renders. */
+export function listThread(messageId: number): Promise<MessageHeader[]> {
+  return invoke<MessageHeader[]>("list_thread", { messageId });
+}
+
 /**
  * Search the local cache with a gmail-style query
  * (`from:x is:unread faktúra`). `accountId: null` searches all accounts.

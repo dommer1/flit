@@ -80,6 +80,7 @@ pub fn run() {
             commands::list_contacts,
             commands::list_mailboxes,
             commands::list_messages,
+            commands::list_thread,
             commands::search_messages,
             commands::sync_account,
             commands::set_message_read,

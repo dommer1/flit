@@ -386,4 +386,12 @@ pub struct MessageHeader {
     /// Space-joined ancestor Message-IDs — a reply appends `message_id` to
     /// this chain to form its own References header.
     pub references: String,
+    /// Messages in this row's conversation as the thread view shows it —
+    /// all folders of the account except trash/junk/drafts. Always ≥ 1 in
+    /// threaded lists; 0 in flat queries, which don't compute it.
+    #[sqlx(default)]
+    pub thread_count: i64,
+    /// Whether any message of the conversation is unread.
+    #[sqlx(default)]
+    pub thread_unread: bool,
 }

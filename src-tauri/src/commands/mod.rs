@@ -296,6 +296,9 @@ pub(crate) fn now_epoch() -> i64 {
         .unwrap_or(0)
 }
 
+/// Message list for one folder view: threaded (one row per conversation)
+/// everywhere except trash/junk/drafts, which stay flat — an action there
+/// must touch exactly one message, never its whole conversation.
 #[tauri::command]
 pub async fn list_messages(
     state: State<'_, AppState>,
@@ -303,7 +306,31 @@ pub async fn list_messages(
     mailbox: Option<String>,
 ) -> Result<Vec<MessageHeader>, AppError> {
     let mailbox = mailbox.as_deref().unwrap_or("INBOX");
-    storage::messages::list(&state.pool, account_id, mailbox).await
+    let flat = match account_id {
+        Some(id) => matches!(
+            storage::mailboxes::role_of(&state.pool, id, mailbox)
+                .await?
+                .as_deref(),
+            Some("trash" | "junk" | "drafts")
+        ),
+        // why: the unified view only ever shows INBOX folders.
+        None => false,
+    };
+    if flat {
+        storage::messages::list(&state.pool, account_id, mailbox).await
+    } else {
+        storage::messages::list_threaded(&state.pool, account_id, mailbox).await
+    }
+}
+
+/// The full conversation of one message (all folders except
+/// trash/junk/drafts), oldest first — what the conversation view renders.
+#[tauri::command]
+pub async fn list_thread(
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<Vec<MessageHeader>, AppError> {
+    storage::messages::thread_of(&state.pool, message_id).await
 }
 
 /// Autocomplete for compose recipient fields: locally harvested contacts

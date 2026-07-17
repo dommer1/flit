@@ -12,6 +12,8 @@ const message: MessageHeader = {
   replyTo: "",
   messageId: "",
   references: "",
+  threadCount: 1,
+  threadUnread: false,
   subject: "Weekend plans",
   snippet: "Are we still on?",
   date: "2026-07-07T09:15:00Z",

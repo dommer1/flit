@@ -108,6 +108,22 @@ pub async fn sent_name(pool: &SqlitePool, account_id: i64) -> Result<Option<Stri
     name_for_role(pool, account_id, "sent").await
 }
 
+/// Special-use role of one folder; `None` for custom folders and for names
+/// discovery never saw.
+pub async fn role_of(
+    pool: &SqlitePool,
+    account_id: i64,
+    name: &str,
+) -> Result<Option<String>, AppError> {
+    let role: Option<Option<String>> =
+        sqlx::query_scalar("SELECT role FROM mailboxes WHERE account_id = ? AND name = ?")
+            .bind(account_id)
+            .bind(name)
+            .fetch_optional(pool)
+            .await?;
+    Ok(role.flatten())
+}
+
 /// Whether `name` is a discovered folder of this account — the guard a
 /// user-supplied move destination must pass before any IMAP command runs.
 pub async fn exists(pool: &SqlitePool, account_id: i64, name: &str) -> Result<bool, AppError> {

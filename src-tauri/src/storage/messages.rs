@@ -255,6 +255,82 @@ pub async fn list(
     Ok(headers)
 }
 
+/// One row per conversation for the viewed mailbox, newest first — the
+/// newest message in the folder represents its thread. Unlike `list`, the
+/// count/unread columns look across the whole account (minus trash, junk
+/// and drafts), matching what the conversation view shows on click.
+///
+/// why 'row:'||id as the fallback key: rows without a Message-ID can never
+/// thread, so each groups under a synthetic key only it can match.
+pub async fn list_threaded(
+    pool: &SqlitePool,
+    account_id: Option<i64>,
+    mailbox: &str,
+) -> Result<Vec<MessageHeader>, AppError> {
+    let rows = sqlx::query_as(
+        r#"WITH grouped AS (
+             SELECT m.id, m.account_id, m.mailbox, m.from_addr, m.to_addr, m.cc_addr,
+                    m.reply_to_addr, m.subject, m.snippet, m.date, m.read,
+                    m.message_id_hdr, m.references_hdr,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY m.account_id, COALESCE(m.thread_key, 'row:' || m.id)
+                      ORDER BY m.date DESC, m.id DESC
+                    ) AS rn,
+                    (SELECT COUNT(*) FROM messages t
+                       LEFT JOIN mailboxes b ON b.account_id = t.account_id AND b.name = t.mailbox
+                     WHERE t.account_id = m.account_id
+                       AND COALESCE(t.thread_key, 'row:' || t.id) = COALESCE(m.thread_key, 'row:' || m.id)
+                       AND COALESCE(b.role, '') NOT IN ('trash', 'junk', 'drafts')
+                    ) AS thread_count,
+                    EXISTS (SELECT 1 FROM messages t
+                       LEFT JOIN mailboxes b ON b.account_id = t.account_id AND b.name = t.mailbox
+                     WHERE t.account_id = m.account_id
+                       AND COALESCE(t.thread_key, 'row:' || t.id) = COALESCE(m.thread_key, 'row:' || m.id)
+                       AND t.read = 0
+                       AND COALESCE(b.role, '') NOT IN ('trash', 'junk', 'drafts')
+                    ) AS thread_unread
+             FROM messages m
+             WHERE m.mailbox = ?2 AND (?1 IS NULL OR m.account_id = ?1)
+           )
+           SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
+                  cc_addr AS cc, reply_to_addr AS reply_to, subject, snippet, date, read,
+                  COALESCE(message_id_hdr, '') AS message_id,
+                  references_hdr AS "references",
+                  thread_count, thread_unread
+           FROM grouped WHERE rn = 1 ORDER BY date DESC"#,
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// The whole conversation of one message, oldest first, across the folders
+/// the thread view shows (everything but trash/junk/drafts). The anchor
+/// itself is always included — even keyless or sitting in Trash — so the
+/// viewer never comes up empty for the message the user clicked.
+pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<MessageHeader>, AppError> {
+    let rows = sqlx::query_as(
+        r#"SELECT m.id, m.account_id, m.mailbox, m.from_addr AS "from", m.to_addr AS "to",
+                  m.cc_addr AS cc, m.reply_to_addr AS reply_to, m.subject, m.snippet,
+                  m.date, m.read,
+                  COALESCE(m.message_id_hdr, '') AS message_id,
+                  m.references_hdr AS "references"
+           FROM messages m
+           JOIN messages a ON a.id = ?1 AND m.account_id = a.account_id
+           LEFT JOIN mailboxes b ON b.account_id = m.account_id AND b.name = m.mailbox
+           WHERE m.id = a.id
+              OR (a.thread_key IS NOT NULL AND m.thread_key = a.thread_key
+                  AND COALESCE(b.role, '') NOT IN ('trash', 'junk', 'drafts'))
+           ORDER BY m.date ASC, m.id ASC"#,
+    )
+    .bind(message_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Highest cached UID for incremental sync; `None` when nothing is cached.
 pub async fn max_uid(
     pool: &SqlitePool,
@@ -776,6 +852,195 @@ mod tests {
         assert_eq!(reply.references, "a@x");
         let root = all.iter().find(|m| m.message_id == "a@x").unwrap();
         assert_eq!(root.references, "");
+    }
+
+    /// Folder roles the thread queries depend on: which folders count into
+    /// a conversation (not trash/junk/drafts) comes from the mailboxes table.
+    async fn seed_roles(pool: &SqlitePool, account_id: i64) {
+        use crate::storage::mailboxes::DiscoveredMailbox;
+        let found: Vec<DiscoveredMailbox> = [
+            ("INBOX", Some("inbox")),
+            ("Sent", Some("sent")),
+            ("Trash", Some("trash")),
+            ("Drafts", Some("drafts")),
+        ]
+        .into_iter()
+        .map(|(name, role)| DiscoveredMailbox {
+            name: name.to_string(),
+            role: role.map(str::to_string),
+        })
+        .collect();
+        crate::storage::mailboxes::replace(pool, account_id, &found)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn threaded_list_shows_one_row_per_conversation() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                threaded(1, "a@x", "", &[]),
+                threaded(3, "b@x", "a@x", &["a@x"]),
+                threaded(4, "solo@x", "", &[]),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+
+        assert_eq!(rows.len(), 2);
+        // Newest first: the solo message (uid 4 → date 07-04) precedes the
+        // thread, represented by its newest inbox message (uid 3).
+        assert_eq!(rows[0].message_id, "solo@x");
+        assert_eq!(rows[0].thread_count, 1);
+        assert_eq!(rows[1].message_id, "b@x");
+        assert_eq!(rows[1].thread_count, 2);
+    }
+
+    #[tokio::test]
+    async fn thread_count_spans_folders_but_trash_stays_out() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        upsert_headers(&pool, id, "INBOX", &[threaded(1, "a@x", "", &[])])
+            .await
+            .unwrap();
+        upsert_headers(&pool, id, "Sent", &[threaded(1, "b@x", "a@x", &["a@x"])])
+            .await
+            .unwrap();
+        upsert_headers(&pool, id, "Trash", &[threaded(1, "c@x", "a@x", &["a@x"])])
+            .await
+            .unwrap();
+
+        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].thread_count, 2);
+    }
+
+    #[tokio::test]
+    async fn thread_unread_flags_any_unread_sibling() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        let mut root = threaded(1, "a@x", "", &[]);
+        root.read = false;
+        let mut reply = threaded(2, "b@x", "a@x", &["a@x"]);
+        reply.read = true;
+        upsert_headers(&pool, id, "INBOX", &[root, reply])
+            .await
+            .unwrap();
+
+        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        // The representative (newest) is read, but the thread is not.
+        assert!(rows[0].read);
+        assert!(rows[0].thread_unread);
+    }
+
+    #[tokio::test]
+    async fn keyless_messages_stay_single_rows() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "", "", &[]), threaded(2, "", "", &[])],
+        )
+        .await
+        .unwrap();
+
+        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.thread_count == 1));
+    }
+
+    #[tokio::test]
+    async fn unified_threaded_list_keeps_accounts_apart() {
+        let pool = test_pool().await;
+        let first = account(&pool, "Personal").await;
+        let second = account(&pool, "Work").await;
+        seed_roles(&pool, first).await;
+        seed_roles(&pool, second).await;
+        upsert_headers(&pool, first, "INBOX", &[threaded(1, "a@x", "", &[])])
+            .await
+            .unwrap();
+        upsert_headers(&pool, second, "INBOX", &[threaded(1, "a@x", "", &[])])
+            .await
+            .unwrap();
+
+        let rows = list_threaded(&pool, None, "INBOX").await.unwrap();
+
+        // Identical thread keys in different accounts must not collapse.
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn thread_of_returns_the_conversation_oldest_first_across_folders() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                threaded(1, "a@x", "", &[]),
+                threaded(3, "c@x", "b@x", &["a@x", "b@x"]),
+            ],
+        )
+        .await
+        .unwrap();
+        upsert_headers(&pool, id, "Sent", &[threaded(2, "b@x", "a@x", &["a@x"])])
+            .await
+            .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "Trash",
+            &[threaded(4, "d@x", "c@x", &["a@x", "b@x", "c@x"])],
+        )
+        .await
+        .unwrap();
+        let anchor = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+
+        let thread = thread_of(&pool, anchor).await.unwrap();
+
+        let mids: Vec<&str> = thread.iter().map(|m| m.message_id.as_str()).collect();
+        // Oldest first, Sent included, Trash excluded.
+        assert_eq!(mids, vec!["a@x", "b@x", "c@x"]);
+    }
+
+    #[tokio::test]
+    async fn thread_of_for_a_keyless_message_is_just_itself() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "", "", &[]), threaded(2, "", "", &[])],
+        )
+        .await
+        .unwrap();
+        let anchor = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+
+        let thread = thread_of(&pool, anchor).await.unwrap();
+
+        assert_eq!(thread.len(), 1);
+        assert_eq!(thread[0].id, anchor);
     }
 
     #[tokio::test]
