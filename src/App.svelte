@@ -332,8 +332,11 @@
     if (!fallback) return;
     // why: new mail goes from the account being viewed; on the unified inbox
     // the first account acts as the default sender.
+    const sender = accounts.find((a) => a.id === selectedAccountId) ?? fallback;
     void openCompose({
-      accountId: selectedAccountId ?? fallback.id,
+      accountId: sender.id,
+      // The identity marked Default in the account's alias settings.
+      aliasId: sender.defaultAliasId ?? undefined,
       to: "",
       subject: "",
       body: "",

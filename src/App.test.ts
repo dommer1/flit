@@ -361,6 +361,20 @@ it("opens the settings window from the toolbar gear", async () => {
   await waitFor(() => expect(api.openSettings).toHaveBeenCalled());
 });
 
+it("a new message starts from the account's default send-as identity", async () => {
+  currentAccounts = [{ ...accounts[0], defaultAliasId: 5 }, accounts[1]];
+  render(App);
+  await screen.findByText("Weekend plans");
+
+  await fireEvent.click(screen.getByRole("button", { name: "New Message" }));
+
+  await waitFor(() =>
+    expect(api.openCompose).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: 1, aliasId: 5 }),
+    ),
+  );
+});
+
 it("opens a compose window for a new message", async () => {
   render(App);
   await screen.findByText("Weekend plans");

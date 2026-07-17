@@ -6,6 +6,7 @@
     closeCompose,
     inspectAttachments,
     listAccounts,
+    listAliases,
     listSignatures,
     onFileDrop,
     queueSend,
@@ -18,6 +19,7 @@
   import { textToHtml } from "./richtext";
   import type {
     Account,
+    Alias,
     AttachmentInfo,
     OutgoingMessage,
     Signature,
@@ -33,6 +35,22 @@
 
   let accounts = $state<Account[]>([]);
   let accountId = $state<number | null>(null);
+  let aliases = $state<Alias[]>([]);
+  /** Send-as alias of the picked identity; null = the account's address. */
+  let aliasId = $state<number | null>(null);
+  // why a string key: one <select> carries account+alias pairs — "2" is the
+  // account's own address, "2:10" its alias with id 10.
+  let identityKey = $derived(
+    accountId === null
+      ? ""
+      : aliasId === null
+        ? String(accountId)
+        : `${accountId}:${aliasId}`,
+  );
+
+  function aliasesFor(id: number): Alias[] {
+    return aliases.filter((a) => a.accountId === id);
+  }
   let to = $state("");
   let cc = $state("");
   let bcc = $state("");
@@ -82,9 +100,14 @@
   }
 
   function onFromPicked(event: Event) {
+    const [acc, alias] = (
+      event.currentTarget as HTMLSelectElement
+    ).value.split(":");
+    accountId = Number(acc);
+    aliasId = alias ? Number(alias) : null;
+    // Signatures follow the account, not the alias.
     if (signatureTouched) return;
-    const id = Number((event.currentTarget as HTMLSelectElement).value);
-    applySignature(defaultSignatureFor(id));
+    applySignature(defaultSignatureFor(accountId));
   }
   let attachments = $state<AttachmentInfo[]>([]);
   /** Thumbnail data: URIs by attachment path; absent = placeholder card. */
@@ -130,16 +153,25 @@
     let unlisten: (() => void) | undefined;
     let unlistenClose: (() => void) | undefined;
     void (async () => {
-      const [loadedAccounts, draft, loadedSignatures] = await Promise.all([
-        listAccounts(),
-        takeComposeDraft(),
-        listSignatures(),
-      ]);
+      const [loadedAccounts, draft, loadedSignatures, loadedAliases] =
+        await Promise.all([
+          listAccounts(),
+          takeComposeDraft(),
+          listSignatures(),
+          listAliases(),
+        ]);
       accounts = loadedAccounts;
       signatures = loadedSignatures;
+      aliases = loadedAliases;
       // why: a null draft (webview reload after pickup) degrades to a blank
       // message from the first account instead of a broken window.
       accountId = draft?.accountId ?? accounts[0]?.id ?? null;
+      // why the find: an alias deleted since the draft was parked degrades
+      // to the account's own address instead of an empty From picker.
+      const wanted = draft ? draft.aliasId : accounts[0]?.defaultAliasId;
+      aliasId =
+        aliases.find((a) => a.id === wanted && a.accountId === accountId)
+          ?.id ?? null;
       to = draft?.to ?? "";
       cc = draft?.cc ?? "";
       bcc = draft?.bcc ?? "";
@@ -281,6 +313,7 @@
   function buildMessage(accountId: number) {
     return {
       accountId,
+      aliasId: aliasId ?? undefined,
       to,
       cc,
       bcc,
@@ -464,12 +497,15 @@
     <span class="key" aria-hidden="true">From:</span>
     <select
       aria-label="From"
-      bind:value={accountId}
+      value={identityKey}
       onchange={onFromPicked}
       disabled={queueing}
     >
       {#each accounts as account (account.id)}
-        <option value={account.id}>{account.email}</option>
+        <option value={String(account.id)}>{account.email}</option>
+        {#each aliasesFor(account.id) as alias (alias.id)}
+          <option value={`${account.id}:${alias.id}`}>{alias.email}</option>
+        {/each}
       {/each}
     </select>
     <span class="chevron" aria-hidden="true">⌄</span>

@@ -1,6 +1,12 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import type { Account, Contact, OutgoingMessage, Signature } from "./types";
+import type {
+  Account,
+  Alias,
+  Contact,
+  OutgoingMessage,
+  Signature,
+} from "./types";
 
 const accounts: Account[] = [
   {
@@ -60,8 +66,13 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 
+const aliases: Alias[] = [
+  { id: 10, accountId: 2, name: "Igor", email: "igor@vocalio.sk" },
+];
+
 vi.mock("./api", () => ({
   listAccounts: vi.fn(async () => accounts),
+  listAliases: vi.fn(async (): Promise<Alias[]> => []),
   listSignatures: vi.fn(async (): Promise<Signature[]> => []),
   listContacts: vi.fn(async (): Promise<Contact[]> => []),
   takeComposeDraft: vi.fn(async (): Promise<OutgoingMessage | null> => null),
@@ -680,4 +691,76 @@ it("closes the suggestions with Escape", async () => {
   expect(
     screen.queryByRole("option", { name: /ann@example\.com/ }),
   ).not.toBeInTheDocument();
+});
+
+it("sends as the alias picked in the From menu", async () => {
+  vi.mocked(api.listAliases).mockResolvedValueOnce(aliases);
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    accountId: 2,
+    to: "alice@example.com",
+    subject: "Hi",
+    body: "hello",
+  });
+
+  render(ComposeWindow);
+  await waitFor(() => expect(screen.getByLabelText("From")).toHaveValue("2"));
+
+  await fireEvent.change(screen.getByLabelText("From"), {
+    target: { value: "2:10" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: 2, aliasId: 10 }),
+    ),
+  );
+});
+
+it("preselects the alias a parked draft was composed with", async () => {
+  vi.mocked(api.listAliases).mockResolvedValueOnce(aliases);
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    accountId: 2,
+    aliasId: 10,
+    to: "alice@example.com",
+    subject: "Hi",
+    body: "hello",
+  });
+
+  render(ComposeWindow);
+
+  await waitFor(() =>
+    expect(screen.getByLabelText("From")).toHaveValue("2:10"),
+  );
+});
+
+it("degrades a draft's deleted alias to the account's own address", async () => {
+  // listAliases resolves [] — alias 10 no longer exists
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    accountId: 2,
+    aliasId: 10,
+    to: "alice@example.com",
+    subject: "Hi",
+    body: "hello",
+  });
+
+  render(ComposeWindow);
+
+  await waitFor(() => expect(screen.getByLabelText("From")).toHaveValue("2"));
+});
+
+it("starts a blank compose from the account's default identity", async () => {
+  vi.mocked(api.listAccounts).mockResolvedValueOnce([
+    { ...accounts[0], defaultAliasId: 20 },
+    accounts[1],
+  ]);
+  vi.mocked(api.listAliases).mockResolvedValueOnce([
+    { id: 20, accountId: 1, name: "", email: "info@example.com" },
+  ]);
+
+  render(ComposeWindow);
+
+  await waitFor(() =>
+    expect(screen.getByLabelText("From")).toHaveValue("1:20"),
+  );
 });
