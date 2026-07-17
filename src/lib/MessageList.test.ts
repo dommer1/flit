@@ -139,6 +139,89 @@ it("leaves vertical scrolling alone", async () => {
   expect(onArchive).not.toHaveBeenCalled();
 });
 
+// why MouseEvent: jsdom has no PointerEvent, and fireEvent.pointerDown then
+// synthesizes a bare Event without clientX/button. A MouseEvent with the
+// pointer event type still reaches the handlers with real coordinates;
+// bubbles is required — Svelte 5 delegates the handlers to the app root.
+function pointer(type: string, init: MouseEventInit = {}) {
+  return new MouseEvent(type, { bubbles: true, ...init });
+}
+
+/** Press, drag horizontally by `dx`, release — a mouse/touch swipe. */
+async function drag(row: HTMLElement, dx: number) {
+  await fireEvent(row, pointer("pointerdown", { clientX: 200, clientY: 50 }));
+  // Two moves: past the slop first, then the rest — like a real pointer.
+  await fireEvent(
+    row,
+    pointer("pointermove", { clientX: 200 + dx / 2, clientY: 50 }),
+  );
+  await fireEvent(
+    row,
+    pointer("pointermove", { clientX: 200 + dx, clientY: 50 }),
+  );
+  await fireEvent(row, pointer("pointerup", { clientX: 200 + dx, clientY: 50 }));
+}
+
+it("fires the configured action when a pointer drag releases past the trigger", async () => {
+  const onArchive = vi.fn();
+  const onSetRead = vi.fn();
+  const onSelect = vi.fn();
+  renderList({ onArchive, onSetRead, onSelect });
+  const row = screen.getByRole("option", { name: /Alice/ });
+
+  await drag(row, -80);
+  expect(onArchive).toHaveBeenCalledWith(1);
+
+  await drag(row, 80);
+  expect(onSetRead).toHaveBeenCalledWith(1, true);
+
+  // The click that follows a drag's release must not select the row.
+  await fireEvent.click(row);
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+it("snaps back without selecting when a drag stops short of the trigger", async () => {
+  const onArchive = vi.fn();
+  const onSelect = vi.fn();
+  renderList({ onArchive, onSelect });
+  const row = screen.getByRole("option", { name: /Alice/ });
+
+  await drag(row, -30);
+  await fireEvent.click(row);
+
+  expect(onArchive).not.toHaveBeenCalled();
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(row.style.transform).toBe("");
+});
+
+it("still selects on a plain click", async () => {
+  const onSelect = vi.fn();
+  renderList({ onSelect });
+  const row = screen.getByRole("option", { name: /Alice/ });
+
+  await fireEvent(row, pointer("pointerdown", { clientX: 200, clientY: 50 }));
+  await fireEvent(row, pointer("pointerup", { clientX: 200, clientY: 50 }));
+  await fireEvent.click(row);
+
+  expect(onSelect).toHaveBeenCalledWith(1);
+});
+
+it("does not start a drag from a mostly vertical pointer move", async () => {
+  const onArchive = vi.fn();
+  const onSelect = vi.fn();
+  renderList({ onArchive, onSelect });
+  const row = screen.getByRole("option", { name: /Alice/ });
+
+  await fireEvent(row, pointer("pointerdown", { clientX: 200, clientY: 50 }));
+  await fireEvent(row, pointer("pointermove", { clientX: 120, clientY: 250 }));
+  await fireEvent(row, pointer("pointerup", { clientX: 120, clientY: 250 }));
+  await fireEvent.click(row);
+
+  expect(onArchive).not.toHaveBeenCalled();
+  // No drag happened, so the click still counts as a selection.
+  expect(onSelect).toHaveBeenCalledWith(1);
+});
+
 it("labels the swipe backdrop Move to Inbox for archived rows", async () => {
   renderList({ onArchive: vi.fn(), isArchived: () => true });
 

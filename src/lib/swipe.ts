@@ -9,6 +9,9 @@ export const SWIPE_TRIGGER = 72;
 /** Rubber-band limit (px) — the row never travels further than this. */
 export const SWIPE_MAX = 96;
 
+/** Pointer travel (px) before a press counts as a drag instead of a click. */
+export const DRAG_SLOP = 6;
+
 /** The gesture as originally shipped: left archives, right toggles read. */
 export const DEFAULT_SWIPE_ACTIONS: SwipeActions = {
   left: "archive",

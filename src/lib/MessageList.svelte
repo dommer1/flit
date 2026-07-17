@@ -3,7 +3,9 @@
   import {
     accumulateOffset,
     actionFor,
+    clampOffset,
     DEFAULT_SWIPE_ACTIONS,
+    DRAG_SLOP,
     isHorizontal,
   } from "./swipe";
   import type { MessageHeader, SwipeAction, SwipeActions } from "./types";
@@ -75,6 +77,72 @@
     settleTimer = setTimeout(() => settleSwipe(message), 120);
   }
 
+  // Mouse/touch drag: pointerdown only arms a candidate — the swipe starts
+  // once the pointer travels past DRAG_SLOP with horizontal dominating, so a
+  // plain click still selects and a vertical move never grabs the row.
+  let dragId: number | null = null;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragActive = false;
+  let dragConsumedClick = false;
+
+  function handlePointerDown(message: MessageHeader, event: PointerEvent) {
+    if (event.button !== 0) return;
+    dragId = message.id;
+    dragStartX = event.clientX;
+    dragStartY = event.clientY;
+    dragActive = false;
+  }
+
+  function handlePointerMove(message: MessageHeader, event: PointerEvent) {
+    if (dragId !== message.id) return;
+    const dx = event.clientX - dragStartX;
+    const dy = event.clientY - dragStartY;
+    if (!dragActive) {
+      if (Math.abs(dx) <= DRAG_SLOP || !isHorizontal(dx, dy)) return;
+      dragActive = true;
+      // why capture: move/up events keep hitting this row even when the
+      // pointer leaves it mid-drag. Optional call — jsdom lacks it.
+      (event.currentTarget as HTMLElement).setPointerCapture?.(
+        event.pointerId,
+      );
+      // why: a pending wheel settle would reset the row mid-drag.
+      clearTimeout(settleTimer);
+      swipeId = message.id;
+    }
+    swipeOffset = clampOffset(dx, swipeActions);
+  }
+
+  function handlePointerUp(message: MessageHeader) {
+    if (dragId !== message.id) return;
+    dragId = null;
+    if (!dragActive) return;
+    dragActive = false;
+    // why: the browser fires a click right after this pointerup — swallow
+    // it so releasing a swipe never also selects the row.
+    dragConsumedClick = true;
+    // pointerup IS the release — settle now, no quiet-gap timer needed.
+    settleSwipe(message);
+  }
+
+  function handlePointerCancel(message: MessageHeader) {
+    if (dragId !== message.id) return;
+    // The system took the pointer (e.g. a native gesture) — snap back.
+    dragId = null;
+    if (!dragActive) return;
+    dragActive = false;
+    swipeId = null;
+    swipeOffset = 0;
+  }
+
+  function handleClick(message: MessageHeader) {
+    if (dragConsumedClick) {
+      dragConsumedClick = false;
+      return;
+    }
+    onSelect(message.id);
+  }
+
   function settleSwipe(message: MessageHeader) {
     if (swipeId !== message.id) return;
     const action = actionFor(swipeOffset, swipeActions);
@@ -124,7 +192,17 @@
             : offset > 0
               ? swipeActions.right
               : "none"}
-        <div class="swipe-row" onwheel={(e) => handleWheel(message, e)}>
+        <!-- svelte-ignore a11y_no_static_element_interactions
+             — the pointer handlers implement the swipe gesture; keyboard
+             users act on rows through the buttons and shortcuts instead. -->
+        <div
+          class="swipe-row"
+          onwheel={(e) => handleWheel(message, e)}
+          onpointerdown={(e) => handlePointerDown(message, e)}
+          onpointermove={(e) => handlePointerMove(message, e)}
+          onpointerup={() => handlePointerUp(message)}
+          onpointercancel={() => handlePointerCancel(message)}
+        >
           <!-- why the width style: the backdrop spans exactly the revealed
                strip, so it can never show through the row content above it
                (hover tints the row translucent). -->
@@ -149,7 +227,7 @@
             style:transform={offset === 0
               ? undefined
               : `translateX(${offset}px)`}
-            onclick={() => onSelect(message.id)}
+            onclick={() => handleClick(message)}
           >
             <span class="content">
               <span class="row">
@@ -228,6 +306,9 @@
     flex-shrink: 0;
     /* Flat full-width separators between rows (the new design). */
     border-bottom: 1px solid var(--hairline);
+    /* why pan-y: on touch, vertical drags keep scrolling the list while
+       horizontal ones reach the pointer handlers as a swipe. */
+    touch-action: pan-y;
   }
 
   .swipe-bg {
