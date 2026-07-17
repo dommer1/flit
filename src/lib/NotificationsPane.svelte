@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import {
     getNotificationSettings,
+    previewNotificationSound,
     setAccountNotifications,
     setNotificationSettings,
   } from "./api";
@@ -94,8 +95,11 @@
       <select
         id="notification-sound"
         value={settings.sound}
-        onchange={(e) =>
-          void save({ ...settings, sound: e.currentTarget.value })}
+        onchange={(e) => {
+          // Hear the pick right away; "default"/"none" play nothing.
+          void previewNotificationSound(e.currentTarget.value);
+          void save({ ...settings, sound: e.currentTarget.value });
+        }}
       >
         <option value="default">System default</option>
         <option value="none">None</option>
@@ -148,12 +152,12 @@
         <select
           aria-label="Sound for {account.name}"
           value={account.notifySound ?? ""}
-          onchange={(e) =>
-            void saveAccount(
-              account,
-              account.notifyEnabled,
-              e.currentTarget.value === "" ? null : e.currentTarget.value,
-            )}
+          onchange={(e) => {
+            const pick = e.currentTarget.value;
+            // Default inherits — preview what the account will really use.
+            void previewNotificationSound(pick === "" ? settings.sound : pick);
+            void saveAccount(account, account.notifyEnabled, pick === "" ? null : pick);
+          }}
         >
           <option value="">Default</option>
           <option value="none">None</option>

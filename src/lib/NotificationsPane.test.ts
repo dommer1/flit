@@ -28,6 +28,7 @@ vi.mock("./api", () => ({
   getNotificationSettings: vi.fn(async () => settings),
   setNotificationSettings: vi.fn(async () => undefined),
   setAccountNotifications: vi.fn(async () => undefined),
+  previewNotificationSound: vi.fn(async () => undefined),
 }));
 
 import * as api from "./api";
@@ -118,6 +119,45 @@ it("toggling an account writes an explicit override", async () => {
 
   await waitFor(() =>
     expect(api.setAccountNotifications).toHaveBeenCalledWith(1, false, null),
+  );
+});
+
+it("previews a picked global sound", async () => {
+  render(NotificationsPane, { props: { accounts: [] } });
+  await waitFor(() =>
+    expect(screen.getByLabelText("Show notifications")).toBeChecked(),
+  );
+
+  await fireEvent.change(screen.getByLabelText("Sound"), {
+    target: { value: "Glass" },
+  });
+
+  await waitFor(() =>
+    expect(api.previewNotificationSound).toHaveBeenCalledWith("Glass"),
+  );
+});
+
+it("previews a picked per-account sound, resolving Default to the global one", async () => {
+  settings = { enabled: true, sound: "Glass", syncIntervalMinutes: 3 };
+  const accounts = [account(1, "Work", { notifySound: "Ping" })];
+  render(NotificationsPane, { props: { accounts } });
+  await waitFor(() =>
+    expect(screen.getByLabelText("Sound for Work")).toHaveValue("Ping"),
+  );
+
+  await fireEvent.change(screen.getByLabelText("Sound for Work"), {
+    target: { value: "Purr" },
+  });
+  await waitFor(() =>
+    expect(api.previewNotificationSound).toHaveBeenCalledWith("Purr"),
+  );
+
+  // Default = inherit — previewing plays what the account will really use.
+  await fireEvent.change(screen.getByLabelText("Sound for Work"), {
+    target: { value: "" },
+  });
+  await waitFor(() =>
+    expect(api.previewNotificationSound).toHaveBeenCalledWith("Glass"),
   );
 });
 
