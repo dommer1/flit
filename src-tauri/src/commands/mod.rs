@@ -79,6 +79,12 @@ pub async fn sync_account(app: AppHandle, account_id: i64) -> Result<(), AppErro
 /// poller) that have an AppHandle but no `State` extractor.
 pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), AppError> {
     let state = app.state::<AppState>();
+    // why: held (RAII) until this function returns — a manual refresh racing
+    // the background poll must not open a second IMAP session for the same
+    // account or double-fire notifications. The loser skips silently.
+    let Some(_slot) = state.try_begin_sync(account_id) else {
+        return Ok(());
+    };
     let account = storage::accounts::get(&state.pool, account_id).await?;
     // why: the password comes from the session cache (one keychain read per
     // account per run) and is handed on to the prefetch task below — never

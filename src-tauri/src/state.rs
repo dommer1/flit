@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard};
 
 use sqlx::SqlitePool;
@@ -25,6 +25,22 @@ pub struct AppState {
     pending_sends: Mutex<HashMap<u64, OutgoingMessage>>,
     /// Session cache of account passwords (see auth::PasswordCache).
     pub passwords: PasswordCache,
+    /// Accounts with a sync pass currently running — see try_begin_sync.
+    syncing: Mutex<HashSet<i64>>,
+}
+
+/// Proof of holding an account's sync slot. Dropping it releases the slot —
+/// RAII, like MutexGuard — so an early return or `?` in the sync path can
+/// never leave an account stuck "already syncing" forever.
+pub struct SyncSlot<'a> {
+    state: &'a AppState,
+    account_id: i64,
+}
+
+impl Drop for SyncSlot<'_> {
+    fn drop(&mut self) {
+        self.state.lock_syncing().remove(&self.account_id);
+    }
 }
 
 impl AppState {
@@ -34,6 +50,22 @@ impl AppState {
             pending_drafts: Mutex::new(HashMap::new()),
             pending_sends: Mutex::new(HashMap::new()),
             passwords: PasswordCache::default(),
+            syncing: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Claim the account's sync slot; `None` = a sync of this account is
+    /// already running (a manual refresh racing the background poll). The
+    /// loser simply skips — the running pass already covers the work, and
+    /// two parallel passes would double-fire new-mail notifications.
+    pub fn try_begin_sync(&self, account_id: i64) -> Option<SyncSlot<'_>> {
+        if self.lock_syncing().insert(account_id) {
+            Some(SyncSlot {
+                state: self,
+                account_id,
+            })
+        } else {
+            None
         }
     }
 
@@ -82,6 +114,12 @@ impl AppState {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    fn lock_syncing(&self) -> MutexGuard<'_, HashSet<i64>> {
+        self.syncing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +163,21 @@ mod tests {
         // the second taker loses — that is the whole undo-vs-timer contract
         assert!(state.take_send(7).is_none());
         assert!(state.take_send(8).is_none());
+    }
+
+    #[tokio::test]
+    async fn sync_slot_blocks_a_second_claim_until_dropped() {
+        let state = AppState::new(test_pool().await);
+
+        let slot = state.try_begin_sync(1);
+        assert!(slot.is_some());
+        // The same account cannot be claimed twice...
+        assert!(state.try_begin_sync(1).is_none());
+        // ...but another account syncs independently.
+        assert!(state.try_begin_sync(2).is_some());
+
+        drop(slot);
+        assert!(state.try_begin_sync(1).is_some());
     }
 
     #[tokio::test]
