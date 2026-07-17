@@ -12,6 +12,7 @@ function header(id: number, from: string, read: boolean): MessageHeader {
     to: "me@example.com",
     cc: "",
     replyTo: "",
+    bcc: "",
     messageId: "",
     references: "",
     threadCount: 1,

@@ -10,6 +10,7 @@ const message: MessageHeader = {
   to: "Me <me@example.com>",
   cc: "",
   replyTo: "",
+    bcc: "",
   messageId: "",
   references: "",
   threadCount: 1,

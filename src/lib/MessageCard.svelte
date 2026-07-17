@@ -56,10 +56,12 @@
     (showAddr ? `From: ${bareAddress(message.from)} · ` : "") +
       `To: ${message.to}`,
   );
+  // Like the prototype: Cc and Bcc when present, nothing else — Reply-To
+  // stays a sending concern, not a display line.
   let ccLine = $derived(
     [
       message.cc !== "" ? `Cc: ${message.cc}` : "",
-      message.replyTo !== "" ? `Reply-To: ${message.replyTo}` : "",
+      message.bcc !== "" ? `Bcc: ${message.bcc}` : "",
     ]
       .filter(Boolean)
       .join(" · "),
@@ -209,9 +211,11 @@
           class="name"
           title={expanded ? "Show sender address" : undefined}
           onclick={(e) => {
-            if (!expanded) return;
+            // Like the prototype's name click: reveal the address and make
+            // sure the card is open to show it.
             e.stopPropagation();
             showAddr = !showAddr;
+            if (!expanded) onToggle();
           }}
         >
           {senderName(message.from)}

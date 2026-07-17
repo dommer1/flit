@@ -43,6 +43,7 @@ const message: MessageHeader = {
   to: "me@example.com",
   cc: "",
   replyTo: "",
+  bcc: "",
   messageId: "",
   references: "",
   threadCount: 1,
@@ -146,27 +147,61 @@ it("offers to load remote images and re-renders with them", async () => {
   });
 });
 
-it("shows recipients in the meta line, Cc and Reply-To only when present", async () => {
+it("shows recipients like the prototype: To always, Cc and Bcc when present", async () => {
   const { rerender } = renderView();
 
   expect(await screen.findByText("To: me@example.com")).toBeInTheDocument();
   expect(screen.queryByText(/Cc:/)).not.toBeInTheDocument();
-  expect(screen.queryByText(/Reply-To:/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Bcc:/)).not.toBeInTheDocument();
 
   await rerender({
     message: {
       ...message,
       cc: "carol@example.com",
+      bcc: "archiv@example.com",
+      // Reply-To is a sending concern — the prototype never displays it.
       replyTo: "Support <support@example.com>",
     },
   });
 
   expect(
-    screen.getByText(
-      "Cc: carol@example.com · Reply-To: Support <support@example.com>",
-    ),
+    screen.getByText("Cc: carol@example.com · Bcc: archiv@example.com"),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/Reply-To:/)).not.toBeInTheDocument();
+});
+
+it("opens a collapsed message when its sender name is clicked", async () => {
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversationForName());
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({ text: "the original in full" }),
+    2: body({ text: "the answer in full" }),
+  });
+
+  renderView({ message: { ...message, id: 2 } });
+  await screen.findByText("the answer in full");
+
+  // The prototype's name click on a collapsed row opens the card AND
+  // reveals the address.
+  await fireEvent.click(screen.getByRole("button", { name: "Old Sender" }));
+
+  expect(await screen.findByText("the original in full")).toBeInTheDocument();
+  expect(
+    screen.getByText("From: old@example.com · To: me@example.com"),
   ).toBeInTheDocument();
 });
+
+function conversationForName(): MessageHeader[] {
+  return [
+    {
+      ...message,
+      id: 1,
+      from: "Old Sender <old@example.com>",
+      snippet: "the original",
+      read: true,
+    },
+    { ...message, id: 2, snippet: "the answer", read: true },
+  ];
+}
 
 it("reveals the sender address on a name click without collapsing", async () => {
   vi.mocked(api.threadBodies).mockResolvedValueOnce({

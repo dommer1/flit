@@ -217,6 +217,9 @@ export interface MessageHeader {
   cc: string;
   /** Reply-To recipients, same shape; empty when the header was absent. */
   replyTo: string;
+  /** Bcc recipients, same shape; almost always empty — Sent copies from
+   * other clients (or journaled deliveries) can carry the header. */
+  bcc: string;
   subject: string;
   snippet: string;
   date: string;

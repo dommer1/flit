@@ -11,6 +11,7 @@ const message: MessageHeader = {
   to: "me@example.com",
   cc: "",
   replyTo: "",
+    bcc: "",
   messageId: "",
   references: "",
   threadCount: 1,
