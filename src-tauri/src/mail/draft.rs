@@ -157,6 +157,7 @@ mod tests {
     fn outgoing() -> OutgoingMessage {
         OutgoingMessage {
             account_id: 1,
+            alias_id: None,
             to: String::new(),
             cc: String::new(),
             bcc: String::new(),

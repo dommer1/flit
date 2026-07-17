@@ -494,8 +494,8 @@ pub async fn queue_send(
     // why: build the MIME now even though it is rebuilt at send time — an
     // invalid address must surface in the compose window immediately, not
     // as a failure badge eight seconds after the window closed.
-    let account = storage::accounts::get(&state.pool, message.account_id).await?;
-    mail::smtp::build_message(&account.name, &account.email, &message).await?;
+    let (from_name, from_email) = storage::aliases::sender(&state.pool, &message).await?;
+    mail::smtp::build_message(&from_name, &from_email, &message).await?;
 
     // why best effort: the contacts book is a convenience — a failed write
     // must never block or fail a send that already validated.
@@ -583,8 +583,8 @@ pub async fn schedule_send(
     message: OutgoingMessage,
     scheduled_at: i64,
 ) -> Result<(), AppError> {
-    let account = storage::accounts::get(&state.pool, message.account_id).await?;
-    mail::smtp::build_message(&account.name, &account.email, &message).await?;
+    let (from_name, from_email) = storage::aliases::sender(&state.pool, &message).await?;
+    mail::smtp::build_message(&from_name, &from_email, &message).await?;
     validate_scheduled_at(scheduled_at, now_epoch())?;
     storage::scheduled::insert(&state.pool, &message, scheduled_at).await?;
     // why: no payload — listeners (scheduled list in the sidebar) re-query
@@ -687,7 +687,8 @@ pub(crate) async fn deliver_scheduled(app: &AppHandle, message: OutgoingMessage)
 /// The one SMTP delivery path: account row → MIME → session cache → send.
 async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppError> {
     let account = storage::accounts::get(&state.pool, message.account_id).await?;
-    let mime = mail::smtp::build_message(&account.name, &account.email, message).await?;
+    let (from_name, from_email) = storage::aliases::sender(&state.pool, message).await?;
+    let mime = mail::smtp::build_message(&from_name, &from_email, message).await?;
     // why: the session cache reads the keychain at most once per account per
     // run; the password never reaches events or logs.
     let password = state.password(message.account_id).await?;
@@ -1080,6 +1081,8 @@ pub async fn open_draft(
         &app,
         OutgoingMessage {
             account_id: loc.account_id,
+            // Reopened server drafts do not restore an alias yet.
+            alias_id: None,
             to: parsed.to,
             cc: parsed.cc,
             bcc: parsed.bcc,

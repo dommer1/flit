@@ -270,6 +270,7 @@ mod tests {
     fn outgoing(to: &str) -> OutgoingMessage {
         OutgoingMessage {
             account_id: 1,
+            alias_id: None,
             to: to.to_string(),
             cc: String::new(),
             bcc: String::new(),

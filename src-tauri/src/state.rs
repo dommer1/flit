@@ -130,6 +130,7 @@ mod tests {
     fn draft(subject: &str) -> OutgoingMessage {
         OutgoingMessage {
             account_id: 1,
+            alias_id: None,
             to: "alice@example.com".to_string(),
             cc: String::new(),
             bcc: String::new(),

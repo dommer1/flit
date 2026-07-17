@@ -56,6 +56,8 @@ export interface NewAccount {
 /** Payload for send_message — the From address comes from the account row. */
 export interface OutgoingMessage {
   accountId: number;
+  /** Send-as alias picked in compose; absent/null = the account's address. */
+  aliasId?: number | null;
   /** One or more recipients, comma-separated. */
   to: string;
   /** Cc recipients, comma-separated; empty/absent = none. */

@@ -90,6 +90,29 @@ pub async fn set_default(
     Ok(())
 }
 
+/// The From identity for an outgoing message: its chosen alias, or the
+/// account's own name and address. A foreign or unknown alias id is refused
+/// — only addresses the user configured can ever leave as From.
+pub async fn sender(
+    pool: &SqlitePool,
+    message: &crate::models::OutgoingMessage,
+) -> Result<(String, String), AppError> {
+    let account = crate::storage::accounts::get(pool, message.account_id).await?;
+    let Some(alias_id) = message.alias_id else {
+        return Ok((account.name, account.email));
+    };
+    let alias: Alias = sqlx::query_as("SELECT * FROM account_aliases WHERE id = ?")
+        .bind(alias_id)
+        .fetch_one(pool)
+        .await?;
+    if alias.account_id != account.id {
+        return Err(AppError::Invalid(
+            "alias belongs to a different account".to_string(),
+        ));
+    }
+    Ok((alias.name, alias.email))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +134,64 @@ mod tests {
         .await
         .unwrap()
         .id
+    }
+
+    fn outgoing(account_id: i64, alias_id: Option<i64>) -> crate::models::OutgoingMessage {
+        crate::models::OutgoingMessage {
+            account_id,
+            alias_id,
+            to: "a@example.com".to_string(),
+            cc: String::new(),
+            bcc: String::new(),
+            subject: String::new(),
+            body: String::new(),
+            body_html: None,
+            attachments: Vec::new(),
+            draft_message_id: None,
+            in_reply_to: None,
+            references: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn sender_is_the_account_without_an_alias() {
+        let pool = test_pool().await;
+        let acc = account(&pool, "hello@vocalio.sk").await;
+
+        let (name, email) = sender(&pool, &outgoing(acc, None)).await.unwrap();
+        assert_eq!(name, "Test");
+        assert_eq!(email, "hello@vocalio.sk");
+    }
+
+    #[tokio::test]
+    async fn sender_is_the_chosen_alias() {
+        let pool = test_pool().await;
+        let acc = account(&pool, "hello@vocalio.sk").await;
+        let alias = add(&pool, acc, "Igor", "igor@vocalio.sk").await.unwrap();
+
+        let (name, email) = sender(&pool, &outgoing(acc, Some(alias.id))).await.unwrap();
+        assert_eq!(name, "Igor");
+        assert_eq!(email, "igor@vocalio.sk");
+    }
+
+    #[tokio::test]
+    async fn sender_refuses_a_foreign_alias() {
+        let pool = test_pool().await;
+        let mine = account(&pool, "hello@vocalio.sk").await;
+        let other = account(&pool, "other@example.com").await;
+        let foreign = add(&pool, other, "", "info@example.com").await.unwrap();
+
+        assert!(sender(&pool, &outgoing(mine, Some(foreign.id)))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn sender_errors_on_an_unknown_alias() {
+        let pool = test_pool().await;
+        let acc = account(&pool, "hello@vocalio.sk").await;
+
+        assert!(sender(&pool, &outgoing(acc, Some(999))).await.is_err());
     }
 
     #[tokio::test]

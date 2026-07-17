@@ -79,6 +79,11 @@ pub struct NewAccount {
 #[serde(rename_all = "camelCase")]
 pub struct OutgoingMessage {
     pub account_id: i64,
+    /// Send-as alias picked in the compose window; `None` = the account's
+    /// own address. Resolved against the account row at send time, so the
+    /// frontend still cannot produce an unconfigured From address.
+    #[serde(default)]
+    pub alias_id: Option<i64>,
     /// One or more recipients, comma-separated.
     pub to: String,
     /// Cc recipients, comma-separated; empty = none.
@@ -179,6 +184,8 @@ impl ScheduledMessage {
     pub fn outgoing(&self) -> OutgoingMessage {
         OutgoingMessage {
             account_id: self.account_id,
+            // Scheduled rows do not persist an alias yet.
+            alias_id: None,
             to: self.to.clone(),
             cc: self.cc.clone(),
             bcc: self.bcc.clone(),

@@ -117,6 +117,7 @@ mod tests {
     fn outgoing(account_id: i64, subject: &str) -> OutgoingMessage {
         OutgoingMessage {
             account_id,
+            alias_id: None,
             to: "b@example.com".to_string(),
             cc: "".to_string(),
             bcc: "".to_string(),
