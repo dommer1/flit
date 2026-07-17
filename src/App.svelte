@@ -661,6 +661,11 @@
   .layout {
     display: grid;
     height: calc(100vh - var(--toolbar-height));
+    /* why: implicit (auto) grid rows size to their content, so a tall
+       conversation stack grew the row past the viewport and the whole app
+       scrolled. Pin the single row to the container's height — panes clip
+       and scroll themselves instead. */
+    grid-template-rows: 100%;
   }
 
   /* why overflow-x hidden everywhere: overflow-y auto alone computes
@@ -674,7 +679,10 @@
 
   main {
     display: grid;
+    /* Same row pinning as .layout — main is its own grid. */
+    grid-template-rows: 100%;
     min-width: 0;
+    min-height: 0;
     background: var(--bg-window);
   }
 
