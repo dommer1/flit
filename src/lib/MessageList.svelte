@@ -435,20 +435,19 @@
     border-radius: 50%;
   }
 
-  /* Conversation size badge, e.g. "3" — quiet, next to the date. */
+  /* Conversation size badge, e.g. "3" — a quiet outline, per the design. */
   .thread-count {
     flex-shrink: 0;
     padding: 0 5px;
-    border-radius: 8px;
-    background: var(--bg-hover);
-    font-size: 10.5px;
+    border: 1px solid currentColor;
+    border-radius: 9px;
+    font-size: 10px;
     font-weight: 600;
-    line-height: 16px;
+    line-height: 14px;
     color: var(--text-secondary);
   }
 
   .selected .thread-count {
-    background: rgb(255 255 255 / 22%);
     color: var(--accent-text);
   }
 
