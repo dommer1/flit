@@ -42,6 +42,17 @@
     return (mailboxes[accountId] ?? []).filter((m) => m.role !== "inbox");
   }
 
+  function inboxUnread(accountId: number): number {
+    return (
+      (mailboxes[accountId] ?? []).find((m) => m.role === "inbox")
+        ?.unreadCount ?? 0
+    );
+  }
+
+  const totalUnread = $derived(
+    accounts.reduce((sum, a) => sum + inboxUnread(a.id), 0),
+  );
+
   function scheduledTitle(entry: ScheduledMessage): string {
     const subject = entry.subject.trim();
     return subject === "" ? "(No subject)" : subject;
@@ -75,6 +86,9 @@
       />
     </svg>
     <span class="label">All Inboxes</span>
+    {#if totalUnread > 0}
+      <span class="count">{totalUnread}</span>
+    {/if}
   </button>
 
   {#if accounts.length > 0}
@@ -100,6 +114,9 @@
           <span class="name">{account.name}</span>
           <span class="email">{account.email}</span>
         </span>
+        {#if inboxUnread(account.id) > 0}
+          <span class="count">{inboxUnread(account.id)}</span>
+        {/if}
       </button>
       {#if folders(account.id).length > 0}
         <button
@@ -131,6 +148,9 @@
           onclick={() => onSelect(account.id, mailbox.name)}
         >
           <span class="label">{mailbox.displayName}</span>
+          {#if mailbox.unreadCount > 0}
+            <span class="count">{mailbox.unreadCount}</span>
+          {/if}
         </button>
       {/each}
     {/if}
@@ -288,6 +308,15 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+  }
+
+  /* Unread badge — a quiet number, Apple Mail style, no pill. */
+  .count {
+    flex-shrink: 0;
+    margin-left: auto;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
   }
 
   .name {

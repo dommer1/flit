@@ -116,8 +116,22 @@ let currentSwipeActions: SwipeActions;
 async function defaultListMailboxes(accountId: number) {
   return accountId === 1
     ? [
-        { id: 1, accountId: 1, name: "INBOX", role: "inbox", displayName: "INBOX" },
-        { id: 2, accountId: 1, name: "Archive", role: "archive", displayName: "Archive" },
+        {
+          id: 1,
+          accountId: 1,
+          name: "INBOX",
+          role: "inbox",
+          displayName: "INBOX",
+          unreadCount: 0,
+        },
+        {
+          id: 2,
+          accountId: 1,
+          name: "Archive",
+          role: "archive",
+          displayName: "Archive",
+          unreadCount: 0,
+        },
         // A Gmail-style folder: the wire name stays modified UTF-7, the
         // backend ships the decoded label alongside it.
         {
@@ -126,6 +140,7 @@ async function defaultListMailboxes(accountId: number) {
           name: "[Gmail]/Odoslan&AOk-",
           role: "sent",
           displayName: "Odoslané",
+          unreadCount: 0,
         },
       ]
     : [];
@@ -890,6 +905,7 @@ it("opens a drafts-folder message in compose instead of the viewer", async () =>
             name: "INBOX",
             role: "inbox",
             displayName: "INBOX",
+            unreadCount: 0,
           },
           {
             id: 4,
@@ -897,6 +913,7 @@ it("opens a drafts-folder message in compose instead of the viewer", async () =>
             name: "Drafts",
             role: "drafts",
             displayName: "Drafts",
+            unreadCount: 0,
           },
         ]
       : [],

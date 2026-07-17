@@ -18,8 +18,22 @@ const message: MessageHeader = {
 };
 
 const folders: Mailbox[] = [
-  { id: 2, accountId: 1, name: "Work", role: null, displayName: "Work" },
-  { id: 3, accountId: 1, name: "K&APQBYQ-", role: "trash", displayName: "Kôš" },
+  {
+    id: 2,
+    accountId: 1,
+    name: "Work",
+    role: null,
+    displayName: "Work",
+    unreadCount: 0,
+  },
+  {
+    id: 3,
+    accountId: 1,
+    name: "K&APQBYQ-",
+    role: "trash",
+    displayName: "Kôš",
+    unreadCount: 0,
+  },
 ];
 
 function renderToolbar(props: Record<string, unknown> = {}) {

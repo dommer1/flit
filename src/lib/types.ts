@@ -173,6 +173,8 @@ export interface Mailbox {
   role: string | null;
   /** Decoded, prefix-stripped name for the UI — never send to the backend. */
   displayName: string;
+  /** Unread messages in this folder, from the local cache. */
+  unreadCount: number;
 }
 
 export interface MessageHeader {
