@@ -89,30 +89,11 @@
           selectedMailbox === "INBOX"}
         onclick={() => onSelect(account.id)}
       >
-        <svg
-          class="icon"
-          viewBox="0 0 16 16"
+        <span
+          class="color-dot"
           aria-hidden="true"
-          style:color={account.color ?? undefined}
-        >
-          <rect
-            x="1.75"
-            y="3.25"
-            width="12.5"
-            height="9.5"
-            rx="1.5"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.2"
-          />
-          <path
-            d="m2.5 4.5 5.5 4 5.5-4"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.2"
-            stroke-linejoin="round"
-          />
-        </svg>
+          style:background={account.color ?? undefined}
+        ></span>
         <span class="label" title={account.email}>
           <span class="name">{account.name}</span>
           <span class="email">{account.email}</span>
@@ -183,7 +164,7 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
-    padding: 8px 10px;
+    padding: 14px 10px;
   }
 
   .section {
@@ -237,7 +218,6 @@
     margin-left: 24px;
     min-height: 26px;
     padding: 2px 9px;
-    font-size: 12px;
   }
 
   .chevron {
@@ -276,10 +256,24 @@
     color: var(--accent);
   }
 
+  /* The account's identity color (settings swatch); gray when unset. */
+  .color-dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    margin: 0 3px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+  }
+
   .label {
     display: flex;
     flex-direction: column;
     min-width: 0;
+  }
+
+  .name {
+    font-weight: 500;
   }
 
   .label > span {
