@@ -56,7 +56,14 @@ fn display_name(wire_name: &str) -> String {
 /// (inbox, drafts, sent, archive, junk, trash), then customs alphabetically.
 pub async fn list(pool: &SqlitePool, account_id: i64) -> Result<Vec<Mailbox>, AppError> {
     let rows: Vec<Mailbox> = sqlx::query_as(
-        "SELECT id, account_id, name, role FROM mailboxes
+        // why a correlated subquery: messages reference folders by name, not
+        // by mailbox id, so a JOIN + GROUP BY buys nothing here.
+        "SELECT id, account_id, name, role,
+                (SELECT count(*) FROM messages m
+                  WHERE m.account_id = mailboxes.account_id
+                    AND m.mailbox = mailboxes.name
+                    AND m.read = 0) AS unread_count
+         FROM mailboxes
          WHERE account_id = ?
          ORDER BY CASE role
                     WHEN 'inbox' THEN 0
@@ -141,6 +148,91 @@ mod tests {
             name: name.to_string(),
             role: role.map(str::to_string),
         }
+    }
+
+    async fn insert_message(
+        pool: &SqlitePool,
+        account_id: i64,
+        mailbox: &str,
+        uid: i64,
+        read: bool,
+    ) {
+        crate::storage::messages::upsert_headers(
+            pool,
+            account_id,
+            mailbox,
+            &[crate::storage::messages::FetchedHeader {
+                uid,
+                uid_validity: 1,
+                from: "s@example.com".to_string(),
+                to: "a@example.com".to_string(),
+                cc: String::new(),
+                reply_to: String::new(),
+                subject: "hi".to_string(),
+                date: "2026-07-17T10:00:00Z".to_string(),
+                snippet: String::new(),
+                read,
+            }],
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_counts_unread_messages_per_mailbox() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(
+            &pool,
+            id,
+            &[found("INBOX", Some("inbox")), found("Work", None)],
+        )
+        .await
+        .unwrap();
+
+        insert_message(&pool, id, "INBOX", 1, false).await;
+        insert_message(&pool, id, "INBOX", 2, false).await;
+        insert_message(&pool, id, "INBOX", 3, true).await;
+        insert_message(&pool, id, "Work", 1, true).await;
+
+        let folders = list(&pool, id).await.unwrap();
+        let unread: Vec<(String, i64)> = folders
+            .into_iter()
+            .map(|m| (m.name, m.unread_count))
+            .collect();
+        assert_eq!(
+            unread,
+            vec![("INBOX".to_string(), 2), ("Work".to_string(), 0)]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_counts_only_that_accounts_messages() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        let other = crate::storage::accounts::insert(
+            &pool,
+            &crate::models::NewAccount {
+                name: "Work".to_string(),
+                email: "b@example.com".to_string(),
+                imap_host: "imap.example.com".to_string(),
+                imap_port: 993,
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_port: 587,
+                username: "b@example.com".to_string(),
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        replace(&pool, id, &[found("INBOX", Some("inbox"))])
+            .await
+            .unwrap();
+        // Same folder name on the other account must not leak into the count.
+        insert_message(&pool, other, "INBOX", 1, false).await;
+
+        let folders = list(&pool, id).await.unwrap();
+        assert_eq!(folders[0].unread_count, 0);
     }
 
     #[tokio::test]

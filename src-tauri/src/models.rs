@@ -340,6 +340,8 @@ pub struct Mailbox {
     /// server — IMAP commands need `name`.
     #[sqlx(default)]
     pub display_name: String,
+    /// Unread messages in this folder, from the local cache.
+    pub unread_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
