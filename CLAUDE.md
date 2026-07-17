@@ -83,7 +83,7 @@ All of `npm run check` + `npm test` + `cargo test` + `cargo clippy` must pass be
 
 ## Non-goals — do not build unless explicitly asked
 
-Threading/conversation view, full-text search, IMAP IDLE/push, snooze, rules/filters, PGP, calendar. Out of scope until the core read / write / multi-account flow is solid. (Send-later was pulled out of this list and built 2026-07-16 — local scheduler in `src-tauri/src/scheduler.rs`; missed sends never auto-send, the user confirms in a catch-up dialog.)
+Full-text search, IMAP IDLE/push, snooze, rules/filters, PGP, calendar. Out of scope until the core read / write / multi-account flow is solid. (Send-later was pulled out of this list and built 2026-07-16 — local scheduler in `src-tauri/src/scheduler.rs`; missed sends never auto-send, the user confirms in a catch-up dialog. Threading/conversation view was pulled out and built 2026-07-17 — References/In-Reply-To based, thread keys computed at insert in `storage/messages.rs`, no subject fallback; flat Gmail-style conversation, accordion detail view; trash/junk/drafts views stay flat.)
 
 ## Backend crates (baseline)
 
