@@ -18,6 +18,7 @@ function account(id: number, name: string, overrides: Partial<Account> = {}): Ac
     signatureId: null,
     notifyEnabled: null,
     notifySound: null,
+    defaultAliasId: null,
     ...overrides,
   };
 }

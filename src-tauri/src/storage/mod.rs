@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod aliases;
 pub mod contacts;
 pub mod mailboxes;
 pub mod messages;

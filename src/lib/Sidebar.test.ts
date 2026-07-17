@@ -19,6 +19,7 @@ function account(id: number, name: string): Account {
     signatureId: null,
     notifyEnabled: null,
     notifySound: null,
+    defaultAliasId: null,
   };
 }
 

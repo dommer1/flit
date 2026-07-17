@@ -28,6 +28,22 @@ pub struct Account {
     /// Notification sound override ("none" or a macOS sound name);
     /// `None` = inherit the global default sound.
     pub notify_sound: Option<String>,
+    /// The send-as identity new mail from this account starts with;
+    /// `None` = the account's own address.
+    pub default_alias_id: Option<i64>,
+}
+
+/// One send-as alias: an extra address the account's mail server accepts as
+/// sender (mail to it already lands in the account's inbox). Only stored
+/// aliases may appear as From — the send path resolves and checks them.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct Alias {
+    pub id: i64,
+    pub account_id: i64,
+    /// Display name for the From header; empty = address only.
+    pub name: String,
+    pub email: String,
 }
 
 /// One reusable e-mail signature. `body` is editor HTML — the compose editor

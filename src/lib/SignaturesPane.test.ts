@@ -18,6 +18,7 @@ function account(id: number, email: string, signatureId: number | null): Account
     signatureId,
     notifyEnabled: null,
     notifySound: null,
+    defaultAliasId: null,
   };
 }
 

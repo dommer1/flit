@@ -21,6 +21,8 @@ export interface Account {
   notifyEnabled: boolean | null;
   /** Sound override ("none" or a macOS sound name); null = inherit. */
   notifySound: string | null;
+  /** Send-as identity new mail starts with; null = the account's address. */
+  defaultAliasId: number | null;
 }
 
 /** One reusable e-mail signature; `body` is editor HTML. */

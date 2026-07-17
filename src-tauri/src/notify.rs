@@ -167,6 +167,7 @@ mod tests {
             signature_id: None,
             notify_enabled,
             notify_sound: notify_sound.map(str::to_string),
+            default_alias_id: None,
         }
     }
 

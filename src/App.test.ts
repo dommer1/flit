@@ -30,6 +30,7 @@ const accounts: Account[] = [
     signatureId: null,
     notifyEnabled: null,
     notifySound: null,
+    defaultAliasId: null,
   },
   {
     id: 2,
@@ -46,6 +47,7 @@ const accounts: Account[] = [
     signatureId: null,
     notifyEnabled: null,
     notifySound: null,
+    defaultAliasId: null,
   },
 ];
 
