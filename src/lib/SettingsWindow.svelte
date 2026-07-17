@@ -12,11 +12,13 @@
     deleteAccount,
     getRemoteImagePolicy,
     getSwipeActions,
+    getThreadOrder,
     listAccounts,
     onAccountsChanged,
     setAccountColor,
     setRemoteImagePolicy,
     setSwipeActions,
+    setThreadOrder,
     testConnection,
   } from "./api";
   import { DEFAULT_SWIPE_ACTIONS } from "./swipe";
@@ -27,6 +29,7 @@
     RemoteImagePolicy,
     SwipeAction,
     SwipeActions,
+    ThreadOrder,
   } from "./types";
   import AccountsPane from "./AccountsPane.svelte";
   import NotificationsPane from "./NotificationsPane.svelte";
@@ -67,6 +70,7 @@
   >("accounts");
   let policy = $state<RemoteImagePolicy>("ask");
   let swipes = $state<SwipeActions>(DEFAULT_SWIPE_ACTIONS);
+  let threadOrder = $state<ThreadOrder>("newestLast");
 
   async function refresh() {
     accounts = await listAccounts();
@@ -189,6 +193,19 @@
     }
   }
 
+  async function selectThreadOrder(next: ThreadOrder) {
+    lastError = null;
+    const previous = threadOrder;
+    threadOrder = next;
+    try {
+      await setThreadOrder(next);
+    } catch (err) {
+      // why: the select must not lie — a failed save rolls the value back.
+      threadOrder = previous;
+      lastError = String(err);
+    }
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") void closeSettings();
   }
@@ -197,6 +214,7 @@
     void refresh();
     void getRemoteImagePolicy().then((stored) => (policy = stored));
     void getSwipeActions().then((stored) => (swipes = stored));
+    void getThreadOrder().then((stored) => (threadOrder = stored));
     // why: refreshes also cover changes made elsewhere (a future main-window
     // action, another settings session) — the backend broadcasts the event.
     const unlisten = onAccountsChanged(() => void refresh());
@@ -285,6 +303,21 @@
             </select>
           </div>
         {/each}
+      </div>
+      <div class="section-label">Conversations</div>
+      <div class="group">
+        <div class="row">
+          <label class="row-label" for="thread-order">Message order</label>
+          <select
+            id="thread-order"
+            value={threadOrder}
+            onchange={(e) =>
+              void selectThreadOrder(e.currentTarget.value as ThreadOrder)}
+          >
+            <option value="newestLast">Newest at the bottom</option>
+            <option value="newestFirst">Newest on top</option>
+          </select>
+        </div>
       </div>
       <p class="explain">
         What a two-finger swipe on a message row does. Pick None to turn a

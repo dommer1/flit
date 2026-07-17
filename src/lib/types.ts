@@ -150,6 +150,9 @@ export interface NotificationSettings {
  * "none" disables that direction. */
 export type SwipeAction = "none" | "toggleRead" | "archive" | "trash" | "reply";
 
+/** Order of messages in the conversation view. */
+export type ThreadOrder = "newestLast" | "newestFirst";
+
 /** The configured action for each swipe direction on message-list rows. */
 export interface SwipeActions {
   left: SwipeAction;

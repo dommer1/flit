@@ -19,6 +19,7 @@ import type {
   SendEvent,
   Signature,
   SwipeActions,
+  ThreadOrder,
 } from "./types";
 
 export function listAccounts(): Promise<Account[]> {
@@ -401,6 +402,15 @@ export function getSwipeActions(): Promise<SwipeActions> {
 
 export function setSwipeActions(actions: SwipeActions): Promise<void> {
   return invoke<void>("set_swipe_actions", { actions });
+}
+
+/** Conversation-view order (newest at the bottom until changed). */
+export function getThreadOrder(): Promise<ThreadOrder> {
+  return invoke<ThreadOrder>("get_thread_order");
+}
+
+export function setThreadOrder(order: ThreadOrder): Promise<void> {
+  return invoke<void>("set_thread_order", { order });
 }
 
 /** Fires whenever any window changes an app-wide setting. */

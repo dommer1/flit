@@ -2,12 +2,13 @@
   import { listThread, setMessageRead, threadBodies } from "./api";
   import type { DraftKind } from "./draft";
   import MessageCard from "./MessageCard.svelte";
-  import type { MessageBody, MessageHeader } from "./types";
+  import type { MessageBody, MessageHeader, ThreadOrder } from "./types";
 
   let {
     message,
     accountEmails = {},
     accountColors = {},
+    threadOrder = "newestLast",
     onDraft,
   }: {
     message: MessageHeader | null;
@@ -15,6 +16,8 @@
     accountEmails?: Record<number, string>;
     /** accountId → accent color for the "me" avatar. */
     accountColors?: Record<number, string | null>;
+    /** Which end of the conversation the newest message renders at. */
+    threadOrder?: ThreadOrder;
     /** Per-message reply actions in card footers. */
     onDraft?: (kind: DraftKind, message: MessageHeader) => void;
   } = $props();
@@ -103,6 +106,15 @@
     );
   }
 
+  // Display order only — `thread` stays oldest-first everywhere else
+  // (newest lookup, default-open logic).
+  let displayThread = $derived(
+    threadOrder === "newestFirst" ? [...thread].reverse() : thread,
+  );
+  let newestId = $derived(
+    thread.length > 0 ? thread[thread.length - 1].id : null,
+  );
+
   function toggle(entry: MessageHeader) {
     const next = new Set(expandedIds);
     if (next.has(entry.id)) {
@@ -128,14 +140,14 @@
             {thread.length === 1 ? "message" : "messages"}
           </span>
         </div>
-        {#each thread as entry, index (entry.id)}
+        {#each displayThread as entry (entry.id)}
           <MessageCard
             message={entry}
             body={bodies[entry.id] ?? null}
             loading={bodiesLoading}
             error={bodiesError}
             expanded={expandedIds.has(entry.id)}
-            last={index === thread.length - 1}
+            last={entry.id === newestId}
             ownEmail={accountEmails[entry.accountId] ?? null}
             accountColor={accountColors[entry.accountId] ?? null}
             onToggle={() => toggle(entry)}

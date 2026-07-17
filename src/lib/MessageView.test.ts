@@ -321,6 +321,21 @@ it("expands an older message alongside the newest and collapses it again", async
   expect(screen.getByText("the original")).toBeInTheDocument();
 });
 
+it("renders the newest message on top when the setting says so", async () => {
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(conversationBodies);
+
+  renderView({ message: { ...message, id: 3 }, threadOrder: "newestFirst" });
+
+  // The open newest card comes before the collapsed original in the DOM.
+  const newest = await screen.findByText("their answer in full");
+  const original = screen.getByText("the original");
+  expect(
+    newest.compareDocumentPosition(original) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
 it("opens a reply draft for the message whose card action was clicked", async () => {
   const onDraft = vi.fn();
   vi.mocked(api.listThread).mockResolvedValueOnce(conversation);

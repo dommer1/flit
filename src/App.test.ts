@@ -227,6 +227,7 @@ vi.mock("./lib/api", () => ({
     sendUndone = callback;
     return () => {};
   }),
+  getThreadOrder: vi.fn(async () => "newestLast"),
   getSwipeActions: vi.fn(async () => currentSwipeActions),
   onSettingsChanged: vi.fn(async (callback: () => void) => {
     settingsChanged = callback;

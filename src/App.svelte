@@ -6,6 +6,7 @@
     cancelScheduled,
     getMessageBody,
     getSwipeActions,
+    getThreadOrder,
     listAccounts,
     listAliases,
     listMailboxes,
@@ -46,6 +47,7 @@
     MessageHeader,
     ScheduledMessage,
     SwipeActions,
+    ThreadOrder,
   } from "./lib/types";
   import { DEFAULT_SWIPE_ACTIONS } from "./lib/swipe";
   import { neighborId, nextMessageId, type NavDelta } from "./lib/messageNav";
@@ -155,6 +157,14 @@
 
   async function refreshSwipeActions() {
     swipeActions = await getSwipeActions();
+  }
+
+  // How the conversation view orders its cards — user-configurable in the
+  // settings window, reloaded on settings-changed like the swipe actions.
+  let threadOrder = $state<ThreadOrder>("newestLast");
+
+  async function refreshThreadOrder() {
+    threadOrder = await getThreadOrder();
   }
 
   // why fetch the body: neither the list rows nor the toolbar hold the body
@@ -518,10 +528,14 @@
       await refreshAccounts();
       await selectMailbox(null);
     })();
-    const refreshSwipeLogged = () =>
+    const refreshSwipeLogged = () => {
       void refreshSwipeActions().catch((err: unknown) =>
         console.error("failed to load swipe actions:", err),
       );
+      void refreshThreadOrder().catch((err: unknown) =>
+        console.error("failed to load thread order:", err),
+      );
+    };
     refreshSwipeLogged();
     // why: the settings window mutates the config in its own JS context —
     // this window finds out through the backend's settings-changed event.
@@ -661,6 +675,7 @@
         message={selectedMessage}
         {accountEmails}
         {accountColors}
+        {threadOrder}
         onDraft={openDraftWithBody}
       />
     </section>

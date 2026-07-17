@@ -63,6 +63,8 @@ vi.mock("./api", () => ({
     right: "toggleRead",
   })),
   setSwipeActions: vi.fn(async () => undefined),
+  getThreadOrder: vi.fn(async () => "newestLast"),
+  setThreadOrder: vi.fn(async () => undefined),
   getNotificationSettings: vi.fn(async () => ({
     enabled: true,
     sound: "default",
@@ -235,6 +237,17 @@ it("saves a swipe action change", async () => {
     left: "reply",
     right: "toggleRead",
   });
+});
+
+it("saves the conversation order change", async () => {
+  render(SettingsWindow);
+  await fireEvent.click(screen.getByRole("button", { name: "Swipes" }));
+  const order = await screen.findByLabelText("Message order");
+  expect(order).toHaveValue("newestLast");
+
+  await fireEvent.change(order, { target: { value: "newestFirst" } });
+
+  expect(api.setThreadOrder).toHaveBeenCalledWith("newestFirst");
 });
 
 it("shows per-account rows on the notifications tab", async () => {
