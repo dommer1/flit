@@ -82,13 +82,15 @@
   {/if}
 
   {#each accounts as account (account.id)}
-    <div class="account-row">
-      <button
-        class="row grow"
-        class:active={selectedAccountId === account.id &&
-          selectedMailbox === "INBOX"}
-        onclick={() => onSelect(account.id)}
-      >
+    <!-- One visual row, two click targets: the name selects the inbox, the
+         chevron folds the folders — the wrapper carries the shared
+         hover/active highlight so they never read as two pieces. -->
+    <div
+      class="account-row"
+      class:active={selectedAccountId === account.id &&
+        selectedMailbox === "INBOX"}
+    >
+      <button class="row grow" onclick={() => onSelect(account.id)}>
         <span
           class="color-dot"
           aria-hidden="true"
@@ -183,6 +185,22 @@
     display: flex;
     align-items: center;
     gap: 2px;
+    padding-right: 6px;
+    border-radius: 8px;
+  }
+
+  .account-row:hover {
+    background: var(--bg-hover);
+  }
+
+  .account-row.active {
+    background: var(--bg-selected-muted);
+  }
+
+  /* Inside the shared highlight the inner buttons stay quiet. */
+  .account-row .row:hover,
+  .account-row .chevron:hover {
+    background: none;
   }
 
   .grow {
