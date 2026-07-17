@@ -15,44 +15,29 @@
 
   let {
     message,
-    expanded,
-    onExpand,
+    body,
+    loading,
+    error,
+    collapsed,
+    single,
+    onToggle,
   }: {
     message: MessageHeader;
-    expanded: boolean;
-    /** Click on the collapsed form — the conversation view expands it. */
-    onExpand: () => void;
+    /** This message's body from the conversation's bulk load; null while
+     * the batch is still in flight (or when it failed — see `error`). */
+    body: MessageBody | null;
+    loading: boolean;
+    error: string | null;
+    collapsed: boolean;
+    /** Threads of one render a single always-open, non-collapsible card. */
+    single: boolean;
+    onToggle: () => void;
   } = $props();
 
-  let body = $state<MessageBody | null>(null);
-  let loading = $state(false);
-  let error = $state<string | null>(null);
-
-  // why a plain flag: exactly one fetch per card — the effect must not
-  // re-run when loading/error settle, or a failed fetch would retry
-  // forever and wipe its own error message.
-  let attempted = false;
-
-  // why lazy: a conversation fetches only the bodies the user actually
-  // opens; the body is kept when the card collapses again. The id guard
-  // drops stale responses when cards are switched quickly.
-  $effect(() => {
-    if (!expanded || attempted) return;
-    attempted = true;
-    const id = message.id;
-    loading = true;
-    error = null;
-    getMessageBody(id)
-      .then((loaded) => {
-        if (message.id === id) body = loaded;
-      })
-      .catch((err) => {
-        if (message.id === id) error = String(err);
-      })
-      .finally(() => {
-        if (message.id === id) loading = false;
-      });
-  });
+  // The per-message "Load Images" click re-renders richer than the bulk
+  // body — it wins over the prop until this card instance dies.
+  let richBody = $state<MessageBody | null>(null);
+  let shown = $derived(richBody ?? body);
 
   // Saving pulls the bytes from the server (they are never cached), so the
   // chips lock while a fetch is in flight and errors surface inline.
@@ -84,15 +69,44 @@
     const id = message.id;
     try {
       const loaded = await getMessageBody(id, true);
-      if (message.id === id) body = loaded;
+      if (message.id === id) richBody = loaded;
     } catch (err) {
-      if (message.id === id) error = String(err);
+      if (message.id === id) attachmentError = String(err);
     }
+  }
+
+  /**
+   * Auto-size the body iframe to its document, so every message of a
+   * conversation can be fully open at once (Canary-style stack).
+   *
+   * SECURITY: reading contentDocument is what `sandbox="allow-same-origin"`
+   * exists for — see the iframe below. Scripts stay blocked, so nothing
+   * inside the frame can exploit the shared origin.
+   */
+  function autoSize(frame: HTMLIFrameElement) {
+    const size = () => {
+      // why optional: jsdom (tests) has no srcdoc layout — leave the CSS
+      // fallback height alone when there is nothing to measure.
+      const height = frame.contentDocument?.documentElement?.scrollHeight ?? 0;
+      const next = `${height + 4}px`;
+      if (height > 0 && frame.style.height !== next) {
+        frame.style.height = next;
+      }
+    };
+    frame.addEventListener("load", size);
+    // Re-measure when the pane width changes — reflowed text changes height.
+    const observer = new ResizeObserver(size);
+    observer.observe(frame);
+    return {
+      destroy() {
+        observer.disconnect();
+      },
+    };
   }
 </script>
 
-{#if !expanded}
-  <button class="collapsed" onclick={onExpand}>
+{#if collapsed}
+  <button class="collapsed" onclick={onToggle}>
     <span class="avatar small" aria-hidden="true">
       {senderInitials(message.from)}
     </span>
@@ -140,8 +154,30 @@
         </p>
       </div>
       <span class="date">{formatFullDate(message.date)}</span>
+      {#if !single}
+        <button
+          class="fold"
+          title="Collapse message"
+          aria-label="Collapse message"
+          onclick={onToggle}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m18 15-6-6-6 6" />
+          </svg>
+        </button>
+      {/if}
     </header>
-    {#if body && body.attachments.length > 0}
+    {#if shown && shown.attachments.length > 0}
       <div class="attachments">
         <svg
           class="clip"
@@ -159,7 +195,7 @@
             d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
           />
         </svg>
-        {#each body.attachments as attachment (attachment.id)}
+        {#each shown.attachments as attachment (attachment.id)}
           <button
             class="chip"
             title="Save “{attachment.filename}”"
@@ -170,7 +206,7 @@
             <span class="size">{formatFileSize(attachment.size)}</span>
           </button>
         {/each}
-        {#if body.attachments.length > 1}
+        {#if shown.attachments.length > 1}
           <button
             class="chip save-all"
             disabled={savingAttachments}
@@ -184,35 +220,39 @@
         <p class="attachment-error" role="alert">{attachmentError}</p>
       {/if}
     {/if}
-    {#if body?.canLoadRemote}
+    {#if shown?.canLoadRemote}
       <div class="remote-banner">
         <span>
-          {body.blockedImages === 1
+          {shown.blockedImages === 1
             ? "1 remote image was"
-            : `${body.blockedImages} remote images were`} blocked to protect
+            : `${shown.blockedImages} remote images were`} blocked to protect
           your privacy.
         </span>
         <button onclick={() => void loadRemoteImages()}>Load Images</button>
       </div>
     {/if}
-    {#if loading}
-      <p class="loading">Loading…</p>
-    {:else if error}
-      <p class="error" role="alert">{error}</p>
-    {:else if body?.html}
-      <!-- SECURITY (hard rule): sandbox MUST stay empty — JS disabled, opaque
-           origin, no forms/popups/navigation. The srcdoc is a sanitized
-           document built in Rust (mail::sanitize); never render raw mail HTML
-           and never render it outside this iframe. -->
+    {#if shown?.html}
+      <!-- SECURITY (hard rule): the srcdoc is a sanitized document built in
+           Rust (mail::sanitize) — never render raw mail HTML, never outside
+           this iframe. sandbox contains EXACTLY allow-same-origin and nothing
+           else: it lets the parent read the document's height (autoSize)
+           so whole conversations can be open at once. allow-scripts must
+           NEVER be added — scripts stay blocked by the sandbox flag, by the
+           sanitizer, and by the srcdoc's own CSP (default-src 'none'). -->
       <iframe
         class="body-frame"
         title="Message body"
-        sandbox=""
-        srcdoc={body.html}
+        sandbox="allow-same-origin"
+        srcdoc={shown.html}
         referrerpolicy="no-referrer"
+        use:autoSize
       ></iframe>
-    {:else if body?.text}
-      <pre class="body">{body.text}</pre>
+    {:else if shown?.text}
+      <pre class="body">{shown.text}</pre>
+    {:else if loading}
+      <p class="loading">Loading…</p>
+    {:else if error}
+      <p class="error" role="alert">{error}</p>
     {/if}
   </section>
 {/if}
@@ -303,12 +343,11 @@
     font-size: 11px;
   }
 
-  /* ── Expanded form: the classic full message layout. ── */
+  /* ── Expanded form: the full message, sized to its content. ── */
   .card {
     display: flex;
     flex-direction: column;
-    flex: 1;
-    min-height: 0;
+    border-bottom: 1px solid var(--hairline);
     background: var(--bg-window);
   }
 
@@ -319,6 +358,25 @@
     flex-shrink: 0;
     padding: 16px 28px 14px;
     border-bottom: 1px solid var(--hairline);
+  }
+
+  .fold {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 5px;
+    background: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+  }
+
+  .fold:hover {
+    background: var(--bg-hover);
+    color: var(--text-secondary);
   }
 
   .card .who {
@@ -468,13 +526,14 @@
   }
 
   .loading {
-    margin: auto;
+    margin: 0;
+    padding: 16px 28px;
     color: var(--text-tertiary);
   }
 
   .error {
     margin: 0;
-    padding: 16px 20px;
+    padding: 16px 28px;
     color: #d9302c;
   }
 
@@ -485,10 +544,9 @@
     width: 100%;
     max-width: 736px;
     margin: 0 auto;
-    padding: 36px 48px;
-    overflow-y: auto;
-    /* why: overflow-y auto alone computes overflow-x to auto — clip
-       sideways instead of growing a horizontal scrollbar. */
+    padding: 28px 48px;
+    /* why no scroll: the conversation column scrolls as one — a body is
+       always shown whole. Clip sideways only. */
     overflow-x: hidden;
     font: inherit;
     font-size: 14.5px;
@@ -498,9 +556,9 @@
   }
 
   .body-frame {
-    flex: 1;
     width: 100%;
-    min-height: 0;
+    /* Fallback until autoSize measures the document (and in tests). */
+    height: 320px;
     border: none;
   }
 </style>

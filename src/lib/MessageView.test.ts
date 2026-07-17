@@ -14,6 +14,7 @@ function body(partial: Partial<MessageBody>): MessageBody {
 }
 
 vi.mock("./api", () => ({
+  // Per-message re-render used only by the "Load Images" click.
   getMessageBody: vi.fn(async () => ({
     html: null,
     text: null,
@@ -26,6 +27,8 @@ vi.mock("./api", () => ({
   // Default: the conversation is just the selected message (the view falls
   // back to it when the thread comes back empty).
   listThread: vi.fn(async () => []),
+  // Bodies arrive as one bulk map, keyed by message id.
+  threadBodies: vi.fn(async () => ({})),
   setMessageRead: vi.fn(async () => {}),
 }));
 
@@ -50,10 +53,13 @@ const message: MessageHeader = {
   read: false,
 };
 
-it("renders html bodies in a fully sandboxed iframe", async () => {
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
-    body({ html: "<!doctype html><html><body><p>hi there</p></body></html>", text: "hi there" }),
-  );
+it("renders html bodies in a sandboxed iframe without script rights", async () => {
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({
+      html: "<!doctype html><html><body><p>hi there</p></body></html>",
+      text: "hi there",
+    }),
+  });
 
   const { container } = render(MessageView, { props: { message } });
 
@@ -62,17 +68,19 @@ it("renders html bodies in a fully sandboxed iframe", async () => {
     expect(frame).not.toBeNull();
     return frame as HTMLIFrameElement;
   });
-  // SECURITY tripwire (hard rule): the sandbox attribute must exist and be
-  // EMPTY — every restriction on, JavaScript disabled, opaque origin.
-  expect(iframe.getAttribute("sandbox")).toBe("");
+  // SECURITY tripwire (hard rule): the sandbox must contain EXACTLY
+  // allow-same-origin — it only lets the parent measure the document's
+  // height. allow-scripts (or any other token) must NEVER appear here:
+  // scripts stay blocked by the sandbox, the sanitizer and the srcdoc CSP.
+  expect(iframe.getAttribute("sandbox")).toBe("allow-same-origin");
   expect(iframe.getAttribute("referrerpolicy")).toBe("no-referrer");
   expect(iframe.getAttribute("srcdoc")).toContain("<p>hi there</p>");
 });
 
 it("renders text-only bodies as escaped text without an iframe", async () => {
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
-    body({ html: null, text: "plain <b>not html</b>" }),
-  );
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({ html: null, text: "plain <b>not html</b>" }),
+  });
 
   const { container } = render(MessageView, { props: { message } });
 
@@ -80,8 +88,8 @@ it("renders text-only bodies as escaped text without an iframe", async () => {
   expect(container.querySelector("iframe")).toBeNull();
 });
 
-it("shows an error when the body fetch fails", async () => {
-  vi.mocked(api.getMessageBody).mockRejectedValueOnce("imap error: gone");
+it("shows an error when the bulk body fetch fails", async () => {
+  vi.mocked(api.threadBodies).mockRejectedValueOnce("imap error: gone");
 
   render(MessageView, { props: { message } });
 
@@ -89,29 +97,28 @@ it("shows an error when the body fetch fails", async () => {
 });
 
 it("shows the empty state and fetches nothing without a message", () => {
-  vi.mocked(api.getMessageBody).mockClear();
   vi.mocked(api.listThread).mockClear();
+  vi.mocked(api.threadBodies).mockClear();
 
   render(MessageView, { props: { message: null } });
 
   expect(screen.getByText("Select a message")).toBeInTheDocument();
-  expect(api.getMessageBody).not.toHaveBeenCalled();
   expect(api.listThread).not.toHaveBeenCalled();
+  expect(api.threadBodies).not.toHaveBeenCalled();
 });
 
 it("offers to load remote images and re-renders with them", async () => {
   vi.mocked(api.getMessageBody).mockClear();
-  vi.mocked(api.getMessageBody)
-    .mockResolvedValueOnce(
-      body({
-        html: "<!doctype html><html><body>no pics</body></html>",
-        blockedImages: 2,
-        canLoadRemote: true,
-      }),
-    )
-    .mockResolvedValueOnce(
-      body({ html: "<!doctype html><html><body>with pics</body></html>" }),
-    );
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({
+      html: "<!doctype html><html><body>no pics</body></html>",
+      blockedImages: 2,
+      canLoadRemote: true,
+    }),
+  });
+  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
+    body({ html: "<!doctype html><html><body>with pics</body></html>" }),
+  );
 
   render(MessageView, { props: { message } });
 
@@ -128,9 +135,9 @@ it("offers to load remote images and re-renders with them", async () => {
 });
 
 it("shows no banner when nothing was blocked", async () => {
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
-    body({ html: "<!doctype html><html><body><p>clean</p></body></html>" }),
-  );
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({ html: "<!doctype html><html><body><p>clean</p></body></html>" }),
+  });
 
   const { container } = render(MessageView, { props: { message } });
 
@@ -144,7 +151,9 @@ it("shows the recipient line, hiding Cc and Reply-To when empty", async () => {
   const { rerender } = render(MessageView, { props: { message } });
 
   // From + To always; Cc/Reply-To only when the message carries them.
-  expect(await screen.findByText("Alice <alice@example.com>")).toBeInTheDocument();
+  expect(
+    await screen.findByText("Alice <alice@example.com>"),
+  ).toBeInTheDocument();
   expect(screen.getByText("To:")).toBeInTheDocument();
   expect(screen.queryByText("Cc:")).not.toBeInTheDocument();
   expect(screen.queryByText("Reply-To:")).not.toBeInTheDocument();
@@ -185,36 +194,36 @@ const attachments = [
 ];
 
 it("lists attachments and saves one on click", async () => {
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
-    body({ text: "see files", attachments }),
-  );
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({ text: "see files", attachments }),
+  });
 
   render(MessageView, { props: { message } });
 
   const chip = await screen.findByRole("button", { name: /report\.pdf/ });
   expect(chip).toHaveTextContent("1.2 kB");
-  expect(screen.getByRole("button", { name: /photo\.jpg/ })).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: /photo\.jpg/ }),
+  ).toBeInTheDocument();
 
   await fireEvent.click(chip);
   expect(api.saveAttachment).toHaveBeenCalledWith(attachments[0]);
 });
 
 it("offers Save All only for multiple attachments", async () => {
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
-    body({ text: "see files", attachments }),
-  );
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({ text: "see files", attachments }),
+  });
   render(MessageView, { props: { message } });
 
-  await fireEvent.click(
-    await screen.findByRole("button", { name: "Save All" }),
-  );
+  await fireEvent.click(await screen.findByRole("button", { name: "Save All" }));
   expect(api.saveAllAttachments).toHaveBeenCalledWith(1);
 });
 
 it("shows no attachment strip when a message has none", async () => {
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
-    body({ text: "plain" }),
-  );
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({ text: "plain" }),
+  });
   render(MessageView, { props: { message } });
   await screen.findByText("plain");
 
@@ -243,53 +252,57 @@ const conversation: MessageHeader[] = [
   },
 ];
 
-it("renders older messages collapsed and opens the newest", async () => {
+const conversationBodies = {
+  1: body({ text: "the original in full" }),
+  2: body({ text: "my reply in full" }),
+  3: body({ text: "their answer in full" }),
+};
+
+it("opens every message of the conversation at once", async () => {
   vi.mocked(api.getMessageBody).mockClear();
   vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
-  vi.mocked(api.getMessageBody).mockResolvedValueOnce(
-    body({ text: "their answer in full" }),
-  );
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(conversationBodies);
 
   render(MessageView, { props: { message: { ...message, id: 3 } } });
 
-  // The newest message is open with its body…
-  expect(await screen.findByText("their answer in full")).toBeInTheDocument();
-  // …the older two are collapsed rows showing their snippets.
-  expect(screen.getByText("the original")).toBeInTheDocument();
-  expect(screen.getByText("my reply")).toBeInTheDocument();
-  // Only the open card fetched a body.
-  expect(api.getMessageBody).toHaveBeenCalledTimes(1);
-  expect(api.getMessageBody).toHaveBeenCalledWith(3);
+  // All three bodies are visible — no card starts collapsed.
+  expect(await screen.findByText("the original in full")).toBeInTheDocument();
+  expect(screen.getByText("my reply in full")).toBeInTheDocument();
+  expect(screen.getByText("their answer in full")).toBeInTheDocument();
+  // One bulk call fetched everything; no per-card body fetches.
+  expect(api.threadBodies).toHaveBeenCalledWith(3);
+  expect(api.getMessageBody).not.toHaveBeenCalled();
 });
 
-it("marks the opened unread message read", async () => {
+it("marks every unread message of the conversation read", async () => {
   vi.mocked(api.setMessageRead).mockClear();
   vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(conversationBodies);
 
   render(MessageView, { props: { message: { ...message, id: 3 } } });
 
   await waitFor(() => {
     expect(api.setMessageRead).toHaveBeenCalledWith(3, true);
   });
+  // The two already-read messages are left alone.
+  expect(api.setMessageRead).toHaveBeenCalledTimes(1);
 });
 
-it("expands a collapsed message on click and fetches its body", async () => {
-  vi.mocked(api.getMessageBody).mockClear();
+it("folds a message via its chevron and reopens it from the row", async () => {
   vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
-  vi.mocked(api.getMessageBody)
-    .mockResolvedValueOnce(body({ text: "their answer in full" }))
-    .mockResolvedValueOnce(body({ text: "the original in full" }));
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(conversationBodies);
 
   render(MessageView, { props: { message: { ...message, id: 3 } } });
-  await screen.findByText("their answer in full");
+  await screen.findByText("the original in full");
 
-  await fireEvent.click(
-    screen.getByRole("button", { name: /the original/ }),
-  );
+  const folds = screen.getAllByRole("button", { name: "Collapse message" });
+  await fireEvent.click(folds[0]);
 
+  // The folded card shows its snippet row instead of the body…
+  expect(screen.queryByText("the original in full")).not.toBeInTheDocument();
+  const row = screen.getByRole("button", { name: /the original/ });
+
+  // …and clicking the row opens it again, with the body still in hand.
+  await fireEvent.click(row);
   expect(await screen.findByText("the original in full")).toBeInTheDocument();
-  expect(api.getMessageBody).toHaveBeenLastCalledWith(1);
-  // The accordion collapsed the previously open message back to a row.
-  expect(screen.getByText("their answer")).toBeInTheDocument();
 });
-

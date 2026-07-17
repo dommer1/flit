@@ -86,6 +86,14 @@ export function listThread(messageId: number): Promise<MessageHeader[]> {
   return invoke<MessageHeader[]>("list_thread", { messageId });
 }
 
+/** Bodies for the whole conversation, keyed by message id. Missing bodies
+ * are fetched over a single server connection instead of one per message. */
+export function threadBodies(
+  messageId: number,
+): Promise<Record<number, MessageBody>> {
+  return invoke<Record<number, MessageBody>>("thread_bodies", { messageId });
+}
+
 /**
  * Search the local cache with a gmail-style query
  * (`from:x is:unread faktúra`). `accountId: null` searches all accounts.

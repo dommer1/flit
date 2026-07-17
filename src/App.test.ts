@@ -174,6 +174,17 @@ vi.mock("./lib/api", () => ({
   searchMessages: vi.fn(async () => [currentMessages[1]]),
   // The view's conversation fetch: empty = fall back to the selected row.
   listThread: vi.fn(async () => []),
+  // Bulk bodies for the conversation view, keyed by message id — serve the
+  // canned body under the anchor so the view pane shows it.
+  threadBodies: vi.fn(async (messageId: number) => ({
+    [messageId]: {
+      html: null,
+      text: "body text",
+      blockedImages: 0,
+      canLoadRemote: false,
+      attachments: [],
+    },
+  })),
   getMessageBody: vi.fn(async () => ({
     html: null,
     text: "body text",
