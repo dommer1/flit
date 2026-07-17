@@ -193,6 +193,10 @@ pub struct DraftAttachment {
 /// The compose-shaped fields of a draft message being reopened for editing.
 #[derive(Debug, Default, PartialEq)]
 pub struct ParsedDraft {
+    /// Bare address of the first From mailbox; None when the header is
+    /// missing. Reopening a draft matches this against the account's
+    /// aliases to restore the send-as identity.
+    pub from_addr: Option<String>,
     pub to: String,
     pub cc: String,
     pub bcc: String,
@@ -217,6 +221,11 @@ pub fn parse_draft(raw: &[u8]) -> ParsedDraft {
         return ParsedDraft::default();
     };
     ParsedDraft {
+        from_addr: message
+            .from()
+            .and_then(|a| a.first())
+            .and_then(|a| a.address())
+            .map(|a| a.to_string()),
         to: format_addr_list(message.to()),
         cc: format_addr_list(message.cc()),
         bcc: format_addr_list(message.bcc()),

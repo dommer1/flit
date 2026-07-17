@@ -113,6 +113,23 @@ pub async fn sender(
     Ok((alias.name, alias.email))
 }
 
+/// The account's alias with this address (case-insensitive), if any —
+/// how a reopened draft's From header maps back to a send-as identity.
+pub async fn find_by_email(
+    pool: &SqlitePool,
+    account_id: i64,
+    email: &str,
+) -> Result<Option<Alias>, AppError> {
+    let alias = sqlx::query_as(
+        "SELECT * FROM account_aliases WHERE account_id = ? AND email = ? COLLATE NOCASE",
+    )
+    .bind(account_id)
+    .bind(email.trim())
+    .fetch_optional(pool)
+    .await?;
+    Ok(alias)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +209,22 @@ mod tests {
         let acc = account(&pool, "hello@vocalio.sk").await;
 
         assert!(sender(&pool, &outgoing(acc, Some(999))).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn find_by_email_ignores_case_and_other_accounts() {
+        let pool = test_pool().await;
+        let acc = account(&pool, "hello@vocalio.sk").await;
+        let other = account(&pool, "other@example.com").await;
+        let alias = add(&pool, acc, "Igor", "igor@vocalio.sk").await.unwrap();
+
+        let found = find_by_email(&pool, acc, "IGOR@vocalio.sk").await.unwrap();
+        assert_eq!(found.map(|a| a.id), Some(alias.id));
+
+        let foreign = find_by_email(&pool, other, "igor@vocalio.sk")
+            .await
+            .unwrap();
+        assert!(foreign.is_none());
     }
 
     #[tokio::test]

@@ -35,13 +35,19 @@ pub fn generate_message_id() -> String {
 /// Empty address fields produce no header; Bcc is kept — a draft never
 /// leaves for recipients, and losing it on reopen would be data loss.
 pub async fn build_draft(
+    from_name: &str,
     from_email: &str,
     outgoing: &OutgoingMessage,
     message_id: &str,
 ) -> Result<Vec<u8>, AppError> {
+    // why: the draft's From mirrors what the send will use (account or
+    // alias), so webmail shows the right identity and reopening the draft
+    // can restore the alias from this header.
+    let name = from_name.trim();
+    let from = Address::new_address((!name.is_empty()).then_some(name), from_email);
     let mut builder = MessageBuilder::new()
         .message_id(message_id)
-        .from(Address::new_address(None::<&str>, from_email))
+        .from(from)
         .subject(outgoing.subject.as_str())
         .text_body(outgoing.body.as_str());
     // Keep the rich-text rendering: mail-builder writes text+html as
@@ -172,7 +178,7 @@ mod tests {
     }
 
     async fn parsed(outgoing: &OutgoingMessage) -> mail_parser::Message<'static> {
-        let raw = build_draft("domco@example.com", outgoing, "test-id@flit.local")
+        let raw = build_draft("", "domco@example.com", outgoing, "test-id@flit.local")
             .await
             .unwrap();
         // why leak: mail_parser::Message borrows the raw bytes; tests want to
@@ -199,7 +205,7 @@ mod tests {
         out.in_reply_to = Some("parent@x".to_string());
         out.references = Some("root@x parent@x".to_string());
 
-        let raw = build_draft("domco@example.com", &out, "id@flit.local")
+        let raw = build_draft("", "domco@example.com", &out, "id@flit.local")
             .await
             .unwrap();
         let parsed = crate::mail::parse::parse_draft(&raw);
@@ -210,7 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_drafts_round_trip_without_threading_headers() {
-        let raw = build_draft("domco@example.com", &outgoing(), "id@flit.local")
+        let raw = build_draft("", "domco@example.com", &outgoing(), "id@flit.local")
             .await
             .unwrap();
         let parsed = crate::mail::parse::parse_draft(&raw);
@@ -240,7 +246,7 @@ mod tests {
         let mut out = outgoing();
         out.body_html = Some("   ".to_string());
 
-        let raw = build_draft("domco@example.com", &out, "id@flit.local")
+        let raw = build_draft("", "domco@example.com", &out, "id@flit.local")
             .await
             .unwrap();
 
@@ -329,7 +335,7 @@ mod tests {
             name: "gone.txt".to_string(),
         }];
 
-        let err = build_draft("domco@example.com", &out, "id@flit.local")
+        let err = build_draft("", "domco@example.com", &out, "id@flit.local")
             .await
             .unwrap_err();
 
@@ -348,11 +354,12 @@ mod tests {
             name: "roundtrip.txt".to_string(),
         }];
 
-        let raw = build_draft("domco@example.com", &out, "rt-id@flit.local")
+        let raw = build_draft("", "domco@example.com", &out, "rt-id@flit.local")
             .await
             .unwrap();
         let parsed = crate::mail::parse::parse_draft(&raw);
 
+        assert_eq!(parsed.from_addr.as_deref(), Some("domco@example.com"));
         assert_eq!(parsed.to, "Ján Novák <jan@example.sk>, maria");
         assert_eq!(parsed.bcc, "hidden@example.com");
         assert_eq!(parsed.subject, "Pozvánka na obed");
@@ -361,6 +368,20 @@ mod tests {
         assert_eq!(parsed.attachments.len(), 1);
         assert_eq!(parsed.attachments[0].name, "roundtrip.txt");
         assert_eq!(parsed.attachments[0].data, b"data");
+    }
+
+    #[tokio::test]
+    async fn draft_from_carries_the_alias_identity() {
+        let raw = build_draft("Igor", "igor@vocalio.sk", &outgoing(), "id@flit.local")
+            .await
+            .unwrap();
+
+        let text = String::from_utf8(raw.clone()).unwrap();
+        assert!(text.contains("igor@vocalio.sk"));
+        assert!(text.contains("Igor"));
+        // The round trip hands the bare address back for alias matching.
+        let parsed = crate::mail::parse::parse_draft(&raw);
+        assert_eq!(parsed.from_addr.as_deref(), Some("igor@vocalio.sk"));
     }
 
     #[tokio::test]

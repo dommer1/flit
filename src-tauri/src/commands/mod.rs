@@ -789,7 +789,8 @@ pub async fn save_draft(
         ));
     };
     let message_id = mail::draft::generate_message_id();
-    let raw = mail::draft::build_draft(&account.email, &message, &message_id).await?;
+    let (from_name, from_email) = storage::aliases::sender(&state.pool, &message).await?;
+    let raw = mail::draft::build_draft(&from_name, &from_email, &message, &message_id).await?;
 
     let password = state.password(message.account_id).await?;
     let mut session = mail::imap::connect(
@@ -1166,13 +1167,18 @@ pub async fn open_draft(
         fetched?.ok_or_else(|| AppError::Imap("draft no longer on the server".to_string()))?;
 
     let parsed = mail::parse::parse_draft(&raw);
+    // why fall back to None: a draft From that matches no alias (foreign
+    // client, deleted alias) reopens from the account's own address.
+    let alias = match parsed.from_addr.as_deref() {
+        Some(addr) => storage::aliases::find_by_email(&state.pool, loc.account_id, addr).await?,
+        None => None,
+    };
     let attachments = stash_draft_attachments(message_id, parsed.attachments).await?;
     open_compose_window(
         &app,
         OutgoingMessage {
             account_id: loc.account_id,
-            // Reopened server drafts do not restore an alias yet.
-            alias_id: None,
+            alias_id: alias.map(|a| a.id),
             to: parsed.to,
             cc: parsed.cc,
             bcc: parsed.bcc,
