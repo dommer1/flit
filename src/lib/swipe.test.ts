@@ -2,12 +2,27 @@ import { describe, expect, it } from "vitest";
 import {
   accumulateOffset,
   actionFor,
+  clampOffset,
   DEFAULT_SWIPE_ACTIONS,
   isHorizontal,
   SWIPE_MAX,
   SWIPE_TRIGGER,
 } from "./swipe";
 import type { SwipeActions } from "./types";
+
+describe("clampOffset", () => {
+  it("passes in-range offsets through and clamps at the rubber band", () => {
+    expect(clampOffset(40)).toBe(40);
+    expect(clampOffset(-40)).toBe(-40);
+    expect(clampOffset(SWIPE_MAX + 30)).toBe(SWIPE_MAX);
+    expect(clampOffset(-SWIPE_MAX - 30)).toBe(-SWIPE_MAX);
+  });
+
+  it("pins a side whose action is none at zero", () => {
+    expect(clampOffset(-40, { left: "none", right: "toggleRead" })).toBe(0);
+    expect(clampOffset(40, { left: "archive", right: "none" })).toBe(0);
+  });
+});
 
 describe("accumulateOffset", () => {
   it("moves the row against the wheel delta (natural scrolling)", () => {

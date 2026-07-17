@@ -16,19 +16,29 @@ export const DEFAULT_SWIPE_ACTIONS: SwipeActions = {
 };
 
 /**
+ * Clamp a row offset to the rubber band. A side configured to "none" is
+ * pinned at 0 — the row doesn't budge in that direction.
+ */
+export function clampOffset(
+  offset: number,
+  actions: SwipeActions = DEFAULT_SWIPE_ACTIONS,
+): number {
+  const min = actions.left === "none" ? 0 : -SWIPE_MAX;
+  const max = actions.right === "none" ? 0 : SWIPE_MAX;
+  return Math.max(min, Math.min(max, offset));
+}
+
+/**
  * Fold one wheel event into a row offset, clamped to the rubber band.
  * Positive offset = row pushed right. With natural scrolling, fingers moving
  * left arrive as positive deltaX, so the offset runs against the delta.
- * A side configured to "none" is pinned at 0 — the row doesn't budge.
  */
 export function accumulateOffset(
   offset: number,
   deltaX: number,
   actions: SwipeActions = DEFAULT_SWIPE_ACTIONS,
 ): number {
-  const min = actions.left === "none" ? 0 : -SWIPE_MAX;
-  const max = actions.right === "none" ? 0 : SWIPE_MAX;
-  return Math.max(min, Math.min(max, offset - deltaX));
+  return clampOffset(offset - deltaX, actions);
 }
 
 /** Whether a horizontal gesture owns this wheel event (vs vertical scroll). */
