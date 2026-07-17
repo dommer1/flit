@@ -7,6 +7,7 @@
     getMessageBody,
     getSwipeActions,
     listAccounts,
+    listAliases,
     listMailboxes,
     listMessages,
     listScheduled,
@@ -40,6 +41,7 @@
   } from "./lib/draft";
   import type {
     Account,
+    Alias,
     Mailbox,
     MessageHeader,
     ScheduledMessage,
@@ -62,6 +64,7 @@
   import MissedSends from "./lib/MissedSends.svelte";
 
   let accounts = $state<Account[]>([]);
+  let aliases = $state<Alias[]>([]);
   let mailboxesByAccount = $state<Record<number, Mailbox[]>>({});
   let messages = $state<MessageHeader[]>([]);
   let selectedAccountId = $state<number | null>(null);
@@ -354,10 +357,10 @@
       accounts.find((a) => a.id === message.accountId)?.email ?? "";
     const draft =
       kind === "reply"
-        ? replyDraft(message, bodyText)
+        ? replyDraft(message, bodyText, aliases)
         : kind === "reply-all"
-          ? replyAllDraft(message, bodyText, ownEmail)
-          : forwardDraft(message, bodyText);
+          ? replyAllDraft(message, bodyText, ownEmail, aliases)
+          : forwardDraft(message, bodyText, aliases);
     void openCompose(draft).catch((err: unknown) =>
       console.error(`failed to open ${kind}:`, err),
     );
@@ -484,6 +487,9 @@
   async function refreshAccounts() {
     const known = new Set(accounts.map((a) => a.id));
     accounts = await listAccounts();
+    // why here: alias edits broadcast accounts-changed too, so reply
+    // matching always works against the current alias list.
+    aliases = await listAliases();
     // why: an account just added in settings syncs right away, so its
     // messages and connection status appear without waiting for a selection.
     if (accountsLoaded) {

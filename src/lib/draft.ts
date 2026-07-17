@@ -3,7 +3,7 @@
 // share one shape.
 
 import { formatFullDate, senderName } from "./format";
-import type { MessageHeader, OutgoingMessage } from "./types";
+import type { Alias, MessageHeader, OutgoingMessage } from "./types";
 
 /** Bare address out of `Name <addr>`; a plain address passes through. */
 function senderAddress(from: string): string {
@@ -83,13 +83,34 @@ function threading(
   };
 }
 
-/** Reply goes from the account the message arrived on, to its sender. */
+/** The account's alias the message was addressed to, if any — a reply
+ * should leave from the same address the mail arrived on. */
+function matchAlias(
+  message: MessageHeader,
+  aliases: Alias[],
+): Alias | undefined {
+  const recipients = new Set(
+    [...splitRecipients(message.to), ...splitRecipients(message.cc)].map(
+      (entry) => senderAddress(entry).toLowerCase(),
+    ),
+  );
+  return aliases.find(
+    (alias) =>
+      alias.accountId === message.accountId &&
+      recipients.has(alias.email.toLowerCase()),
+  );
+}
+
+/** Reply goes from the account the message arrived on — and from the alias
+ * it was addressed to, when one matches — to its sender. */
 export function replyDraft(
   message: MessageHeader,
   bodyText: string | null,
+  aliases: Alias[] = [],
 ): OutgoingMessage {
   return {
     accountId: message.accountId,
+    aliasId: matchAlias(message, aliases)?.id,
     to: senderAddress(message.from),
     subject: replySubject(message.subject),
     body: bodyText ? quote(message, bodyText) : "",
@@ -103,8 +124,16 @@ export function replyAllDraft(
   message: MessageHeader,
   bodyText: string | null,
   ownEmail: string,
+  aliases: Alias[] = [],
 ): OutgoingMessage {
-  const seen = new Set([ownEmail.trim().toLowerCase()]);
+  // why all account aliases, not just the matched one: every alias is "me" —
+  // none of them belongs on the recipient lines of my own reply.
+  const seen = new Set([
+    ownEmail.trim().toLowerCase(),
+    ...aliases
+      .filter((a) => a.accountId === message.accountId)
+      .map((a) => a.email.toLowerCase()),
+  ]);
   const keep = (entry: string) => {
     const address = senderAddress(entry).toLowerCase();
     if (address === "" || seen.has(address)) return false;
@@ -115,6 +144,7 @@ export function replyAllDraft(
   const cc = splitRecipients(message.cc).filter(keep);
   return {
     accountId: message.accountId,
+    aliasId: matchAlias(message, aliases)?.id,
     // why: everyone else can be me (replying to my own mail) — degrade to a
     // plain reply-to-sender rather than an unsendable empty To.
     to: to.length > 0 ? to.join(", ") : senderAddress(message.from),
@@ -129,6 +159,7 @@ export function replyAllDraft(
 export function forwardDraft(
   message: MessageHeader,
   bodyText: string | null,
+  aliases: Alias[] = [],
 ): OutgoingMessage {
   const header = [
     "---------- Forwarded message ----------",
@@ -140,6 +171,7 @@ export function forwardDraft(
   ].join("\n");
   return {
     accountId: message.accountId,
+    aliasId: matchAlias(message, aliases)?.id,
     to: "",
     subject: forwardSubject(message.subject),
     body: `\n\n${header}\n\n${bodyText ?? ""}`.trimEnd().concat("\n"),

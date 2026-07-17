@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/svelte";
 import type {
+  Alias,
   Account,
   MessageHeader,
   ScheduledMessage,
@@ -112,6 +113,7 @@ const archivedMessages: MessageHeader[] = [
 // why: mutable + captured by the mock factory, so tests can simulate the
 // backend changing state and firing change events.
 let currentAccounts: Account[] = [];
+let currentAliases: Alias[] = [];
 let currentMessages: MessageHeader[] = [];
 let currentScheduled: ScheduledMessage[] = [];
 let accountsChanged: (() => void) | undefined;
@@ -162,6 +164,7 @@ async function defaultListMailboxes(accountId: number) {
 
 vi.mock("./lib/api", () => ({
   listAccounts: vi.fn(async () => currentAccounts),
+  listAliases: vi.fn(async () => currentAliases),
   listMailboxes: vi.fn(defaultListMailboxes),
   listMessages: vi.fn(async (accountId: number | null, mailbox = "INBOX") => {
     const pool = mailbox === "Archive" ? archivedMessages : currentMessages;
@@ -248,6 +251,7 @@ import App from "./App.svelte";
 
 beforeEach(() => {
   currentAccounts = [...accounts];
+  currentAliases = [];
   currentMessages = [...allMessages];
   currentScheduled = [];
   accountsChanged = undefined;
@@ -400,6 +404,26 @@ it("opens a compose window for a new message", async () => {
       subject: "",
       body: "",
     }),
+  );
+});
+
+it("a reply leaves from the alias the mail was addressed to", async () => {
+  // Message 1's To line reads "domco@example.com, Bob <bob@example.com>" —
+  // make the second entry an alias of account 1.
+  currentAliases = [
+    { id: 10, accountId: 1, name: "Bob", email: "bob@example.com" },
+  ];
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  await screen.findByRole("heading", { name: "Weekend plans" });
+  await screen.findByText("body text");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+  await waitFor(() =>
+    expect(api.openCompose).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: 1, aliasId: 10 }),
+    ),
   );
 });
 

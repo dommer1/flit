@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { forwardDraft, isDraftEmpty, replyAllDraft, replyDraft } from "./draft";
-import type { MessageHeader, OutgoingMessage } from "./types";
+import type { Alias, MessageHeader, OutgoingMessage } from "./types";
 
 const message: MessageHeader = {
   id: 7,
@@ -19,6 +19,57 @@ const message: MessageHeader = {
   date: "2026-07-07T09:15:00Z",
   read: true,
 };
+
+const aliases: Alias[] = [
+  { id: 10, accountId: 2, name: "Igor", email: "igor@vocalio.sk" },
+  { id: 11, accountId: 2, name: "", email: "dominik@vocalio.sk" },
+  { id: 12, accountId: 1, name: "", email: "other@example.com" },
+];
+
+describe("send-as alias matching", () => {
+  it("a reply leaves from the alias the mail was addressed to", () => {
+    const toAlias = { ...message, to: "Igor <igor@vocalio.sk>" };
+    expect(replyDraft(toAlias, null, aliases).aliasId).toBe(10);
+  });
+
+  it("matches an alias case-insensitively and in the Cc line", () => {
+    const ccAlias = { ...message, cc: "DOMINIK@vocalio.sk" };
+    expect(replyDraft(ccAlias, null, aliases).aliasId).toBe(11);
+  });
+
+  it("ignores another account's alias with the same address", () => {
+    const toForeign = { ...message, to: "other@example.com" };
+    expect(replyDraft(toForeign, null, aliases).aliasId).toBeUndefined();
+  });
+
+  it("leaves the alias unset when the mail came to the account itself", () => {
+    expect(replyDraft(message, null, aliases).aliasId).toBeUndefined();
+  });
+
+  it("reply-all carries the matched alias too", () => {
+    const toAlias = { ...message, to: "igor@vocalio.sk" };
+    expect(
+      replyAllDraft(toAlias, null, "me@example.com", aliases).aliasId,
+    ).toBe(10);
+  });
+
+  it("reply-all never mails the account's own aliases back", () => {
+    const toBoth = {
+      ...message,
+      to: "igor@vocalio.sk, Bob <bob@example.com>",
+      cc: "dominik@vocalio.sk",
+    };
+    const draft = replyAllDraft(toBoth, null, "me@example.com", aliases);
+
+    expect(draft.to).toBe("Alice Doe <alice@example.com>, Bob <bob@example.com>");
+    expect(draft.cc).toBe("");
+  });
+
+  it("a forward keeps the identity the mail was addressed to", () => {
+    const toAlias = { ...message, to: "igor@vocalio.sk" };
+    expect(forwardDraft(toAlias, null, aliases).aliasId).toBe(10);
+  });
+});
 
 describe("replyDraft", () => {
   it("replies from the account the message arrived on", () => {
