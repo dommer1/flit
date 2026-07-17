@@ -87,6 +87,8 @@
     else if (action === "reply") onReply?.(message.id);
   }
 
+  let unreadCount = $derived(messages.filter((m) => !m.read).length);
+
   // why: keyboard navigation moves the selection without scrolling — keep the
   // selected row in view so arrowing through a long list stays usable.
   let listEl = $state<HTMLElement | null>(null);
@@ -103,7 +105,9 @@
     <h1>{title}</h1>
     <p class="count">
       {messages.length}
-      {messages.length === 1 ? "message" : "messages"}
+      {messages.length === 1 ? "message" : "messages"}{unreadCount > 0
+        ? `, ${unreadCount} unread`
+        : ""}
     </p>
   </header>
 
@@ -147,9 +151,11 @@
               : `translateX(${offset}px)`}
             onclick={() => onSelect(message.id)}
           >
-            <span class="dot" aria-hidden="true"></span>
             <span class="content">
               <span class="row">
+                {#if !message.read}
+                  <span class="dot" aria-hidden="true"></span>
+                {/if}
                 <span class="from">{senderName(message.from)}</span>
                 <span class="end">
                   {#if color}
@@ -202,7 +208,6 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    padding: 4px 6px;
     overflow-y: auto;
   }
 
@@ -221,6 +226,8 @@
        to 0, so rows would squash vertically to fit the pane instead of
        scrolling — pin them at their content height. */
     flex-shrink: 0;
+    /* Flat full-width separators between rows (the new design). */
+    border-bottom: 1px solid var(--hairline);
   }
 
   .swipe-bg {
@@ -233,7 +240,6 @@
     display: flex;
     align-items: center;
     padding: 0 14px;
-    border-radius: 7px;
     font-size: 12px;
     font-weight: 600;
     color: #ffffff;
@@ -256,14 +262,13 @@
 
   .swipe-row button {
     /* why relative: keeps the button painting above the positioned swipe
-       backdrop; doubles as the anchor for the ::before separator. */
+       backdrop. */
     position: relative;
-    display: flex;
-    align-items: flex-start;
+    display: block;
+    box-sizing: border-box;
     width: 100%;
-    padding: 7px 8px 7px 4px;
+    padding: 10px 16px;
     border: none;
-    border-radius: 7px;
     background: var(--bg-window);
     font: inherit;
     color: inherit;
@@ -278,23 +283,6 @@
     transition: none;
   }
 
-  /* Inset separators between rows, hidden around the selected one —
-     the Apple Mail look. */
-  .swipe-row + .swipe-row button::before {
-    content: "";
-    position: absolute;
-    top: -1px;
-    left: 20px;
-    right: 8px;
-    height: 1px;
-    background: var(--hairline);
-  }
-
-  .swipe-row:has(button.selected) + .swipe-row button::before,
-  button.selected::before {
-    background: transparent;
-  }
-
   /* Hover on any row that isn't the selected one — the selected row keeps
      its accent fill. */
   button:not(.selected):hover {
@@ -306,19 +294,16 @@
     color: var(--accent-text);
   }
 
+  /* Unread marker, inline before the sender name. */
   .dot {
     flex-shrink: 0;
     width: 8px;
     height: 8px;
-    margin: 5px 4px 0 0;
     border-radius: 50%;
-  }
-
-  .unread .dot {
     background: var(--accent);
   }
 
-  .selected.unread .dot {
+  .selected .dot {
     background: var(--accent-text);
   }
 
@@ -327,19 +312,18 @@
     flex-direction: column;
     gap: 1px;
     min-width: 0;
-    flex: 1;
   }
 
   .row {
     display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 8px;
+    align-items: center;
+    gap: 6px;
   }
 
   .from {
+    flex: 1;
     overflow: hidden;
-    font-weight: 600;
+    font-weight: 700;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -353,8 +337,8 @@
   }
 
   .account-dot {
-    width: 6px;
-    height: 6px;
+    width: 7px;
+    height: 7px;
     flex-shrink: 0;
     border-radius: 50%;
   }
@@ -372,6 +356,8 @@
 
   .subject {
     overflow: hidden;
+    font-size: 12.5px;
+    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
