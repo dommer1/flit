@@ -122,6 +122,8 @@ mod tests {
             body_html: None,
             attachments: vec![],
             draft_message_id: None,
+            in_reply_to: None,
+            references: None,
         }
     }
 

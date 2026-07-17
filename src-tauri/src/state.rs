@@ -138,6 +138,8 @@ mod tests {
             body_html: None,
             attachments: Vec::new(),
             draft_message_id: None,
+            in_reply_to: None,
+            references: None,
         }
     }
 

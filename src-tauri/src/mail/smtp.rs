@@ -116,6 +116,28 @@ pub async fn build_message(
         builder = builder.bcc(recipient);
     }
 
+    // Threading: ids are stored bracket-less; lettre writes these header
+    // values verbatim, so the RFC 5322 angle brackets go on here.
+    if let Some(parent) = outgoing
+        .in_reply_to
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        builder = builder.in_reply_to(format!("<{parent}>"));
+    }
+    let references = outgoing
+        .references
+        .as_deref()
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(|id| format!("<{id}>"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !references.is_empty() {
+        builder = builder.references(references);
+    }
+
     // why filter on trim: an editor that was opened but left empty may emit
     // a stray blank string upstream — that must not force a pointless
     // multipart body.
@@ -251,6 +273,8 @@ mod tests {
             body_html: None,
             attachments: Vec::new(),
             draft_message_id: None,
+            in_reply_to: None,
+            references: None,
         }
     }
 
@@ -319,6 +343,30 @@ mod tests {
         assert!(raw.contains("To: alice@example.com"));
         assert!(raw.contains("Subject: Hello"));
         assert!(raw.contains("Hi there"));
+    }
+
+    #[tokio::test]
+    async fn replies_carry_threading_headers() {
+        let mut out = outgoing("alice@example.com");
+        out.in_reply_to = Some("parent@example.com".to_string());
+        out.references = Some("root@example.com parent@example.com".to_string());
+
+        let message = build_message("domco@example.com", &out).await.unwrap();
+
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(raw.contains("In-Reply-To: <parent@example.com>"));
+        assert!(raw.contains("References: <root@example.com> <parent@example.com>"));
+    }
+
+    #[tokio::test]
+    async fn fresh_mail_has_no_threading_headers() {
+        let message = build_message("domco@example.com", &outgoing("alice@example.com"))
+            .await
+            .unwrap();
+
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(!raw.contains("In-Reply-To:"));
+        assert!(!raw.contains("References:"));
     }
 
     #[tokio::test]

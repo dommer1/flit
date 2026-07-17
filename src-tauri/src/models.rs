@@ -89,6 +89,15 @@ pub struct OutgoingMessage {
     /// Drafts folder, if any — deleted there after a successful send.
     #[serde(default)]
     pub draft_message_id: Option<String>,
+    /// Message-ID (no angle brackets) of the mail this one answers — sent as
+    /// the In-Reply-To header so recipients thread the reply. None for fresh
+    /// mail.
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
+    /// Space-separated ancestor Message-IDs for the References header,
+    /// oldest first, ending with `in_reply_to`.
+    #[serde(default)]
+    pub references: Option<String>,
 }
 
 /// What inspect_attachments returns for one dropped file — the metadata the
@@ -159,6 +168,10 @@ impl ScheduledMessage {
             attachments: self.attachments.clone(),
             // Scheduled rows never track a server draft version.
             draft_message_id: None,
+            // TODO(threading): scheduled sends don't persist these yet — a
+            // send-later reply goes out unthreaded until the columns exist.
+            in_reply_to: None,
+            references: None,
         }
     }
 }

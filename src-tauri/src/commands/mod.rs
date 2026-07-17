@@ -984,6 +984,10 @@ pub async fn open_draft(
             body_html: None,
             attachments,
             draft_message_id: parsed.message_id,
+            // Reply threading of reopened drafts arrives with the draft
+            // round-trip below (parse_draft doesn't surface these yet).
+            in_reply_to: None,
+            references: None,
         },
     )
     .await
