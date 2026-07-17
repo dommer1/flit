@@ -16,12 +16,13 @@ pub async fn insert(
 ) -> Result<ScheduledMessage, AppError> {
     let row = sqlx::query_as(
         "INSERT INTO scheduled_messages
-             (account_id, to_addr, cc_addr, bcc_addr, subject, body, body_html, attachments, scheduled_at,
+             (account_id, alias_id, to_addr, cc_addr, bcc_addr, subject, body, body_html, attachments, scheduled_at,
               in_reply_to, references_hdr)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING *",
     )
     .bind(message.account_id)
+    .bind(message.alias_id)
     .bind(&message.to)
     .bind(&message.cc)
     .bind(&message.bcc)
@@ -147,6 +148,44 @@ mod tests {
         assert_eq!(row.scheduled_at, 1_000);
         assert_eq!(row.status, "pending");
         assert_eq!(row.outgoing().body, "hello");
+    }
+
+    #[tokio::test]
+    async fn alias_survives_the_round_trip() {
+        let pool = test_pool().await;
+        let account = account_id(&pool).await;
+        let alias = crate::storage::aliases::add(&pool, account, "Igor", "igor@vocalio.sk")
+            .await
+            .unwrap();
+
+        let mut message = outgoing(account, "Hi");
+        message.alias_id = Some(alias.id);
+        let row = insert(&pool, &message, 1_000).await.unwrap();
+
+        assert_eq!(row.alias_id, Some(alias.id));
+        assert_eq!(row.outgoing().alias_id, Some(alias.id));
+    }
+
+    #[tokio::test]
+    async fn deleting_the_alias_downgrades_the_row_to_the_account_address() {
+        let pool = test_pool().await;
+        let account = account_id(&pool).await;
+        let alias = crate::storage::aliases::add(&pool, account, "Igor", "igor@vocalio.sk")
+            .await
+            .unwrap();
+        let mut message = outgoing(account, "Hi");
+        message.alias_id = Some(alias.id);
+        let row = insert(&pool, &message, 1_000).await.unwrap();
+
+        crate::storage::aliases::delete(&pool, alias.id)
+            .await
+            .unwrap();
+
+        // ON DELETE SET NULL — the parked send falls back, it never fails.
+        let rows = list(&pool).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, row.id);
+        assert_eq!(rows[0].alias_id, None);
     }
 
     #[tokio::test]

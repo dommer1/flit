@@ -151,6 +151,8 @@ pub struct AttachmentRef {
 pub struct ScheduledMessage {
     pub id: i64,
     pub account_id: i64,
+    /// Send-as alias the message was composed with; None = account address.
+    pub alias_id: Option<i64>,
     // why sqlx(rename): the columns follow the messages-table naming
     // (to_addr/cc_addr) while the struct mirrors OutgoingMessage, so the
     // frontend sees the same field names in drafts and scheduled rows.
@@ -184,8 +186,7 @@ impl ScheduledMessage {
     pub fn outgoing(&self) -> OutgoingMessage {
         OutgoingMessage {
             account_id: self.account_id,
-            // Scheduled rows do not persist an alias yet.
-            alias_id: None,
+            alias_id: self.alias_id,
             to: self.to.clone(),
             cc: self.cc.clone(),
             bcc: self.bcc.clone(),

@@ -887,6 +887,7 @@ function missedEntry(over: Partial<ScheduledMessage> = {}): ScheduledMessage {
   return {
     id: 5,
     accountId: 1,
+    aliasId: null,
     to: "alice@example.com",
     cc: "",
     bcc: "",

@@ -7,6 +7,7 @@ function entry(over: Partial<ScheduledMessage> = {}): ScheduledMessage {
   return {
     id: 1,
     accountId: 1,
+    aliasId: null,
     to: "alice@example.com",
     cc: "",
     bcc: "",

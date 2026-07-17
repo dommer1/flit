@@ -102,6 +102,8 @@ export interface AttachmentInfo {
 export interface ScheduledMessage {
   id: number;
   accountId: number;
+  /** Send-as alias the message was composed with; null = account address. */
+  aliasId: number | null;
   to: string;
   cc: string;
   bcc: string;
