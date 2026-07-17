@@ -1,15 +1,22 @@
 <script lang="ts">
   import { ACCOUNT_COLORS } from "./accountColors";
-  import type { Account, NewAccount } from "./types";
+  import type { Account, Alias, NewAccount } from "./types";
   import AddAccountForm from "./AddAccountForm.svelte";
 
   let {
     accounts,
+    aliases,
     onAdd,
     onDelete,
     onSetColor,
+    onAddAlias,
+    onUpdateAlias,
+    onDeleteAlias,
+    onSetDefaultAlias,
   }: {
     accounts: Account[];
+    /** All aliases across accounts; the pane filters by selection. */
+    aliases: Alias[];
     // why: resolves to the created account on success, null on failure — the
     // parent owns the api call and error display; the pane only needs to know
     // whether to leave the add form.
@@ -19,15 +26,31 @@
     onDelete: (account: Account) => void;
     // why: `null` clears the color; the parent owns the api call + refresh.
     onSetColor: (id: number, color: string | null) => void;
+    // why: same success contract as onAdd — null keeps the inline row open.
+    onAddAlias: (
+      accountId: number,
+      name: string,
+      email: string,
+    ) => Promise<Alias | null>;
+    onUpdateAlias: (id: number, name: string, email: string) => void;
+    onDeleteAlias: (id: number) => void;
+    /** `null` = back to the account's own address. */
+    onSetDefaultAlias: (accountId: number, aliasId: number | null) => void;
   } = $props();
 
   let selectedId = $state<number | null>(null);
   let adding = $state(false);
+  let addingAlias = $state(false);
+  let aliasName = $state("");
+  let aliasEmail = $state("");
 
   // why: falls back to the first account when nothing was selected yet or the
   // selected account was just deleted from the list.
   let selected = $derived(
     accounts.find((a) => a.id === selectedId) ?? accounts[0] ?? null,
+  );
+  let selectedAliases = $derived(
+    aliases.filter((a) => a.accountId === selected?.id),
   );
 
   async function handleSubmit(account: NewAccount, password: string) {
@@ -36,6 +59,11 @@
       selectedId = created.id;
       adding = false;
     }
+  }
+
+  async function submitAlias(accountId: number) {
+    const created = await onAddAlias(accountId, aliasName, aliasEmail);
+    if (created) addingAlias = false;
   }
 </script>
 
@@ -133,6 +161,98 @@
         <dd>{selected.smtpHost}:{selected.smtpPort}</dd>
         <dt>Username</dt>
         <dd>{selected.username}</dd>
+        <dt>Send-as aliases</dt>
+        <dd class="aliases">
+          <!-- The account's own address: always present, never removable. -->
+          <div class="alias-row">
+            <input value={selected.name} readonly aria-label="Account name" />
+            <input
+              value={selected.email}
+              readonly
+              aria-label="Account address"
+            />
+            <button
+              class="badge"
+              class:on={selected.defaultAliasId === null}
+              aria-label="Make {selected.email} the default"
+              onclick={() => onSetDefaultAlias(selected.id, null)}
+            >
+              Default
+            </button>
+            <span class="spacer" aria-hidden="true"></span>
+          </div>
+          {#each selectedAliases as alias (alias.id)}
+            <div class="alias-row">
+              <input
+                value={alias.name}
+                placeholder="Name"
+                aria-label="Alias name {alias.email}"
+                onchange={(e) =>
+                  onUpdateAlias(alias.id, e.currentTarget.value, alias.email)}
+              />
+              <input
+                value={alias.email}
+                aria-label="Alias address {alias.email}"
+                onchange={(e) =>
+                  onUpdateAlias(alias.id, alias.name, e.currentTarget.value)}
+              />
+              <button
+                class="badge"
+                class:on={selected.defaultAliasId === alias.id}
+                aria-label="Make {alias.email} the default"
+                onclick={() => onSetDefaultAlias(selected.id, alias.id)}
+              >
+                Default
+              </button>
+              <button
+                class="remove"
+                aria-label="Delete alias {alias.email}"
+                onclick={() => onDeleteAlias(alias.id)}
+              >
+                ×
+              </button>
+            </div>
+          {/each}
+          {#if addingAlias}
+            <div class="alias-row">
+              <input
+                bind:value={aliasName}
+                placeholder="Name"
+                aria-label="New alias name"
+              />
+              <input
+                bind:value={aliasEmail}
+                placeholder="alias@example.com"
+                aria-label="New alias address"
+              />
+              <button
+                class="badge on"
+                disabled={!aliasEmail.includes("@")}
+                onclick={() => void submitAlias(selected.id)}
+              >
+                Add
+              </button>
+              <button
+                class="remove"
+                aria-label="Cancel new alias"
+                onclick={() => (addingAlias = false)}
+              >
+                ×
+              </button>
+            </div>
+          {:else}
+            <button
+              class="add-alias"
+              onclick={() => {
+                aliasName = "";
+                aliasEmail = "";
+                addingAlias = true;
+              }}
+            >
+              + Add alias…
+            </button>
+          {/if}
+        </dd>
       </dl>
     {:else}
       <p class="empty">No accounts yet. Add one with +.</p>
@@ -362,5 +482,100 @@
 
   .empty {
     color: #666;
+  }
+
+  /* One box per identity row, like the mockup's grouped list. */
+  .aliases {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 440px;
+    padding: 10px;
+    border: 1px solid var(--hairline);
+    border-radius: 9px;
+    background: var(--bg-window);
+  }
+
+  .alias-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .alias-row input {
+    min-width: 0;
+    padding: 4px 8px;
+    border: 1px solid var(--border-chrome);
+    border-radius: 6px;
+    background: var(--bg-window);
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--text-primary);
+  }
+
+  .alias-row input:first-child {
+    flex: 2;
+  }
+
+  .alias-row input:nth-child(2) {
+    flex: 3;
+  }
+
+  /* "Default" pill: filled for the active identity, outline otherwise. */
+  .badge {
+    flex-shrink: 0;
+    padding: 3px 10px;
+    border: 1px solid var(--accent);
+    border-radius: 99px;
+    background: none;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    cursor: default;
+  }
+
+  .badge.on {
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  .badge:disabled {
+    opacity: 0.4;
+  }
+
+  .remove {
+    flex-shrink: 0;
+    width: 20px;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--text-secondary);
+    cursor: default;
+  }
+
+  .remove:hover {
+    color: #d9302c;
+  }
+
+  /* Keeps the primary row's columns aligned with deletable rows below. */
+  .spacer {
+    width: 20px;
+    flex-shrink: 0;
+  }
+
+  .add-alias {
+    align-self: flex-start;
+    margin-top: 2px;
+    padding: 2px 0;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--accent);
+    cursor: default;
   }
 </style>

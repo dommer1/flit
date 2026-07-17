@@ -2,7 +2,12 @@
   import { onMount } from "svelte";
   import {
     addAccount,
+    addAlias,
     closeSettings,
+    deleteAlias,
+    listAliases,
+    setDefaultAlias,
+    updateAlias,
     confirmAccountDeletion,
     deleteAccount,
     getRemoteImagePolicy,
@@ -17,6 +22,7 @@
   import { DEFAULT_SWIPE_ACTIONS } from "./swipe";
   import type {
     Account,
+    Alias,
     NewAccount,
     RemoteImagePolicy,
     SwipeAction,
@@ -54,6 +60,7 @@
   ];
 
   let accounts = $state<Account[]>([]);
+  let aliases = $state<Alias[]>([]);
   let lastError = $state<string | null>(null);
   let tab = $state<
     "accounts" | "signatures" | "notifications" | "swipes" | "privacy"
@@ -63,6 +70,7 @@
 
   async function refresh() {
     accounts = await listAccounts();
+    aliases = await listAliases();
   }
 
   async function handleAdd(
@@ -98,6 +106,57 @@
     lastError = null;
     try {
       await setAccountColor(id, color);
+      await refresh();
+    } catch (err) {
+      lastError = String(err);
+    }
+  }
+
+  async function handleAddAlias(
+    accountId: number,
+    name: string,
+    email: string,
+  ): Promise<Alias | null> {
+    lastError = null;
+    try {
+      const created = await addAlias(accountId, name, email);
+      await refresh();
+      return created;
+    } catch (err) {
+      lastError = String(err);
+      return null;
+    }
+  }
+
+  async function handleUpdateAlias(id: number, name: string, email: string) {
+    lastError = null;
+    try {
+      await updateAlias(id, name, email);
+    } catch (err) {
+      lastError = String(err);
+    }
+    // why: refresh either way — a rejected edit must snap the input back to
+    // the stored value instead of showing text that was never saved.
+    await refresh();
+  }
+
+  async function handleDeleteAlias(id: number) {
+    lastError = null;
+    try {
+      await deleteAlias(id);
+      await refresh();
+    } catch (err) {
+      lastError = String(err);
+    }
+  }
+
+  async function handleSetDefaultAlias(
+    accountId: number,
+    aliasId: number | null,
+  ) {
+    lastError = null;
+    try {
+      await setDefaultAlias(accountId, aliasId);
       await refresh();
     } catch (err) {
       lastError = String(err);
@@ -191,9 +250,14 @@
   {#if tab === "accounts"}
     <AccountsPane
       {accounts}
+      {aliases}
       onAdd={handleAdd}
       onDelete={handleDelete}
       onSetColor={handleSetColor}
+      onAddAlias={handleAddAlias}
+      onUpdateAlias={handleUpdateAlias}
+      onDeleteAlias={handleDeleteAlias}
+      onSetDefaultAlias={handleSetDefaultAlias}
     />
   {:else if tab === "signatures"}
     <SignaturesPane {accounts} />

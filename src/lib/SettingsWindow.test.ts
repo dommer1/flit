@@ -41,6 +41,11 @@ const accounts: Account[] = [
 
 vi.mock("./api", () => ({
   listAccounts: vi.fn(async () => accounts),
+  listAliases: vi.fn(async () => []),
+  addAlias: vi.fn(async () => null),
+  updateAlias: vi.fn(async () => undefined),
+  deleteAlias: vi.fn(async () => undefined),
+  setDefaultAlias: vi.fn(async () => undefined),
   addAccount: vi.fn(async (account: NewAccount, _password: string) => ({
     id: 99,
     ...account,

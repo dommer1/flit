@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/svelte";
-import type { Account } from "./types";
+import type { Account, Alias } from "./types";
 import AccountsPane from "./AccountsPane.svelte";
 
 const accounts: Account[] = [
@@ -40,12 +40,23 @@ const accounts: Account[] = [
   },
 ];
 
+const aliases: Alias[] = [
+  { id: 10, accountId: 2, name: "Igor", email: "igor@vocalio.sk" },
+  { id: 11, accountId: 2, name: "", email: "dominik@vocalio.sk" },
+  { id: 12, accountId: 1, name: "Other", email: "other@example.com" },
+];
+
 function renderPane(overrides: Record<string, unknown> = {}) {
   const props = {
     accounts,
+    aliases: [] as Alias[],
     onAdd: vi.fn(async () => null),
     onDelete: vi.fn(),
     onSetColor: vi.fn(),
+    onAddAlias: vi.fn(async () => null),
+    onUpdateAlias: vi.fn(),
+    onDeleteAlias: vi.fn(),
+    onSetDefaultAlias: vi.fn(),
     ...overrides,
   };
   render(AccountsPane, { props });
@@ -176,4 +187,96 @@ it("clears the color with the no-color swatch", async () => {
 
   await fireEvent.click(screen.getByLabelText("No color"));
   expect(props.onSetColor).toHaveBeenCalledWith(1, null);
+});
+
+it("lists only the selected account's aliases", async () => {
+  renderPane({ aliases });
+
+  await fireEvent.click(screen.getByText("Work"));
+
+  expect(screen.getByDisplayValue("igor@vocalio.sk")).toBeInTheDocument();
+  expect(screen.getByDisplayValue("dominik@vocalio.sk")).toBeInTheDocument();
+  // the other account's alias stays out of this list
+  expect(
+    screen.queryByDisplayValue("other@example.com"),
+  ).not.toBeInTheDocument();
+});
+
+it("adds an alias through the inline row and closes it on success", async () => {
+  const onAddAlias = vi.fn(async () => aliases[0]);
+  renderPane({ aliases, onAddAlias });
+
+  await fireEvent.click(screen.getByText("Work"));
+  await fireEvent.click(screen.getByText("+ Add alias…"));
+  await fireEvent.input(screen.getByLabelText("New alias name"), {
+    target: { value: "Support" },
+  });
+  await fireEvent.input(screen.getByLabelText("New alias address"), {
+    target: { value: "support@vocalio.sk" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+  expect(onAddAlias).toHaveBeenCalledWith(2, "Support", "support@vocalio.sk");
+  expect(screen.queryByLabelText("New alias address")).not.toBeInTheDocument();
+});
+
+it("keeps the inline row open when adding fails", async () => {
+  const { onAddAlias } = renderPane({ aliases }); // resolves null = failure
+
+  await fireEvent.click(screen.getByText("+ Add alias…"));
+  await fireEvent.input(screen.getByLabelText("New alias address"), {
+    target: { value: "support@example.com" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+  expect(onAddAlias).toHaveBeenCalled();
+  expect(screen.getByLabelText("New alias address")).toBeInTheDocument();
+});
+
+it("edits an alias address in place", async () => {
+  const { onUpdateAlias } = renderPane({ aliases });
+
+  await fireEvent.click(screen.getByText("Work"));
+  await fireEvent.change(screen.getByDisplayValue("igor@vocalio.sk"), {
+    target: { value: "igor2@vocalio.sk" },
+  });
+
+  expect(onUpdateAlias).toHaveBeenCalledWith(10, "Igor", "igor2@vocalio.sk");
+});
+
+it("deletes an alias from its row", async () => {
+  const { onDeleteAlias } = renderPane({ aliases });
+
+  await fireEvent.click(screen.getByText("Work"));
+  await fireEvent.click(
+    screen.getByLabelText("Delete alias igor@vocalio.sk"),
+  );
+
+  expect(onDeleteAlias).toHaveBeenCalledWith(10);
+});
+
+it("marks an alias as the default identity", async () => {
+  const { onSetDefaultAlias } = renderPane({ aliases });
+
+  await fireEvent.click(screen.getByText("Work"));
+  await fireEvent.click(
+    screen.getByLabelText("Make igor@vocalio.sk the default"),
+  );
+
+  expect(onSetDefaultAlias).toHaveBeenCalledWith(2, 10);
+});
+
+it("returns the default identity to the account's own address", async () => {
+  const withDefault = [
+    accounts[0],
+    { ...accounts[1], defaultAliasId: 10 },
+  ];
+  const { onSetDefaultAlias } = renderPane({ accounts: withDefault, aliases });
+
+  await fireEvent.click(screen.getByText("Work"));
+  await fireEvent.click(
+    screen.getByLabelText("Make hello@vocalio.sk the default"),
+  );
+
+  expect(onSetDefaultAlias).toHaveBeenCalledWith(2, null);
 });
