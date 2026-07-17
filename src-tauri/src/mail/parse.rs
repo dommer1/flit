@@ -1,4 +1,4 @@
-use mail_parser::{Addr, Address, Message, MessageParser, MimeHeaders};
+use mail_parser::{Addr, Address, HeaderValue, Message, MessageParser, MimeHeaders};
 
 /// Fields extracted from a message's headers.
 #[derive(Debug, Default, PartialEq)]
@@ -16,6 +16,13 @@ pub struct ParsedHeader {
     /// RFC3339, or empty when the Date header is missing/unparsable —
     /// empty sorts last in the date-desc list instead of inventing a date.
     pub date: String,
+    /// Message-ID without angle brackets; empty when the sender set none.
+    pub message_id: String,
+    /// The Message-ID this message replies to; empty for non-replies.
+    pub in_reply_to: String,
+    /// The References chain (oldest first) — every Message-ID this message
+    /// descends from. Threading unions these with `in_reply_to`.
+    pub references: Vec<String>,
 }
 
 /// An image embedded in the message itself and referenced from its HTML via
@@ -68,6 +75,30 @@ pub fn parse_header(raw: &[u8]) -> ParsedHeader {
         reply_to: format_addr_list(message.reply_to()),
         subject: message.subject().unwrap_or_default().to_string(),
         date: message.date().map(|d| d.to_rfc3339()).unwrap_or_default(),
+        message_id: clean_id(message.message_id().unwrap_or_default()),
+        in_reply_to: id_list(message.in_reply_to())
+            .into_iter()
+            .next()
+            .unwrap_or_default(),
+        references: id_list(message.references()),
+    }
+}
+
+/// A Message-ID normalized for comparison: angle brackets and whitespace
+/// stripped. mail-parser usually removes the brackets already; this guards
+/// against senders that nest or double them.
+fn clean_id(id: &str) -> String {
+    id.trim().trim_matches(['<', '>']).to_string()
+}
+
+/// The Message-IDs of an In-Reply-To / References header, in order.
+/// mail-parser hands single-id headers back as Text and multi-id ones as
+/// TextList — anything else means the header is absent or malformed.
+fn id_list(value: &HeaderValue) -> Vec<String> {
+    match value {
+        HeaderValue::Text(id) => vec![clean_id(id)],
+        HeaderValue::TextList(ids) => ids.iter().map(|id| clean_id(id)).collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -317,6 +348,52 @@ mod tests {
                     \r\n";
 
         assert_eq!(parse_header(raw).reply_to, "Support <support@example.com>");
+    }
+
+    #[test]
+    fn parses_threading_headers() {
+        let raw = b"From: a@example.com\r\n\
+                    Subject: Re: Hi\r\n\
+                    Message-ID: <reply-1@example.com>\r\n\
+                    In-Reply-To: <mid@example.com>\r\n\
+                    References: <root@example.com> <mid@example.com>\r\n\
+                    \r\n";
+
+        let header = parse_header(raw);
+
+        assert_eq!(header.message_id, "reply-1@example.com");
+        assert_eq!(header.in_reply_to, "mid@example.com");
+        assert_eq!(
+            header.references,
+            vec![
+                "root@example.com".to_string(),
+                "mid@example.com".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_threading_headers_yield_empty_values() {
+        let raw = b"From: a@example.com\r\nSubject: Hi\r\n\r\n";
+
+        let header = parse_header(raw);
+
+        assert_eq!(header.message_id, "");
+        assert_eq!(header.in_reply_to, "");
+        assert_eq!(header.references, Vec::<String>::new());
+    }
+
+    #[test]
+    fn single_reference_still_parses_as_list() {
+        let raw = b"From: a@example.com\r\n\
+                    Subject: Re: Hi\r\n\
+                    References: <root@example.com>\r\n\
+                    \r\n";
+
+        assert_eq!(
+            parse_header(raw).references,
+            vec!["root@example.com".to_string()]
+        );
     }
 
     #[test]
