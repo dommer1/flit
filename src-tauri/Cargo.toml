@@ -27,9 +27,9 @@ keyring = "4"
 thiserror = "2"
 # why: rt is needed for task::spawn_blocking (keychain calls are sync and must
 # not block the async executor); net/time for IMAP TCP connects with timeouts;
-# fs for reading attachment files without blocking; macros is compile-time
-# only (#[tokio::test]).
-tokio = { version = "1", features = ["rt", "macros", "net", "time", "fs"] }
+# fs for reading attachment files without blocking; process for the afplay
+# sound preview; macros is compile-time only (#[tokio::test]).
+tokio = { version = "1", features = ["rt", "macros", "net", "time", "fs", "process"] }
 # why: async-imap defaults to async-std — runtime-tokio must be selected
 # explicitly. It has no TLS of its own; async-native-tls wraps the TCP stream
 # first (macOS SecureTransport, so system cert store just works).

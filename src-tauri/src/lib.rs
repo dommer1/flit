@@ -110,6 +110,7 @@ pub fn run() {
             commands::get_notification_settings,
             commands::set_notification_settings,
             commands::set_account_notifications,
+            commands::preview_notification_sound,
             commands::get_swipe_actions,
             commands::set_swipe_actions,
             commands::list_signatures,

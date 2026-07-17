@@ -1144,6 +1144,14 @@ pub async fn set_account_notifications(
     Ok(())
 }
 
+/// Play a short preview of a notification sound (settings pane UX);
+/// "default"/"none" have nothing to play and are a no-op.
+#[tauri::command]
+pub async fn preview_notification_sound(sound: String) -> Result<(), AppError> {
+    crate::notify::preview(&sound);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn list_signatures(state: State<'_, AppState>) -> Result<Vec<Signature>, AppError> {
     storage::signatures::list(&state.pool).await

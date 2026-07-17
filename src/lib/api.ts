@@ -349,6 +349,11 @@ export function setNotificationSettings(
   return invoke<void>("set_notification_settings", { settings });
 }
 
+/** Preview a notification sound pick; "default"/"none" play nothing. */
+export function previewNotificationSound(sound: string): Promise<void> {
+  return invoke<void>("preview_notification_sound", { sound });
+}
+
 /** Per-account notification overrides; null = inherit the global default. */
 export function setAccountNotifications(
   id: number,

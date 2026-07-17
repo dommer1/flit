@@ -82,6 +82,55 @@ pub fn show(app: &AppHandle, banners: &[Banner]) {
     }
 }
 
+/// The macOS system alert sounds the settings pane offers. Doubles as the
+/// preview whitelist — nothing outside this list ever reaches afplay.
+/// Mirrors SOUNDS in src/lib/NotificationsPane.svelte.
+const SYSTEM_SOUNDS: [&str; 14] = [
+    "Basso",
+    "Blow",
+    "Bottle",
+    "Frog",
+    "Funk",
+    "Glass",
+    "Hero",
+    "Morse",
+    "Ping",
+    "Pop",
+    "Purr",
+    "Sosumi",
+    "Submarine",
+    "Tink",
+];
+
+/// Absolute path of a previewable system sound. `None` for everything else:
+/// "none" is silence and "default" is not a file (it is a notification-API
+/// sound name) — neither has anything to play.
+fn sound_file(sound: &str) -> Option<String> {
+    SYSTEM_SOUNDS
+        .contains(&sound)
+        .then(|| format!("/System/Library/Sounds/{sound}.aiff"))
+}
+
+/// Play a short preview of a sound picked in settings. Unknown names are a
+/// silent no-op, not an error.
+pub fn preview(sound: &str) {
+    let Some(path) = sound_file(sound) else {
+        return;
+    };
+    // why afplay: macOS ships it, it plays one file and exits — no audio
+    // crate dependency for a settings-pane nicety.
+    match tokio::process::Command::new("afplay").arg(path).spawn() {
+        // why wait on a task: an unwaited unix child would linger as a
+        // zombie process until the app quits.
+        Ok(mut child) => {
+            tauri::async_runtime::spawn(async move {
+                let _ = child.wait().await;
+            });
+        }
+        Err(err) => eprintln!("sound preview failed: {err}"),
+    }
+}
+
 /// The display-name half of a stored `Name <addr>` sender, degrading to the
 /// whole string for bare addresses. Mirrors senderName in src/lib/format.ts.
 fn sender_name(from: &str) -> String {
@@ -222,6 +271,20 @@ mod tests {
         // "none" means a silent banner.
         let silent = plan(&account(None, Some("none")), &named_default, &mail);
         assert_eq!(silent[0].sound, None);
+    }
+
+    #[test]
+    fn sound_file_resolves_only_whitelisted_names() {
+        assert_eq!(
+            sound_file("Ping").as_deref(),
+            Some("/System/Library/Sounds/Ping.aiff")
+        );
+
+        // "default" and "none" have no file to play; arbitrary strings must
+        // never reach the afplay process.
+        assert_eq!(sound_file("default"), None);
+        assert_eq!(sound_file("none"), None);
+        assert_eq!(sound_file("../../etc/passwd"), None);
     }
 
     #[test]
