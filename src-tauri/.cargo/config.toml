@@ -1,0 +1,8 @@
+# why: `tauri dev` runs the app via `cargo run`; the runner signs the debug
+# binary with the local "flit-dev" identity so macOS Keychain stops prompting
+# on every rebuild. See scripts/dev-runner.sh.
+[target.aarch64-apple-darwin]
+runner = "../scripts/dev-runner.sh"
+
+[target.x86_64-apple-darwin]
+runner = "../scripts/dev-runner.sh"
