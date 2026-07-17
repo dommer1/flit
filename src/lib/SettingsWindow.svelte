@@ -23,6 +23,7 @@
     SwipeActions,
   } from "./types";
   import AccountsPane from "./AccountsPane.svelte";
+  import NotificationsPane from "./NotificationsPane.svelte";
   import SignaturesPane from "./SignaturesPane.svelte";
 
   const POLICIES: { value: RemoteImagePolicy; label: string; hint: string }[] =
@@ -54,9 +55,9 @@
 
   let accounts = $state<Account[]>([]);
   let lastError = $state<string | null>(null);
-  let tab = $state<"accounts" | "signatures" | "swipes" | "privacy">(
-    "accounts",
-  );
+  let tab = $state<
+    "accounts" | "signatures" | "notifications" | "swipes" | "privacy"
+  >("accounts");
   let policy = $state<RemoteImagePolicy>("ask");
   let swipes = $state<SwipeActions>(DEFAULT_SWIPE_ACTIONS);
 
@@ -166,6 +167,13 @@
     </button>
     <button
       class="tab"
+      class:active={tab === "notifications"}
+      onclick={() => (tab = "notifications")}
+    >
+      Notifications
+    </button>
+    <button
+      class="tab"
       class:active={tab === "swipes"}
       onclick={() => (tab = "swipes")}
     >
@@ -189,6 +197,8 @@
     />
   {:else if tab === "signatures"}
     <SignaturesPane {accounts} />
+  {:else if tab === "notifications"}
+    <NotificationsPane {accounts} />
   {:else if tab === "swipes"}
     <section class="swipes">
       <fieldset>

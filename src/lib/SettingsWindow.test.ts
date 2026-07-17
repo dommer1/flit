@@ -56,6 +56,13 @@ vi.mock("./api", () => ({
     right: "toggleRead",
   })),
   setSwipeActions: vi.fn(async () => undefined),
+  getNotificationSettings: vi.fn(async () => ({
+    enabled: true,
+    sound: "default",
+    syncIntervalMinutes: 3,
+  })),
+  setNotificationSettings: vi.fn(async () => undefined),
+  setAccountNotifications: vi.fn(async () => undefined),
 }));
 
 import * as api from "./api";
@@ -221,6 +228,20 @@ it("saves a swipe action change", async () => {
     left: "reply",
     right: "toggleRead",
   });
+});
+
+it("shows per-account rows on the notifications tab", async () => {
+  render(SettingsWindow);
+  await screen.findByText("imap.example.com:993");
+
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Notifications" }),
+  );
+
+  expect(
+    await screen.findByLabelText("Notifications for Personal"),
+  ).toBeChecked();
+  expect(screen.getByLabelText("Sound for Work")).toHaveValue("");
 });
 
 it("closes the window on escape", async () => {
