@@ -23,7 +23,12 @@ const BODY_CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inl
 /// through the STYLE_PROPERTIES allowlist: inline `style` attributes via
 /// ammonia's filter, and `<style>` blocks via mail::css (parsed, filtered and
 /// re-serialised, then injected right after this base).
-const BODY_STYLE: &str = "body{font-family:system-ui,sans-serif;font-size:0.875rem;color:#1a1a1a;\
+// why html{overflow-y:hidden}: the conversation view auto-sizes the frame to
+// this document, so it must never scroll vertically itself — a bar (even a
+// few px of rounding) would steal wheel events from the conversation column.
+// Horizontal stays scrollable for wide fixed-width mail content.
+const BODY_STYLE: &str = "html{overflow-y:hidden}\
+     body{font-family:system-ui,sans-serif;font-size:0.875rem;color:#1a1a1a;\
      margin:0.5rem;word-wrap:break-word}img{max-width:100%}";
 
 /// CSS properties permitted inside `style` attributes. ammonia's

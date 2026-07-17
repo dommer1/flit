@@ -137,8 +137,13 @@
       const margins = styles
         ? parseFloat(styles.marginTop) + parseFloat(styles.marginBottom)
         : 0;
+      // A horizontal scrollbar (wide fixed-width mail) sits inside the
+      // frame's viewport — reserve its thickness so it never clips the
+      // bottom of the message (vertical scrolling is disabled in the doc).
+      const hScrollbar =
+        frameBody.scrollWidth > frame.clientWidth ? 18 : 0;
       const height = Math.min(
-        Math.ceil(frameBody.scrollHeight + (margins || 0)) + 2,
+        Math.ceil(frameBody.scrollHeight + (margins || 0) + hScrollbar) + 2,
         MAX_BODY_HEIGHT,
       );
       const current = frame.offsetHeight;
