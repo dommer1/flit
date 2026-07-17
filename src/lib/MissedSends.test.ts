@@ -17,6 +17,8 @@ function entry(over: Partial<ScheduledMessage> = {}): ScheduledMessage {
     // 2026-07-15 18:00 local time
     scheduledAt: Math.floor(new Date(2026, 6, 15, 18, 0).getTime() / 1000),
     status: "missed",
+    inReplyTo: null,
+    references: null,
     ...over,
   };
 }

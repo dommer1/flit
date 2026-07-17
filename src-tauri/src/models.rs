@@ -152,6 +152,10 @@ pub struct ScheduledMessage {
     /// "pending" | "missed" — missed rows never send on their own; the user
     /// resolves them in the catch-up dialog.
     pub status: String,
+    /// Threading identity of a scheduled reply; None for fresh mail.
+    pub in_reply_to: Option<String>,
+    #[sqlx(rename = "references_hdr")]
+    pub references: Option<String>,
 }
 
 impl ScheduledMessage {
@@ -168,10 +172,8 @@ impl ScheduledMessage {
             attachments: self.attachments.clone(),
             // Scheduled rows never track a server draft version.
             draft_message_id: None,
-            // TODO(threading): scheduled sends don't persist these yet — a
-            // send-later reply goes out unthreaded until the columns exist.
-            in_reply_to: None,
-            references: None,
+            in_reply_to: self.in_reply_to.clone(),
+            references: self.references.clone(),
         }
     }
 }

@@ -16,8 +16,9 @@ pub async fn insert(
 ) -> Result<ScheduledMessage, AppError> {
     let row = sqlx::query_as(
         "INSERT INTO scheduled_messages
-             (account_id, to_addr, cc_addr, bcc_addr, subject, body, body_html, attachments, scheduled_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             (account_id, to_addr, cc_addr, bcc_addr, subject, body, body_html, attachments, scheduled_at,
+              in_reply_to, references_hdr)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING *",
     )
     .bind(message.account_id)
@@ -31,6 +32,8 @@ pub async fn insert(
     // uses on read, so the column round-trips without manual serde_json.
     .bind(sqlx::types::Json(&message.attachments))
     .bind(scheduled_at)
+    .bind(&message.in_reply_to)
+    .bind(&message.references)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -143,6 +146,21 @@ mod tests {
         assert_eq!(row.scheduled_at, 1_000);
         assert_eq!(row.status, "pending");
         assert_eq!(row.outgoing().body, "hello");
+    }
+
+    #[tokio::test]
+    async fn threading_identity_survives_the_round_trip() {
+        let pool = test_pool().await;
+        let account = account_id(&pool).await;
+        let mut message = outgoing(account, "Re: Hi");
+        message.in_reply_to = Some("parent@x".to_string());
+        message.references = Some("root@x parent@x".to_string());
+
+        let row = insert(&pool, &message, 1_000).await.unwrap();
+
+        let out = row.outgoing();
+        assert_eq!(out.in_reply_to.as_deref(), Some("parent@x"));
+        assert_eq!(out.references.as_deref(), Some("root@x parent@x"));
     }
 
     #[tokio::test]

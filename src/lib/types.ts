@@ -99,6 +99,9 @@ export interface ScheduledMessage {
   scheduledAt: number;
   /** Missed rows never send on their own — the user resolves them. */
   status: "pending" | "missed";
+  /** Threading identity of a scheduled reply; null for fresh mail. */
+  inReplyTo: string | null;
+  references: string | null;
 }
 
 /** Payload of send-queued / send-finished / send-undone events. */

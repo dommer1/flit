@@ -866,6 +866,8 @@ function missedEntry(over: Partial<ScheduledMessage> = {}): ScheduledMessage {
     attachments: [],
     scheduledAt: 1_752_600_000,
     status: "missed",
+    inReplyTo: null,
+    references: null,
     ...over,
   };
 }
