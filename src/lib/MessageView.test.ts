@@ -53,6 +53,18 @@ const message: MessageHeader = {
   read: false,
 };
 
+function renderView(props: Record<string, unknown> = {}) {
+  return render(MessageView, {
+    props: {
+      message,
+      accountEmails: { 1: "me@example.com" },
+      accountColors: {},
+      onDraft: vi.fn(),
+      ...props,
+    },
+  });
+}
+
 it("renders html bodies in a sandboxed iframe without script rights", async () => {
   vi.mocked(api.threadBodies).mockResolvedValueOnce({
     1: body({
@@ -61,7 +73,7 @@ it("renders html bodies in a sandboxed iframe without script rights", async () =
     }),
   });
 
-  const { container } = render(MessageView, { props: { message } });
+  const { container } = renderView();
 
   const iframe = await waitFor(() => {
     const frame = container.querySelector("iframe");
@@ -82,7 +94,7 @@ it("renders text-only bodies as escaped text without an iframe", async () => {
     1: body({ html: null, text: "plain <b>not html</b>" }),
   });
 
-  const { container } = render(MessageView, { props: { message } });
+  const { container } = renderView();
 
   expect(await screen.findByText("plain <b>not html</b>")).toBeInTheDocument();
   expect(container.querySelector("iframe")).toBeNull();
@@ -91,7 +103,7 @@ it("renders text-only bodies as escaped text without an iframe", async () => {
 it("shows an error when the bulk body fetch fails", async () => {
   vi.mocked(api.threadBodies).mockRejectedValueOnce("imap error: gone");
 
-  render(MessageView, { props: { message } });
+  renderView();
 
   expect(await screen.findByText("imap error: gone")).toBeInTheDocument();
 });
@@ -100,7 +112,7 @@ it("shows the empty state and fetches nothing without a message", () => {
   vi.mocked(api.listThread).mockClear();
   vi.mocked(api.threadBodies).mockClear();
 
-  render(MessageView, { props: { message: null } });
+  renderView({ message: null });
 
   expect(screen.getByText("Select a message")).toBeInTheDocument();
   expect(api.listThread).not.toHaveBeenCalled();
@@ -120,7 +132,7 @@ it("offers to load remote images and re-renders with them", async () => {
     body({ html: "<!doctype html><html><body>with pics</body></html>" }),
   );
 
-  render(MessageView, { props: { message } });
+  renderView();
 
   await fireEvent.click(
     await screen.findByRole("button", { name: "Load Images" }),
@@ -134,29 +146,12 @@ it("offers to load remote images and re-renders with them", async () => {
   });
 });
 
-it("shows no banner when nothing was blocked", async () => {
-  vi.mocked(api.threadBodies).mockResolvedValueOnce({
-    1: body({ html: "<!doctype html><html><body><p>clean</p></body></html>" }),
-  });
+it("shows recipients in the meta line, Cc and Reply-To only when present", async () => {
+  const { rerender } = renderView();
 
-  const { container } = render(MessageView, { props: { message } });
-
-  await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-  expect(
-    screen.queryByRole("button", { name: "Load Images" }),
-  ).not.toBeInTheDocument();
-});
-
-it("shows the recipient line, hiding Cc and Reply-To when empty", async () => {
-  const { rerender } = render(MessageView, { props: { message } });
-
-  // From + To always; Cc/Reply-To only when the message carries them.
-  expect(
-    await screen.findByText("Alice <alice@example.com>"),
-  ).toBeInTheDocument();
-  expect(screen.getByText("To:")).toBeInTheDocument();
-  expect(screen.queryByText("Cc:")).not.toBeInTheDocument();
-  expect(screen.queryByText("Reply-To:")).not.toBeInTheDocument();
+  expect(await screen.findByText("To: me@example.com")).toBeInTheDocument();
+  expect(screen.queryByText(/Cc:/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Reply-To:/)).not.toBeInTheDocument();
 
   await rerender({
     message: {
@@ -166,12 +161,27 @@ it("shows the recipient line, hiding Cc and Reply-To when empty", async () => {
     },
   });
 
-  expect(screen.getByText("Cc:")).toBeInTheDocument();
-  expect(screen.getByText("carol@example.com")).toBeInTheDocument();
-  expect(screen.getByText("Reply-To:")).toBeInTheDocument();
   expect(
-    screen.getByText("Support <support@example.com>"),
+    screen.getByText(
+      "Cc: carol@example.com · Reply-To: Support <support@example.com>",
+    ),
   ).toBeInTheDocument();
+});
+
+it("reveals the sender address on a name click without collapsing", async () => {
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({ text: "the full body" }),
+  });
+  renderView();
+  await screen.findByText("the full body");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Alice" }));
+
+  expect(
+    screen.getByText("From: alice@example.com · To: me@example.com"),
+  ).toBeInTheDocument();
+  // The card stayed open — the name click must not toggle the card.
+  expect(screen.getByText("the full body")).toBeInTheDocument();
 });
 
 const attachments = [
@@ -193,18 +203,17 @@ const attachments = [
   },
 ];
 
-it("lists attachments and saves one on click", async () => {
+it("lists attachment chips with type tiles and saves one on click", async () => {
   vi.mocked(api.threadBodies).mockResolvedValueOnce({
     1: body({ text: "see files", attachments }),
   });
 
-  render(MessageView, { props: { message } });
+  renderView();
 
   const chip = await screen.findByRole("button", { name: /report\.pdf/ });
   expect(chip).toHaveTextContent("1.2 kB");
-  expect(
-    screen.getByRole("button", { name: /photo\.jpg/ }),
-  ).toBeInTheDocument();
+  expect(chip).toHaveTextContent("PDF");
+  expect(screen.getByText("2 attachments")).toBeInTheDocument();
 
   await fireEvent.click(chip);
   expect(api.saveAttachment).toHaveBeenCalledWith(attachments[0]);
@@ -214,7 +223,7 @@ it("offers Save All only for multiple attachments", async () => {
   vi.mocked(api.threadBodies).mockResolvedValueOnce({
     1: body({ text: "see files", attachments }),
   });
-  render(MessageView, { props: { message } });
+  renderView();
 
   await fireEvent.click(await screen.findByRole("button", { name: "Save All" }));
   expect(api.saveAllAttachments).toHaveBeenCalledWith(1);
@@ -224,7 +233,7 @@ it("shows no attachment strip when a message has none", async () => {
   vi.mocked(api.threadBodies).mockResolvedValueOnce({
     1: body({ text: "plain" }),
   });
-  render(MessageView, { props: { message } });
+  renderView();
   await screen.findByText("plain");
 
   expect(
@@ -258,51 +267,77 @@ const conversationBodies = {
   3: body({ text: "their answer in full" }),
 };
 
-it("opens every message of the conversation at once", async () => {
+it("opens the newest message and collapses older ones to preview rows", async () => {
   vi.mocked(api.getMessageBody).mockClear();
   vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
   vi.mocked(api.threadBodies).mockResolvedValueOnce(conversationBodies);
 
-  render(MessageView, { props: { message: { ...message, id: 3 } } });
+  renderView({ message: { ...message, id: 3 } });
 
-  // All three bodies are visible — no card starts collapsed.
-  expect(await screen.findByText("the original in full")).toBeInTheDocument();
-  expect(screen.getByText("my reply in full")).toBeInTheDocument();
-  expect(screen.getByText("their answer in full")).toBeInTheDocument();
+  // The newest body is visible; the older two show snippet rows only.
+  expect(await screen.findByText("their answer in full")).toBeInTheDocument();
+  expect(screen.getByText("the original")).toBeInTheDocument();
+  expect(screen.getByText("my reply")).toBeInTheDocument();
+  expect(screen.queryByText("the original in full")).not.toBeInTheDocument();
+  // Thread header: subject plus the message count.
+  expect(
+    screen.getByRole("heading", { name: "Weekend plans" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText("3 messages")).toBeInTheDocument();
   // One bulk call fetched everything; no per-card body fetches.
   expect(api.threadBodies).toHaveBeenCalledWith(3);
   expect(api.getMessageBody).not.toHaveBeenCalled();
 });
 
-it("marks every unread message of the conversation read", async () => {
+it("labels own messages with me and marks only the opened one read", async () => {
   vi.mocked(api.setMessageRead).mockClear();
   vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
   vi.mocked(api.threadBodies).mockResolvedValueOnce(conversationBodies);
 
-  render(MessageView, { props: { message: { ...message, id: 3 } } });
+  renderView({ message: { ...message, id: 3 } });
+  await screen.findByText("their answer in full");
 
-  await waitFor(() => {
-    expect(api.setMessageRead).toHaveBeenCalledWith(3, true);
-  });
-  // The two already-read messages are left alone.
+  expect(screen.getByText("me")).toBeInTheDocument();
+  expect(api.setMessageRead).toHaveBeenCalledWith(3, true);
   expect(api.setMessageRead).toHaveBeenCalledTimes(1);
 });
 
-it("folds a message via its chevron and reopens it from the row", async () => {
+it("expands an older message alongside the newest and collapses it again", async () => {
   vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
   vi.mocked(api.threadBodies).mockResolvedValueOnce(conversationBodies);
 
-  render(MessageView, { props: { message: { ...message, id: 3 } } });
-  await screen.findByText("the original in full");
+  renderView({ message: { ...message, id: 3 } });
+  await screen.findByText("their answer in full");
 
-  const folds = screen.getAllByRole("button", { name: "Collapse message" });
-  await fireEvent.click(folds[0]);
-
-  // The folded card shows its snippet row instead of the body…
-  expect(screen.queryByText("the original in full")).not.toBeInTheDocument();
-  const row = screen.getByRole("button", { name: /the original/ });
-
-  // …and clicking the row opens it again, with the body still in hand.
-  await fireEvent.click(row);
+  // Click the collapsed row (its preview) — both messages are now open.
+  await fireEvent.click(screen.getByText("the original"));
   expect(await screen.findByText("the original in full")).toBeInTheDocument();
+  expect(screen.getByText("their answer in full")).toBeInTheDocument();
+
+  // Click the open card's header (meta line) to fold it back to a preview.
+  const metas = screen.getAllByText("To: me@example.com");
+  await fireEvent.click(metas[0]);
+  expect(screen.queryByText("the original in full")).not.toBeInTheDocument();
+  expect(screen.getByText("the original")).toBeInTheDocument();
+});
+
+it("opens a reply draft for the message whose card action was clicked", async () => {
+  const onDraft = vi.fn();
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(conversationBodies);
+
+  renderView({ message: { ...message, id: 3 }, onDraft });
+  await screen.findByText("their answer in full");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Reply to this message" }));
+  expect(onDraft).toHaveBeenCalledWith(
+    "reply",
+    expect.objectContaining({ id: 3 }),
+  );
+
+  await fireEvent.click(screen.getByRole("button", { name: "Reply all to this message" }));
+  expect(onDraft).toHaveBeenCalledWith(
+    "reply-all",
+    expect.objectContaining({ id: 3 }),
+  );
 });

@@ -1,12 +1,7 @@
 <script lang="ts">
   import { getMessageBody, saveAllAttachments, saveAttachment } from "./api";
-  import {
-    formatFileSize,
-    formatFullDate,
-    formatListDate,
-    senderInitials,
-    senderName,
-  } from "./format";
+  import { extColor, fileExt } from "./attachments";
+  import { formatFileSize, formatFullDate, senderName } from "./format";
   import type {
     MessageAttachment,
     MessageBody,
@@ -18,9 +13,12 @@
     body,
     loading,
     error,
-    collapsed,
-    single,
+    expanded,
+    last,
+    ownEmail,
+    accountColor,
     onToggle,
+    onDraft,
   }: {
     message: MessageHeader;
     /** This message's body from the conversation's bulk load; null while
@@ -28,11 +26,44 @@
     body: MessageBody | null;
     loading: boolean;
     error: string | null;
-    collapsed: boolean;
-    /** Threads of one render a single always-open, non-collapsible card. */
-    single: boolean;
+    expanded: boolean;
+    /** Newest message of the conversation — its card is emphasized. */
+    last: boolean;
+    /** The owning account's address; a match marks the message as "me". */
+    ownEmail: string | null;
+    /** The owning account's accent color for the "me" avatar. */
+    accountColor: string | null;
     onToggle: () => void;
+    /** Per-message reply actions in the card footer. */
+    onDraft: (kind: "reply" | "reply-all") => void;
   } = $props();
+
+  /** Bare address out of `Name <addr>`; a plain address passes through. */
+  function bareAddress(from: string): string {
+    const match = from.match(/<([^<>]+)>\s*$/);
+    return (match?.[1] ?? from).trim();
+  }
+
+  let own = $derived(
+    ownEmail !== null &&
+      bareAddress(message.from).toLowerCase() === ownEmail.toLowerCase(),
+  );
+
+  // Clicking the sender's name reveals the bare address in the meta line.
+  let showAddr = $state(false);
+
+  let metaLine = $derived(
+    (showAddr ? `From: ${bareAddress(message.from)} · ` : "") +
+      `To: ${message.to}`,
+  );
+  let ccLine = $derived(
+    [
+      message.cc !== "" ? `Cc: ${message.cc}` : "",
+      message.replyTo !== "" ? `Reply-To: ${message.replyTo}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  );
 
   // The per-message "Load Images" click re-renders richer than the bulk
   // body — it wins over the prop until this card instance dies.
@@ -75,39 +106,39 @@
     }
   }
 
-  /**
-   * Auto-size the body iframe to its document, so every message of a
-   * conversation can be fully open at once (Canary-style stack).
-   *
-   * SECURITY: reading contentDocument is what `sandbox="allow-same-origin"`
-   * exists for — see the iframe below. Scripts stay blocked, so nothing
-   * inside the frame can exploit the shared origin.
-   */
   /** Ceiling for a measured body: viewport-tracking content (100vh blocks)
    * makes the content-driven measurement follow the frame itself — such a
    * pathological mail stops here and scrolls inside instead of growing the
    * frame forever. */
   const MAX_BODY_HEIGHT = 20000;
 
+  /**
+   * Auto-size the body iframe to its document, so every open message of a
+   * conversation shows whole in the stacked cards.
+   *
+   * SECURITY: reading contentDocument is what `sandbox="allow-same-origin"`
+   * exists for — see the iframe below. Scripts stay blocked, so nothing
+   * inside the frame can exploit the shared origin.
+   */
   function autoSize(frame: HTMLIFrameElement) {
     let bodyObserver: ResizeObserver | null = null;
 
     const size = () => {
       // why optional: jsdom (tests) has no srcdoc layout — leave the CSS
       // fallback height alone when there is nothing to measure.
-      const body = frame.contentDocument?.body;
-      if (!body || body.scrollHeight === 0) return;
+      const frameBody = frame.contentDocument?.body;
+      if (!frameBody || frameBody.scrollHeight === 0) return;
       // why measure the body, not documentElement: the document element's
       // scrollHeight is clamped to the frame's own viewport, so measuring
       // it feeds the height we just set back into the next measurement —
       // the frame grows forever. The body's box follows only its content.
       // Its margins sit outside scrollHeight, so they are added explicitly.
-      const styles = frame.contentWindow?.getComputedStyle(body);
+      const styles = frame.contentWindow?.getComputedStyle(frameBody);
       const margins = styles
         ? parseFloat(styles.marginTop) + parseFloat(styles.marginBottom)
         : 0;
       const height = Math.min(
-        Math.ceil(body.scrollHeight + (margins || 0)) + 2,
+        Math.ceil(frameBody.scrollHeight + (margins || 0)) + 2,
         MAX_BODY_HEIGHT,
       );
       const current = frame.offsetHeight;
@@ -154,204 +185,289 @@
   }
 </script>
 
-{#if collapsed}
-  <button class="collapsed" onclick={onToggle}>
-    <span class="avatar small" aria-hidden="true">
-      {senderInitials(message.from)}
+<section class="card" class:last>
+  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events
+       — the row is a large toggle target like the design's; keyboard users
+       reach the same state through the sender-name button inside it. -->
+  <div class="head" onclick={onToggle}>
+    <span
+      class="avatar"
+      class:own
+      aria-hidden="true"
+      style:background={own ? (accountColor ?? "var(--accent)") : undefined}
+    >
+      {senderName(message.from).charAt(0).toUpperCase()}
     </span>
     <span class="who">
-      <span class="from">{senderName(message.from)}</span>
-      <span class="snippet">{message.snippet}</span>
+      <span class="name-row">
+        <button
+          class="name"
+          title={expanded ? "Show sender address" : undefined}
+          onclick={(e) => {
+            if (!expanded) return;
+            e.stopPropagation();
+            showAddr = !showAddr;
+          }}
+        >
+          {senderName(message.from)}
+        </button>
+        {#if own}<span class="me">me</span>{/if}
+      </span>
+      {#if !expanded}
+        <span class="preview">{message.snippet}</span>
+      {:else}
+        <span class="meta">{metaLine}</span>
+        {#if ccLine}
+          <span class="meta">{ccLine}</span>
+        {/if}
+      {/if}
     </span>
-    {#if !message.read}
+    {#if !message.read && !expanded}
       <span class="dot" aria-hidden="true"></span>
     {/if}
-    <span class="date">{formatListDate(message.date)}</span>
-  </button>
-{:else}
-  <section class="card">
-    <header>
-      <span class="avatar" aria-hidden="true">
-        {senderInitials(message.from)}
-      </span>
-      <div class="who">
-        <p class="from" title={message.from}>{senderName(message.from)}</p>
-        <h2 class="subject">{message.subject}</h2>
-        <p class="meta">
-          <span class="pair">
-            <span class="key">From:</span>
-            <span class="val" title={message.from}>{message.from}</span>
-          </span>
-          {#if message.to}
-            <span class="pair">
-              <span class="key">To:</span>
-              <span class="val" title={message.to}>{message.to}</span>
-            </span>
-          {/if}
-          {#if message.cc}
-            <span class="pair">
-              <span class="key">Cc:</span>
-              <span class="val" title={message.cc}>{message.cc}</span>
-            </span>
-          {/if}
-          {#if message.replyTo}
-            <span class="pair">
-              <span class="key">Reply-To:</span>
-              <span class="val" title={message.replyTo}>{message.replyTo}</span>
-            </span>
-          {/if}
-        </p>
-      </div>
-      <span class="date">{formatFullDate(message.date)}</span>
-      {#if !single}
-        <button
-          class="fold"
-          title="Collapse message"
-          aria-label="Collapse message"
-          onclick={onToggle}
-        >
+    <span class="date">{formatFullDate(message.date)}</span>
+  </div>
+
+  {#if expanded}
+    <div class="content">
+      {#if shown && shown.attachments.length > 0}
+        <div class="atts-label">
           <svg
-            viewBox="0 0 24 24"
-            width="14"
-            height="14"
+            width="13"
+            height="13"
+            viewBox="0 0 20 20"
             fill="none"
             stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
+            stroke-width="1.6"
             aria-hidden="true"
           >
-            <path d="m18 15-6-6-6 6" />
+            <path
+              d="M15.5 9.5 9.9 15a3.5 3.5 0 0 1-5-5l6.4-6.3a2.3 2.3 0 0 1 3.3 3.3L8.3 13.2a1.2 1.2 0 0 1-1.7-1.7l5.2-5.1"
+            />
+          </svg>
+          {shown.attachments.length}
+          {shown.attachments.length === 1 ? "attachment" : "attachments"}
+        </div>
+        <div class="atts">
+          {#each shown.attachments as attachment (attachment.id)}
+            {@const ext = fileExt(attachment.filename)}
+            <button
+              class="att"
+              title="Save “{attachment.filename}”"
+              disabled={savingAttachments}
+              onclick={() => saveOne(attachment)}
+            >
+              <span class="ext" style:background={extColor(ext)}>
+                {ext === "" ? "?" : ext}
+              </span>
+              <span class="att-info">
+                <span class="att-name">{attachment.filename}</span>
+                <span class="att-size">{formatFileSize(attachment.size)}</span>
+              </span>
+              <svg
+                class="down"
+                width="15"
+                height="15"
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                aria-hidden="true"
+              >
+                <path d="M10 3.5v9m0 0 3.5-3.5M10 12.5 6.5 9" />
+                <path d="M4 15.5h12" />
+              </svg>
+            </button>
+          {/each}
+          {#if shown.attachments.length > 1}
+            <button
+              class="att save-all"
+              disabled={savingAttachments}
+              onclick={() => saveAll(message.id)}
+            >
+              Save All
+            </button>
+          {/if}
+        </div>
+        {#if attachmentError}
+          <p class="attachment-error" role="alert">{attachmentError}</p>
+        {/if}
+        <div class="att-divider"></div>
+      {/if}
+      {#if shown?.canLoadRemote}
+        <div class="remote-banner">
+          <span>
+            {shown.blockedImages === 1
+              ? "1 remote image was"
+              : `${shown.blockedImages} remote images were`} blocked to protect
+            your privacy.
+          </span>
+          <button onclick={() => void loadRemoteImages()}>Load Images</button>
+        </div>
+      {/if}
+      {#if shown?.html}
+        <!-- SECURITY (hard rule): the srcdoc is a sanitized document built in
+             Rust (mail::sanitize) — never render raw mail HTML, never outside
+             this iframe. sandbox contains EXACTLY allow-same-origin and
+             nothing else: it lets the parent read the document's height
+             (autoSize) so whole conversations can be open at once.
+             allow-scripts must NEVER be added — scripts stay blocked by the
+             sandbox flag, by the sanitizer, and by the srcdoc's own CSP. -->
+        <iframe
+          class="body-frame"
+          title="Message body"
+          sandbox="allow-same-origin"
+          srcdoc={shown.html}
+          referrerpolicy="no-referrer"
+          use:autoSize
+        ></iframe>
+      {:else if shown?.text}
+        <pre class="body">{shown.text}</pre>
+      {:else if loading}
+        <p class="loading">Loading…</p>
+      {:else if error}
+        <p class="error" role="alert">{error}</p>
+      {/if}
+      <div class="actions">
+        <button
+          class="action"
+          title="Reply"
+          aria-label="Reply to this message"
+          onclick={() => onDraft("reply")}
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            aria-hidden="true"
+          >
+            <path d="M8 4 3 8.5 8 13" />
+            <path d="M3 8.5h8.5a5 5 0 0 1 5 5V16" />
           </svg>
         </button>
-      {/if}
-    </header>
-    {#if shown && shown.attachments.length > 0}
-      <div class="attachments">
-        <svg
-          class="clip"
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
+        <button
+          class="action"
+          title="Reply All"
+          aria-label="Reply all to this message"
+          onclick={() => onDraft("reply-all")}
         >
-          <path
-            d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
-          />
-        </svg>
-        {#each shown.attachments as attachment (attachment.id)}
-          <button
-            class="chip"
-            title="Save “{attachment.filename}”"
-            disabled={savingAttachments}
-            onclick={() => saveOne(attachment)}
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            aria-hidden="true"
           >
-            <span class="name">{attachment.filename}</span>
-            <span class="size">{formatFileSize(attachment.size)}</span>
-          </button>
-        {/each}
-        {#if shown.attachments.length > 1}
-          <button
-            class="chip save-all"
-            disabled={savingAttachments}
-            onclick={() => saveAll(message.id)}
-          >
-            Save All
-          </button>
-        {/if}
+            <path d="M7 4 2 8.5 7 13" />
+            <path d="M11 4 6 8.5l5 4.5" />
+            <path d="M6 8.5h7.5a4.5 4.5 0 0 1 4.5 4.5V16" />
+          </svg>
+        </button>
       </div>
-      {#if attachmentError}
-        <p class="attachment-error" role="alert">{attachmentError}</p>
-      {/if}
-    {/if}
-    {#if shown?.canLoadRemote}
-      <div class="remote-banner">
-        <span>
-          {shown.blockedImages === 1
-            ? "1 remote image was"
-            : `${shown.blockedImages} remote images were`} blocked to protect
-          your privacy.
-        </span>
-        <button onclick={() => void loadRemoteImages()}>Load Images</button>
-      </div>
-    {/if}
-    {#if shown?.html}
-      <!-- SECURITY (hard rule): the srcdoc is a sanitized document built in
-           Rust (mail::sanitize) — never render raw mail HTML, never outside
-           this iframe. sandbox contains EXACTLY allow-same-origin and nothing
-           else: it lets the parent read the document's height (autoSize)
-           so whole conversations can be open at once. allow-scripts must
-           NEVER be added — scripts stay blocked by the sandbox flag, by the
-           sanitizer, and by the srcdoc's own CSP (default-src 'none'). -->
-      <iframe
-        class="body-frame"
-        title="Message body"
-        sandbox="allow-same-origin"
-        srcdoc={shown.html}
-        referrerpolicy="no-referrer"
-        use:autoSize
-      ></iframe>
-    {:else if shown?.text}
-      <pre class="body">{shown.text}</pre>
-    {:else if loading}
-      <p class="loading">Loading…</p>
-    {:else if error}
-      <p class="error" role="alert">{error}</p>
-    {/if}
-  </section>
-{/if}
+    </div>
+  {/if}
+</section>
 
 <style>
-  /* ── Collapsed form: one quiet row, like Canary's stacked messages. ── */
-  .collapsed {
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  /* The newest message carries the visual weight. */
+  .card.last {
+    border-color: var(--card-border-strong);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 6%);
+  }
+
+  .head {
     display: flex;
     align-items: center;
     gap: 10px;
-    width: 100%;
-    padding: 10px 20px;
-    border: none;
-    border-bottom: 1px solid var(--hairline);
-    background: var(--bg-window);
-    font: inherit;
-    color: inherit;
-    text-align: left;
+    padding: 9px 14px;
     cursor: default;
   }
 
-  .collapsed:hover {
+  .head:hover {
     background: var(--bg-hover);
   }
 
-  .collapsed .who {
+  .avatar {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--avatar-muted);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #ffffff;
+  }
+
+  .who {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-width: 0;
-    gap: 0;
   }
 
-  .collapsed .from {
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .name {
     overflow: hidden;
+    margin-left: -3px;
+    padding: 0 3px;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    font: inherit;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
+    color: var(--text-primary);
     text-overflow: ellipsis;
     white-space: nowrap;
+    cursor: pointer;
   }
 
-  .collapsed .snippet {
+  .name:hover {
+    background: var(--bg-selected-muted);
+  }
+
+  .me {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    color: var(--text-secondary);
+  }
+
+  .preview,
+  .meta {
     overflow: hidden;
+    margin-top: 1px;
     font-size: 12px;
     color: var(--text-secondary);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .collapsed .dot {
+  .meta {
+    font-size: 11.5px;
+    user-select: text;
+  }
+
+  .dot {
     flex-shrink: 0;
     width: 8px;
     height: 8px;
@@ -359,193 +475,111 @@
     background: var(--accent);
   }
 
-  .avatar {
-    display: grid;
-    place-items: center;
-    flex-shrink: 0;
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: linear-gradient(180deg, #a8b0bd, #8b95a6);
-    font-size: 15px;
-    font-weight: 600;
-    color: #ffffff;
-  }
-
-  .avatar.small {
-    width: 28px;
-    height: 28px;
-    font-size: 11px;
-  }
-
   .date {
     flex-shrink: 0;
-    align-self: flex-start;
-    padding-top: 2px;
-    font-size: 12px;
+    font-size: 11.5px;
     color: var(--text-secondary);
   }
 
-  .collapsed .date {
-    align-self: center;
-    padding-top: 0;
-    font-size: 11px;
+  .content {
+    padding: 2px 16px 12px 24px;
+    border-top: 1px solid var(--hairline);
   }
 
-  /* ── Expanded form: the full message, sized to its content. ── */
-  .card {
-    display: flex;
-    flex-direction: column;
-    border-bottom: 1px solid var(--hairline);
-    background: var(--bg-window);
-  }
-
-  header {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    flex-shrink: 0;
-    padding: 16px 28px 14px;
-    border-bottom: 1px solid var(--hairline);
-  }
-
-  .fold {
-    display: grid;
-    place-items: center;
-    flex-shrink: 0;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: none;
-    border-radius: 5px;
-    background: none;
-    color: var(--text-tertiary);
-    cursor: pointer;
-  }
-
-  .fold:hover {
-    background: var(--bg-hover);
-    color: var(--text-secondary);
-  }
-
-  .card .who {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .card .who > * {
-    overflow: hidden;
-    margin: 0;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .card .from {
-    font-size: 15px;
-    font-weight: 700;
-  }
-
-  .subject {
-    margin-top: 1px;
-    font-size: 13px;
-    font-weight: 400;
-    color: var(--text-secondary);
-  }
-
-  /* One quiet line under the subject: From: … · To: … · Cc: … */
-  .meta {
-    display: flex;
-    flex-wrap: wrap;
-    column-gap: 6px;
-    margin-top: 4px;
-    font-size: 12px;
-    color: var(--text-secondary);
-  }
-
-  .pair {
-    display: inline-flex;
-    gap: 4px;
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  .pair + .pair::before {
-    content: "·";
-    margin-right: 6px;
-    color: var(--text-tertiary);
-  }
-
-  .key {
-    flex-shrink: 0;
-    color: var(--text-tertiary);
-  }
-
-  .val {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    user-select: text;
-  }
-
-  .attachments {
+  .atts-label {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
     gap: 6px;
-    flex-shrink: 0;
-    padding: 8px 20px;
-    border-bottom: 1px solid var(--hairline);
+    margin-top: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
   }
 
-  .attachments .clip {
-    flex-shrink: 0;
-    color: var(--text-tertiary);
-  }
-
-  .chip {
+  .atts {
     display: flex;
-    align-items: baseline;
-    gap: 6px;
-    max-width: 260px;
-    padding: 3px 10px;
-    border: 1px solid var(--hairline);
-    border-radius: 999px;
-    background: var(--bg-window);
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .att {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    max-width: 240px;
+    padding: 8px 12px 8px 9px;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    background: var(--bg-thread);
     font: inherit;
-    font-size: 12px;
+    text-align: left;
     cursor: pointer;
   }
 
-  .chip:hover:not(:disabled) {
+  .att:hover:not(:disabled) {
     background: var(--bg-hover);
+    border-color: var(--card-border-strong);
   }
 
-  .chip:disabled {
+  .att:disabled {
     opacity: 0.55;
     cursor: default;
   }
 
-  .chip .name {
+  .ext {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 7px;
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: #ffffff;
+  }
+
+  .att-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .att-name {
     overflow: hidden;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .chip .size {
-    flex-shrink: 0;
-    font-size: 11px;
+  .att-size {
+    font-size: 10.5px;
     color: var(--text-secondary);
   }
 
-  .chip.save-all {
+  .att .down {
+    flex-shrink: 0;
+    margin-left: 2px;
+    color: var(--text-secondary);
+  }
+
+  .att.save-all {
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
     color: var(--accent);
   }
 
-  .attachment-error {
-    flex-shrink: 0;
-    margin: 0;
-    padding: 4px 20px 8px;
+  .att-divider {
+    margin-top: 12px;
     border-bottom: 1px solid var(--hairline);
+  }
+
+  .attachment-error {
+    margin: 8px 0 0;
     font-size: 12px;
     color: #d9302c;
   }
@@ -555,59 +589,82 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    flex-shrink: 0;
-    padding: 6px 20px;
-    border-bottom: 1px solid var(--hairline);
-    background: var(--bg-hover);
+    margin-top: 12px;
+    padding: 6px 12px;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    background: var(--bg-thread);
     font-size: 12px;
     color: var(--text-secondary);
   }
 
   .remote-banner button {
     padding: 2px 10px;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--card-border-strong);
     border-radius: 6px;
-    background: var(--bg-window);
+    background: var(--bg-card);
     font: inherit;
     font-size: 12px;
+    color: var(--text-primary);
     white-space: nowrap;
     cursor: pointer;
   }
 
   .loading {
-    margin: 0;
-    padding: 16px 28px;
+    margin: 12px 0 0;
     color: var(--text-tertiary);
   }
 
   .error {
-    margin: 0;
-    padding: 16px 28px;
+    margin: 12px 0 0;
     color: #d9302c;
   }
 
-  /* Plain-text bodies read in a centered column, like the design's HTML
-     mails; the iframe keeps full bleed (its document styles itself). */
   .body {
-    box-sizing: border-box;
-    width: 100%;
-    max-width: 736px;
-    margin: 0 auto;
-    padding: 28px 48px;
-    /* why no scroll: the conversation column scrolls as one — a body is
-       always shown whole. Clip sideways only. */
+    margin: 0;
+    padding-top: 2px;
+    /* why: overflow-y auto alone computes overflow-x to auto — clip
+       sideways, the conversation column is the only scroller. */
     overflow-x: hidden;
     font: inherit;
-    font-size: 14.5px;
+    font-size: 13.5px;
     line-height: 1.6;
+    color: var(--text-primary);
     white-space: pre-wrap;
     word-wrap: break-word;
   }
 
   .body-frame {
+    display: block;
     width: 100%;
     /* Fallback until autoSize measures the document (and in tests). */
     height: 320px;
     border: none;
+    background: #ffffff;
+    border-radius: 6px;
+  }
+
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 2px;
+    margin-top: 10px;
+  }
+
+  .action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 26px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .action:hover {
+    background: var(--bg-hover);
   }
 </style>

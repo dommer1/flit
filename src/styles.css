@@ -33,6 +33,13 @@
   --border-chrome: #d6d6da;
   /* Inset fields sitting on chrome (the toolbar search). */
   --bg-field: rgba(0, 0, 0, 0.055);
+
+  /* Conversation view: gray canvas with white message cards. */
+  --bg-thread: #f7f7f9;
+  --bg-card: #ffffff;
+  --card-border: #e6e6ea;
+  --card-border-strong: #d0d0d6;
+  --avatar-muted: #b9b9c0;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -55,6 +62,12 @@
     --bg-toolbar-bottom: #333335;
     --border-chrome: rgba(0, 0, 0, 0.55);
     --bg-field: rgba(255, 255, 255, 0.09);
+
+    --bg-thread: #161618;
+    --bg-card: #232325;
+    --card-border: rgba(255, 255, 255, 0.11);
+    --card-border-strong: rgba(255, 255, 255, 0.22);
+    --avatar-muted: #5b5b63;
   }
 }
 

@@ -81,6 +81,11 @@
     Object.fromEntries(accounts.map((a) => [a.id, a.color])),
   );
 
+  // accountId → address, so the conversation view can label own messages.
+  let accountEmails = $derived(
+    Object.fromEntries(accounts.map((a) => [a.id, a.email])),
+  );
+
   function selectMessage(id: number) {
     const message = messages.find((m) => m.id === id);
     // A message living in a Drafts folder is unfinished work — clicking it
@@ -652,7 +657,12 @@
       onkeydown={(e) => nudgePane("list", e)}
     ></div>
     <section class="view">
-      <MessageView message={selectedMessage} />
+      <MessageView
+        message={selectedMessage}
+        {accountEmails}
+        {accountColors}
+        onDraft={openDraftWithBody}
+      />
     </section>
   </main>
 </div>
