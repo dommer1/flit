@@ -92,25 +92,33 @@
       <div class="who">
         <p class="from" title={message.from}>{senderName(message.from)}</p>
         <h2 class="subject">{message.subject}</h2>
+        <p class="meta">
+          <span class="pair">
+            <span class="key">From:</span>
+            <span class="val" title={message.from}>{message.from}</span>
+          </span>
+          {#if message.to}
+            <span class="pair">
+              <span class="key">To:</span>
+              <span class="val" title={message.to}>{message.to}</span>
+            </span>
+          {/if}
+          {#if message.cc}
+            <span class="pair">
+              <span class="key">Cc:</span>
+              <span class="val" title={message.cc}>{message.cc}</span>
+            </span>
+          {/if}
+          {#if message.replyTo}
+            <span class="pair">
+              <span class="key">Reply-To:</span>
+              <span class="val" title={message.replyTo}>{message.replyTo}</span>
+            </span>
+          {/if}
+        </p>
       </div>
       <span class="date">{formatFullDate(message.date)}</span>
     </header>
-    <dl class="recipients">
-      <dt>From</dt>
-      <dd title={message.from}>{message.from}</dd>
-      {#if message.to}
-        <dt>To</dt>
-        <dd title={message.to}>{message.to}</dd>
-      {/if}
-      {#if message.cc}
-        <dt>Cc</dt>
-        <dd title={message.cc}>{message.cc}</dd>
-      {/if}
-      {#if message.replyTo}
-        <dt>Reply-To</dt>
-        <dd title={message.replyTo}>{message.replyTo}</dd>
-      {/if}
-    </dl>
     {#if body && body.attachments.length > 0}
       {@const current = message}
       <div class="attachments">
@@ -210,10 +218,10 @@
 
   header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 12px;
     flex-shrink: 0;
-    padding: 14px 20px;
+    padding: 16px 28px 14px;
     border-bottom: 1px solid var(--hairline);
   }
 
@@ -243,47 +251,58 @@
   }
 
   .from {
-    font-weight: 600;
+    font-size: 15px;
+    font-weight: 700;
   }
 
   .subject {
+    margin-top: 1px;
     font-size: 13px;
     font-weight: 400;
     color: var(--text-secondary);
+  }
+
+  /* One quiet line under the subject: From: … · To: … · Cc: … */
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 6px;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .pair {
+    display: inline-flex;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .pair + .pair::before {
+    content: "·";
+    margin-right: 6px;
+    color: var(--text-tertiary);
+  }
+
+  .key {
+    flex-shrink: 0;
+    color: var(--text-tertiary);
+  }
+
+  .val {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: text;
   }
 
   .date {
     flex-shrink: 0;
     align-self: flex-start;
     padding-top: 2px;
-    font-size: 11px;
-    color: var(--text-secondary);
-  }
-
-  .recipients {
-    display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
-    gap: 2px 10px;
-    flex-shrink: 0;
-    margin: 0;
-    padding: 8px 20px;
-    border-bottom: 1px solid var(--hairline);
     font-size: 12px;
-  }
-
-  .recipients dt {
-    color: var(--text-tertiary);
-    text-align: right;
-    user-select: none;
-  }
-
-  .recipients dd {
-    margin: 0;
-    overflow: hidden;
     color: var(--text-secondary);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    user-select: text;
   }
 
   .attachments {
@@ -373,12 +392,18 @@
     cursor: pointer;
   }
 
+  /* Plain-text bodies read in a centered column, like the design's HTML
+     mails; the iframe keeps full bleed (its document styles itself). */
   .body {
-    margin: 0;
-    padding: 16px 20px;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 736px;
+    margin: 0 auto;
+    padding: 36px 48px;
     overflow-y: auto;
     font: inherit;
-    line-height: 1.5;
+    font-size: 14.5px;
+    line-height: 1.6;
     white-space: pre-wrap;
     word-wrap: break-word;
   }

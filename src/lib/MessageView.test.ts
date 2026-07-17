@@ -130,14 +130,14 @@ it("shows no banner when nothing was blocked", async () => {
   ).not.toBeInTheDocument();
 });
 
-it("shows the recipient fields, hiding Cc and Reply-To when empty", async () => {
+it("shows the recipient line, hiding Cc and Reply-To when empty", async () => {
   const { rerender } = render(MessageView, { props: { message } });
 
   // From + To always; Cc/Reply-To only when the message carries them.
   expect(await screen.findByText("Alice <alice@example.com>")).toBeInTheDocument();
-  expect(screen.getByText("To")).toBeInTheDocument();
-  expect(screen.queryByText("Cc")).not.toBeInTheDocument();
-  expect(screen.queryByText("Reply-To")).not.toBeInTheDocument();
+  expect(screen.getByText("To:")).toBeInTheDocument();
+  expect(screen.queryByText("Cc:")).not.toBeInTheDocument();
+  expect(screen.queryByText("Reply-To:")).not.toBeInTheDocument();
 
   await rerender({
     message: {
@@ -147,9 +147,9 @@ it("shows the recipient fields, hiding Cc and Reply-To when empty", async () => 
     },
   });
 
-  expect(screen.getByText("Cc")).toBeInTheDocument();
+  expect(screen.getByText("Cc:")).toBeInTheDocument();
   expect(screen.getByText("carol@example.com")).toBeInTheDocument();
-  expect(screen.getByText("Reply-To")).toBeInTheDocument();
+  expect(screen.getByText("Reply-To:")).toBeInTheDocument();
   expect(
     screen.getByText("Support <support@example.com>"),
   ).toBeInTheDocument();
