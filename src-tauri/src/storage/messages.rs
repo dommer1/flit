@@ -5,7 +5,7 @@ use crate::mail::parse::{snippet_of, AttachmentMeta, InlineImage};
 use crate::models::{MessageAttachment, MessageHeader};
 
 /// Header data as it arrives from an IMAP fetch, before it has a row id.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FetchedHeader {
     pub uid: i64,
     pub uid_validity: i64,
@@ -17,6 +17,31 @@ pub struct FetchedHeader {
     pub date: String,
     pub snippet: String,
     pub read: bool,
+    /// Message-ID without angle brackets; empty when the sender set none.
+    pub message_id: String,
+    /// The Message-ID this message replies to; empty for non-replies.
+    pub in_reply_to: String,
+    /// The References ancestor chain, root first.
+    pub references: Vec<String>,
+}
+
+impl FetchedHeader {
+    /// The identity set threading matches on: ancestors first (References
+    /// starts at the root), then the direct parent, then the message itself.
+    /// The first element doubles as the key when a new thread starts here.
+    fn thread_refs(&self) -> Vec<String> {
+        let mut refs: Vec<String> = Vec::new();
+        for id in self
+            .references
+            .iter()
+            .chain([&self.in_reply_to, &self.message_id])
+        {
+            if !id.is_empty() && !refs.contains(id) {
+                refs.push(id.clone());
+            }
+        }
+        refs
+    }
 }
 
 /// Insert or refresh header rows. On conflict only the read flag is updated —
@@ -28,10 +53,12 @@ pub async fn upsert_headers(
     headers: &[FetchedHeader],
 ) -> Result<(), AppError> {
     for header in headers {
+        let thread_key = assign_thread_key(pool, account_id, header).await?;
         sqlx::query(
             "INSERT INTO messages
-               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, cc_addr, reply_to_addr, subject, date, snippet, read)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               (account_id, mailbox, uid, uid_validity, from_addr, to_addr, cc_addr, reply_to_addr, subject, date, snippet, read,
+                message_id_hdr, in_reply_to_hdr, references_hdr, thread_key)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (account_id, mailbox, uid) DO UPDATE SET read = excluded.read",
         )
         .bind(account_id)
@@ -46,6 +73,10 @@ pub async fn upsert_headers(
         .bind(&header.date)
         .bind(&header.snippet)
         .bind(header.read)
+        .bind(&header.message_id)
+        .bind(&header.in_reply_to)
+        .bind(header.references.join(" "))
+        .bind(&thread_key)
         .execute(pool)
         .await?;
         // why here: every sync path funnels through this upsert, so one hook
@@ -58,6 +89,60 @@ pub async fn upsert_headers(
         .await?;
     }
     Ok(())
+}
+
+/// Pick the thread key for an incoming message: adopt the key of any cached
+/// relative (a message it references, or one whose thread key its chain
+/// names), else start a new thread at the chain's root. A message bridging
+/// several threads — its parents arrived out of order and were keyed apart —
+/// merges them all onto one key.
+///
+/// why indexed-match only: a relative is found via message_id_hdr or
+/// thread_key (both indexed). Scanning every row's references_hdr would also
+/// catch two replies whose common parent never arrived, but that edge is rare
+/// (Gmail misses it too) and not worth a table scan on every insert.
+pub(crate) async fn assign_thread_key(
+    pool: &SqlitePool,
+    account_id: i64,
+    header: &FetchedHeader,
+) -> Result<Option<String>, AppError> {
+    let refs = header.thread_refs();
+    let Some(root) = refs.first() else {
+        return Ok(None);
+    };
+
+    // Existing keys in refs order, so adoption prefers the root-most thread.
+    let mut keys: Vec<String> = Vec::new();
+    for reference in &refs {
+        let found: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT thread_key FROM messages
+             WHERE account_id = ? AND thread_key IS NOT NULL
+               AND (message_id_hdr = ? OR thread_key = ?)",
+        )
+        .bind(account_id)
+        .bind(reference)
+        .bind(reference)
+        .fetch_all(pool)
+        .await?;
+        for key in found {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+    }
+
+    let Some(adopted) = keys.first() else {
+        return Ok(Some(root.clone()));
+    };
+    for other in keys.iter().skip(1) {
+        sqlx::query("UPDATE messages SET thread_key = ? WHERE account_id = ? AND thread_key = ?")
+            .bind(adopted)
+            .bind(account_id)
+            .bind(other)
+            .execute(pool)
+            .await?;
+    }
+    Ok(Some(adopted.clone()))
 }
 
 /// Recompute stored snippets that still carry a URL, using the current
@@ -435,7 +520,171 @@ mod tests {
             date: date.to_string(),
             snippet: format!("snippet of {subject}"),
             read,
+            ..Default::default()
         }
+    }
+
+    /// A header whose threading identity matters and nothing else does.
+    fn threaded(
+        uid: i64,
+        message_id: &str,
+        in_reply_to: &str,
+        references: &[&str],
+    ) -> FetchedHeader {
+        FetchedHeader {
+            uid,
+            uid_validity: 7,
+            date: format!("2026-07-{uid:02}T00:00:00Z"),
+            message_id: message_id.to_string(),
+            in_reply_to: in_reply_to.to_string(),
+            references: references.iter().map(|r| r.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    async fn thread_keys(pool: &SqlitePool, account_id: i64) -> Vec<Option<String>> {
+        sqlx::query_scalar(
+            "SELECT thread_key FROM messages WHERE account_id = ? ORDER BY mailbox, uid",
+        )
+        .bind(account_id)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn replies_inherit_the_roots_thread_key() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                threaded(1, "a@x", "", &[]),
+                threaded(2, "b@x", "a@x", &["a@x"]),
+                threaded(3, "c@x", "b@x", &["a@x", "b@x"]),
+                threaded(4, "unrelated@x", "", &[]),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let keys = thread_keys(&pool, id).await;
+        assert_eq!(keys[0], keys[1]);
+        assert_eq!(keys[1], keys[2]);
+        assert!(keys[0].is_some());
+        assert_ne!(keys[3], keys[0]);
+    }
+
+    #[tokio::test]
+    async fn threads_span_mailboxes_within_an_account() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(&pool, id, "INBOX", &[threaded(1, "a@x", "", &[])])
+            .await
+            .unwrap();
+        upsert_headers(&pool, id, "Sent", &[threaded(1, "b@x", "a@x", &["a@x"])])
+            .await
+            .unwrap();
+
+        let keys = thread_keys(&pool, id).await;
+        assert_eq!(keys[0], keys[1]);
+        assert!(keys[0].is_some());
+    }
+
+    #[tokio::test]
+    async fn out_of_order_arrival_still_threads() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        // The reply lands in the cache before the message it answers.
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                threaded(1, "c@x", "b@x", &["a@x", "b@x"]),
+                threaded(2, "a@x", "", &[]),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let keys = thread_keys(&pool, id).await;
+        assert_eq!(keys[0], keys[1]);
+    }
+
+    #[tokio::test]
+    async fn bridge_message_merges_split_threads() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        // A and C arrive first with no visible link (C only knows its direct
+        // parent B) — two separate threads until B arrives and bridges them.
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "a@x", "", &[]), threaded(2, "c@x", "b@x", &[])],
+        )
+        .await
+        .unwrap();
+        let before = thread_keys(&pool, id).await;
+        assert_ne!(before[0], before[1]);
+
+        upsert_headers(&pool, id, "INBOX", &[threaded(3, "b@x", "a@x", &["a@x"])])
+            .await
+            .unwrap();
+
+        let keys = thread_keys(&pool, id).await;
+        assert_eq!(keys[0], keys[1]);
+        assert_eq!(keys[1], keys[2]);
+    }
+
+    #[tokio::test]
+    async fn messages_without_ids_get_no_thread_key() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "", "", &[]), threaded(2, "", "", &[])],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(thread_keys(&pool, id).await, vec![None, None]);
+    }
+
+    #[tokio::test]
+    async fn threads_do_not_cross_accounts() {
+        let pool = test_pool().await;
+        let first = account(&pool, "Personal").await;
+        let second = account(&pool, "Work").await;
+        // In account one, message a@x already hangs under thread root1@x.
+        upsert_headers(
+            &pool,
+            first,
+            "INBOX",
+            &[threaded(1, "a@x", "root1@x", &["root1@x"])],
+        )
+        .await
+        .unwrap();
+        // Account two's reply references a@x — matching across accounts
+        // would wrongly adopt root1@x instead of starting at a@x.
+        upsert_headers(
+            &pool,
+            second,
+            "INBOX",
+            &[threaded(1, "b@x", "a@x", &["a@x"])],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            thread_keys(&pool, second).await,
+            vec![Some("a@x".to_string())]
+        );
     }
 
     #[tokio::test]

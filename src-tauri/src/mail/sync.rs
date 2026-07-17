@@ -310,6 +310,9 @@ fn to_fetched(raw: &imap::RawHeader, uid_validity: i64) -> FetchedHeader {
         // the body is first downloaded (get_message_body).
         snippet: String::new(),
         read: raw.read,
+        message_id: parsed.message_id,
+        in_reply_to: parsed.in_reply_to,
+        references: parsed.references,
     }
 }
 
@@ -369,13 +372,9 @@ mod tests {
             uid: 1,
             uid_validity: 7,
             from: from.to_string(),
-            to: String::new(),
-            cc: String::new(),
-            reply_to: String::new(),
             subject: subject.to_string(),
-            date: String::new(),
-            snippet: String::new(),
             read,
+            ..Default::default()
         };
         let headers = [
             make("Alice <alice@example.com>", "Hello", false),
@@ -410,6 +409,9 @@ mod tests {
                       Cc: Cara <cara@example.com>\r\n\
                       Reply-To: Alice Team <team@example.com>\r\n\
                       Subject: Hi\r\n\
+                      Message-ID: <mid@example.com>\r\n\
+                      In-Reply-To: <parent@example.com>\r\n\
+                      References: <root@example.com> <parent@example.com>\r\n\
                       Date: Tue, 07 Jul 2026 09:15:00 +0000\r\n\r\n"
                 .to_vec(),
         };
@@ -425,5 +427,14 @@ mod tests {
         assert_eq!(fetched.subject, "Hi");
         assert!(fetched.read);
         assert_eq!(fetched.snippet, "");
+        assert_eq!(fetched.message_id, "mid@example.com");
+        assert_eq!(fetched.in_reply_to, "parent@example.com");
+        assert_eq!(
+            fetched.references,
+            vec![
+                "root@example.com".to_string(),
+                "parent@example.com".to_string()
+            ]
+        );
     }
 }

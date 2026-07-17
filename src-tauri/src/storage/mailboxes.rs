@@ -166,12 +166,10 @@ mod tests {
                 uid_validity: 1,
                 from: "s@example.com".to_string(),
                 to: "a@example.com".to_string(),
-                cc: String::new(),
-                reply_to: String::new(),
                 subject: "hi".to_string(),
                 date: "2026-07-17T10:00:00Z".to_string(),
-                snippet: String::new(),
                 read,
+                ..Default::default()
             }],
         )
         .await
