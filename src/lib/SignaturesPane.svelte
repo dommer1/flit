@@ -205,70 +205,71 @@
 <style>
   .pane {
     display: flex;
-    gap: 12px;
     flex: 1;
     min-height: 0;
-    padding: 12px;
   }
 
+  /* Same master column as the accounts tab. */
   .sidebar {
     display: flex;
     flex-direction: column;
-    width: 170px;
+    width: 200px;
     flex-shrink: 0;
+    border-right: 1px solid var(--hairline);
   }
 
   .list {
     flex: 1;
     margin: 0;
-    padding: 4px;
+    padding: 12px 8px;
     overflow-y: auto;
-    border: 1px solid var(--hairline);
-    border-radius: 8px 8px 0 0;
     list-style: none;
   }
 
   .row {
     display: block;
     width: 100%;
-    padding: 6px 8px;
+    padding: 8px 10px;
     border: none;
-    border-radius: 5px;
+    border-radius: 7px;
     background: none;
     font: inherit;
-    font-size: 13px;
+    font-size: 12.5px;
+    font-weight: 600;
     text-align: left;
     color: var(--text-primary);
-    cursor: pointer;
+    cursor: default;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
+  .row:hover:not(.selected) {
+    background: var(--bg-hover);
+  }
+
   .row.selected {
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-text);
   }
 
   .list-actions {
     display: flex;
-    gap: 2px;
-    padding: 3px;
-    border: 1px solid var(--hairline);
-    border-top: none;
-    border-radius: 0 0 8px 8px;
+    gap: 4px;
+    padding: 4px 10px 10px;
   }
 
   .list-actions button {
-    min-width: 26px;
-    padding: 2px 8px;
-    border: none;
-    border-radius: 5px;
-    background: none;
+    width: 26px;
+    height: 24px;
+    border: 1px solid var(--border-chrome);
+    border-radius: 6px;
+    background: var(--bg-window);
     font: inherit;
     font-size: 14px;
-    color: var(--text-secondary);
-    cursor: pointer;
+    line-height: 1;
+    color: var(--text-primary);
+    cursor: default;
   }
 
   .list-actions button:hover:not(:disabled) {
@@ -277,7 +278,6 @@
 
   .list-actions button:disabled {
     opacity: 0.4;
-    cursor: default;
   }
 
   .detail {
@@ -286,8 +286,11 @@
     gap: 12px;
     flex: 1;
     min-width: 0;
+    padding: 18px 22px;
+    overflow-y: auto;
   }
 
+  /* White editor box on the grouped-gray canvas. */
   .editor-card {
     display: flex;
     flex-direction: column;
@@ -295,6 +298,7 @@
     min-height: 0;
     border: 1px solid var(--hairline);
     border-radius: 8px;
+    background: var(--bg-window);
     overflow: hidden;
   }
 
@@ -324,14 +328,19 @@
   }
 
   .save {
-    padding: 4px 14px;
-    border: 1px solid var(--hairline);
-    border-radius: 6px;
-    background: var(--bg-hover);
+    padding: 6px 18px;
+    border: none;
+    border-radius: 7px;
+    background: var(--accent);
     font: inherit;
-    font-size: 12px;
-    color: var(--text-primary);
-    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--accent-text);
+    cursor: default;
+  }
+
+  .save:hover {
+    filter: brightness(1.08);
   }
 
   .defaults {
@@ -339,12 +348,16 @@
     margin: 0;
     padding: 10px 14px;
     border: 1px solid var(--hairline);
-    border-radius: 8px;
+    border-radius: 9px;
+    background: var(--bg-window);
   }
 
   legend {
     padding: 0 4px;
-    font-size: 13px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     color: var(--text-secondary);
   }
 

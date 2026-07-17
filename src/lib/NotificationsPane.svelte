@@ -176,66 +176,80 @@
   .pane {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
-    padding: 1rem 1.25rem;
+    gap: 18px;
+    padding: 20px 26px;
     overflow-y: auto;
   }
 
+  /* White grouped boxes on the settings canvas, like the other tabs. */
   fieldset {
     margin: 0;
-    padding: 0;
-    border: none;
+    max-width: 520px;
+    padding: 8px 12px;
+    border: 1px solid var(--hairline);
+    border-radius: 9px;
+    background: var(--bg-window);
   }
 
   legend {
-    padding: 0;
-    font-weight: 600;
+    padding: 0 4px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
   }
 
   .explain {
-    margin: 0.375rem 0 0.5rem;
-    max-width: 34rem;
-    font-size: 0.8125rem;
-    color: var(--text-secondary, #6e6e73);
+    margin: 6px 0 2px;
+    font-size: 11.5px;
+    color: var(--text-secondary);
   }
 
   .setting {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0.25rem 0;
+    gap: 12px;
+    padding: 5px 0;
     font-size: 13px;
+    font-weight: 500;
   }
 
   .setting label {
-    width: 8.5rem;
+    width: 10rem;
   }
 
   select {
     min-width: 11rem;
+    padding: 3px 8px;
+    border: 1px solid var(--border-chrome);
+    border-radius: 6px;
+    background: var(--bg-window);
     font: inherit;
-    font-size: 13px;
+    font-size: 12.5px;
+    font-weight: 400;
   }
 
   .account-row {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0.25rem 0;
+    gap: 12px;
+    padding: 5px 0;
     font-size: 13px;
+    font-weight: 500;
   }
 
   .account-name {
-    width: 8.5rem;
+    width: 10rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .empty {
-    margin: 0.25rem 0;
+    margin: 4px 0;
     font-size: 13px;
-    color: var(--text-secondary, #6e6e73);
+    color: var(--text-secondary);
   }
 
   .error {
