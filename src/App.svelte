@@ -637,13 +637,6 @@
 </div>
 
 <style>
-  /* why: the vibrancy NSVisualEffectView sits behind the webview — the body
-     must not paint over it. Only this window applies vibrancy, so the rule
-     lives here rather than in the shared stylesheet. */
-  :global(body) {
-    background: transparent;
-  }
-
   .layout {
     display: grid;
     height: calc(100vh - var(--toolbar-height));
@@ -651,6 +644,7 @@
 
   aside {
     overflow-y: auto;
+    background: var(--bg-sidebar);
   }
 
   main {
