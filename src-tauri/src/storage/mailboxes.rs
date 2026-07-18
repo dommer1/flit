@@ -88,6 +88,24 @@ pub async fn list(pool: &SqlitePool, account_id: i64) -> Result<Vec<Mailbox>, Ap
         .collect())
 }
 
+/// Record how many messages the server reported in this folder (the EXISTS
+/// count of a SELECT). Written on every sync pass — `replace` wipes folder
+/// rows wholesale, so the value must be re-recorded each time anyway.
+pub async fn set_server_exists(
+    pool: &SqlitePool,
+    account_id: i64,
+    name: &str,
+    exists: i64,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE mailboxes SET server_exists = ? WHERE account_id = ? AND name = ?")
+        .bind(exists)
+        .bind(account_id)
+        .bind(name)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Full IMAP name of the account's folder for a special-use `role`
 /// ("sent" | "trash" | "archive" | …), if discovery found one.
 pub async fn name_for_role(
@@ -430,6 +448,35 @@ mod tests {
         assert!(exists(&pool, id, "INBOX").await.unwrap());
         assert!(!exists(&pool, id, "Missing").await.unwrap());
         assert!(!exists(&pool, id + 1, "Work").await.unwrap());
+    }
+
+    async fn server_exists_of(pool: &SqlitePool, account_id: i64, name: &str) -> Option<i64> {
+        sqlx::query_scalar("SELECT server_exists FROM mailboxes WHERE account_id = ? AND name = ?")
+            .bind(account_id)
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn set_server_exists_records_the_servers_count() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(
+            &pool,
+            id,
+            &[found("INBOX", Some("inbox")), found("Work", None)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(server_exists_of(&pool, id, "INBOX").await, None);
+
+        set_server_exists(&pool, id, "INBOX", 9876).await.unwrap();
+
+        assert_eq!(server_exists_of(&pool, id, "INBOX").await, Some(9876));
+        // Only the selected folder is touched.
+        assert_eq!(server_exists_of(&pool, id, "Work").await, None);
     }
 
     #[tokio::test]

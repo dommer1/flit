@@ -107,6 +107,14 @@ async fn sync_mailbox(
         .await
         .map_err(|e| AppError::Imap(format!("select {mailbox}: {e}")))?;
     let server_validity = i64::from(selected.uid_validity.unwrap_or(0));
+    // The server's message count feeds the backfill progress indicator.
+    crate::storage::mailboxes::set_server_exists(
+        pool,
+        account_id,
+        mailbox,
+        i64::from(selected.exists),
+    )
+    .await?;
 
     let stored = messages::stored_uid_validity(pool, account_id, mailbox).await?;
     let last_uid = messages::max_uid(pool, account_id, mailbox).await?;
