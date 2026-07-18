@@ -312,7 +312,10 @@ fn format_addr(addr: &Addr) -> String {
 /// or logo link), frequently wrapped in `<...>`. Left in, the preview shows a
 /// wall of tracking query params instead of prose, so URL tokens are dropped.
 pub fn snippet_of(text: &str) -> String {
-    let collapsed = text
+    // why: previews must show the reply's own words — never the quoted
+    // history riding below them ("Uhradené. > On Monday, X wrote: …").
+    let (own, _) = crate::mail::quote::split_text_quote(text);
+    let collapsed = own
         .split_whitespace()
         .filter(|word| !is_url_token(word))
         .collect::<Vec<_>>()

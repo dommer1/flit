@@ -72,6 +72,9 @@
   let richBody = $state<MessageBody | null>(null);
   let shown = $derived(richBody ?? body);
 
+  // Folded quoted history of a text body; opens per card, like Gmail's •••.
+  let showQuoted = $state(false);
+
   // Saving pulls the bytes from the server (they are never cached), so the
   // chips lock while a fetch is in flight and errors surface inline.
   let savingAttachments = $state(false);
@@ -332,6 +335,20 @@
         ></iframe>
       {:else if shown?.text}
         <pre class="body">{shown.text}</pre>
+        {#if shown.quotedText}
+          {#if showQuoted}
+            <pre class="body quoted">{shown.quotedText}</pre>
+          {:else}
+            <button
+              class="quote-toggle"
+              title="Show quoted text"
+              aria-label="Show quoted text"
+              onclick={() => (showQuoted = true)}
+            >
+              •••
+            </button>
+          {/if}
+        {/if}
       {:else if loading}
         <p class="loading">Loading…</p>
       {:else if error}
@@ -641,6 +658,28 @@
     color: var(--text-primary);
     white-space: pre-wrap;
     word-wrap: break-word;
+  }
+
+  .body.quoted {
+    color: var(--text-secondary);
+  }
+
+  /* Same pill as the summary inside HTML bodies (BODY_STYLE). */
+  .quote-toggle {
+    align-self: flex-start;
+    margin-top: 10px;
+    padding: 1px 9px;
+    border: none;
+    border-radius: 9px;
+    background: var(--bg-hover);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .quote-toggle:hover {
+    background: var(--bg-selected-muted);
   }
 
   .body-frame {

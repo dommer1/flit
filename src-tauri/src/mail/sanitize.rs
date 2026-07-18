@@ -29,7 +29,12 @@ const BODY_CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inl
 // Horizontal stays scrollable for wide fixed-width mail content.
 const BODY_STYLE: &str = "html{overflow-y:hidden}\
      body{font-family:system-ui,sans-serif;font-size:0.875rem;color:#1a1a1a;\
-     margin:0.5rem;word-wrap:break-word}img{max-width:100%}";
+     margin:0.5rem;word-wrap:break-word}img{max-width:100%}\
+     details.flit-quote{margin-top:0.75rem}\
+     details.flit-quote>summary{list-style:none;display:inline-block;padding:1px 9px;\
+     border-radius:9px;background:#e8e8ea;color:#5a5a60;font-size:0.7rem;\
+     letter-spacing:0.1em;cursor:pointer;user-select:none}\
+     details.flit-quote>summary::-webkit-details-marker{display:none}";
 
 /// CSS properties permitted inside `style` attributes. ammonia's
 /// `filter_style_properties` normalises every value and drops invalid
@@ -209,6 +214,9 @@ pub fn build_srcdoc(
     remote: &HashMap<String, String>,
 ) -> SanitizedBody {
     let (clean, blocked_remote) = sanitize(untrusted_html, images, remote);
+    // Post-sanitize, pre-embed: our own constant markup wrapped around the
+    // already-clean fragment at element boundaries (see mail::quote).
+    let clean = crate::mail::quote::fold_html_quote(clean);
     // Message <style> blocks: sanitized separately (mail::css parses and
     // re-serialises them under the same property allowlist) and injected as
     // our own trusted <style>, AFTER BODY_STYLE so the message overrides our

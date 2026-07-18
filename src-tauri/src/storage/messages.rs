@@ -226,6 +226,35 @@ pub async fn backfill_url_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
     Ok(fixed)
 }
 
+/// Recompute stored snippets that still carry quoted history ("Uhradené.
+/// \> On Monday, X wrote: …"), using the current snippet rules. Runs once
+/// at startup: the LIKE filter doubles as the work-list — a corrected
+/// snippet no longer matches it (fully-quoted bodies re-run, as cheap
+/// no-ops).
+pub async fn backfill_quoted_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
+    let stale: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, body_text FROM messages
+         WHERE body_text IS NOT NULL
+           AND (snippet LIKE '%> %' OR snippet LIKE '%wrote:%'
+                OR snippet LIKE '%napísal%' OR snippet LIKE '%Original Message%')",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut fixed = 0;
+    for (id, body_text) in stale {
+        let snippet = snippet_of(&body_text);
+        let changed = sqlx::query("UPDATE messages SET snippet = ? WHERE id = ? AND snippet <> ?")
+            .bind(&snippet)
+            .bind(id)
+            .bind(&snippet)
+            .execute(pool)
+            .await?;
+        fixed += changed.rows_affected();
+    }
+    Ok(fixed)
+}
+
 /// Headers of one mailbox for one account — or across all accounts when
 /// `account_id` is `None` (the "All Inboxes" view), newest first.
 pub async fn list(

@@ -6,6 +6,7 @@ function body(partial: Partial<MessageBody>): MessageBody {
   return {
     html: null,
     text: null,
+    quotedText: null,
     blockedImages: 0,
     canLoadRemote: false,
     attachments: [],
@@ -18,6 +19,7 @@ vi.mock("./api", () => ({
   getMessageBody: vi.fn(async () => ({
     html: null,
     text: null,
+    quotedText: null,
     blockedImages: 0,
     canLoadRemote: false,
     attachments: [],

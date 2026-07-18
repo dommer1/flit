@@ -383,6 +383,9 @@ pub struct MessageAttachment {
 pub struct MessageBody {
     pub html: Option<String>,
     pub text: Option<String>,
+    /// Quoted history split off a plain-text body — the viewer folds it
+    /// behind a toggle. None when the body has none (or is all quote).
+    pub quoted_text: Option<String>,
     /// Remote images left blocked in `html` — 0 when there were none or
     /// they all loaded.
     pub blocked_images: usize,

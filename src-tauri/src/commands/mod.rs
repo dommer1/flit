@@ -1122,9 +1122,20 @@ async fn sanitized_body(
         None => None,
     };
 
+    // Text bodies fold their quoted history on the frontend — split here so
+    // the detection lives in one place (mail::quote).
+    let (text, quoted_text) = match text {
+        Some(t) => {
+            let (own, quoted) = mail::quote::split_text_quote(&t);
+            (Some(own), quoted)
+        }
+        None => (None, None),
+    };
+
     Ok(MessageBody {
         html: rendered,
         text,
+        quoted_text,
         blocked_images,
         // why: !load, not just Ask — after the click the banner disappears
         // even when some images failed to fetch (no endless "load" loop).

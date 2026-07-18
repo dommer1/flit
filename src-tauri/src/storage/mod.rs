@@ -51,6 +51,13 @@ pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
         eprintln!("backfilled {fixed} message snippet(s) to strip leading URLs");
     }
 
+    // why: same idea for snippets polluted by quoted reply history — the
+    // quote splitter now stops before it, so cached previews catch up once.
+    let fixed = messages::backfill_quoted_snippets(&pool).await?;
+    if fixed > 0 {
+        eprintln!("backfilled {fixed} message snippet(s) to stop before quoted history");
+    }
+
     // why: rows cached before the has_attachments column existed know their
     // attachments only through the metadata table — adopt that once
     // (idempotent; new rows are kept in sync by upsert/set_body).

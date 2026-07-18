@@ -197,6 +197,7 @@ vi.mock("./lib/api", () => ({
   getMessageBody: vi.fn(async () => ({
     html: null,
     text: "body text",
+    quotedText: null,
     blockedImages: 0,
     canLoadRemote: false,
     attachments: [],

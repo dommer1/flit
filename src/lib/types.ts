@@ -163,6 +163,9 @@ export interface SwipeActions {
 export interface MessageBody {
   html: string | null;
   text: string | null;
+  /** Quoted history split off a plain-text body; the card folds it behind
+   * a ••• toggle. Null when the body has none (or is all quote). */
+  quotedText: string | null;
   /** Remote images left blocked in `html`; 0 when none or all loaded. */
   blockedImages: number;
   /** Offer "Load Images" (policy is "ask" and this render blocked some). */

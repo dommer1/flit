@@ -65,10 +65,7 @@ fn mostly_quoted(lines: &[&str]) -> bool {
     if content.is_empty() {
         return false;
     }
-    let quoted = content
-        .iter()
-        .filter(|l| l.trim().starts_with('>'))
-        .count();
+    let quoted = content.iter().filter(|l| l.trim().starts_with('>')).count();
     quoted * 4 >= content.len() * 3
 }
 
@@ -163,7 +160,10 @@ mod tests {
         let (main, quoted) = split_text_quote(text);
 
         assert_eq!(main, "Ytm*-nsthV");
-        assert_eq!(quoted.unwrap(), "> https://share.example/s\n> druhá citovaná");
+        assert_eq!(
+            quoted.unwrap(),
+            "> https://share.example/s\n> druhá citovaná"
+        );
     }
 
     #[test]
