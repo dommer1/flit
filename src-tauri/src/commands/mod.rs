@@ -125,6 +125,22 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
             Ok(_) => {}
             Err(err) => eprintln!("body prefetch failed for account {account_id}: {err}"),
         }
+
+        // Header backfill: mirror the rest of every folder so the whole
+        // mailbox is eventually local. Runs after the body prefetch so the
+        // two never hold parallel connections to the same server. The slot
+        // makes a refresh mid-backfill a no-op instead of a second loop.
+        let state = app.state::<AppState>();
+        let Some(_slot) = state.try_begin_backfill(account_id) else {
+            return;
+        };
+        // Each cached batch refreshes the list (and its progress line) live.
+        let on_batch = || {
+            let _ = app.emit("messages-changed", account_id);
+        };
+        if let Err(err) = mail::sync::backfill_headers(&pool, &account, &password, on_batch).await {
+            eprintln!("header backfill failed for account {account_id}: {err}");
+        }
     });
     Ok(())
 }

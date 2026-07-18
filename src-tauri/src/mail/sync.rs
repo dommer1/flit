@@ -291,6 +291,97 @@ pub async fn prefetch_bodies(
     Ok(cached)
 }
 
+/// Older headers mirrored per batch before `on_batch` reports progress —
+/// big enough to move fast, small enough that the list visibly grows.
+const BACKFILL_BATCH: usize = 500;
+
+/// Mirror every folder's remaining older headers into the cache, newest
+/// first, until the account is complete. `on_batch` fires after each cached
+/// batch so the UI can refresh while the loop is still running. Returns how
+/// many headers were mirrored.
+///
+/// why one connection for the whole loop: this can run for minutes over
+/// thousands of messages — reconnecting per batch would waste most of the
+/// time in TLS handshakes.
+pub async fn backfill_headers(
+    pool: &SqlitePool,
+    account: &Account,
+    password: &str,
+    on_batch: impl Fn(),
+) -> Result<usize, AppError> {
+    let folders = crate::storage::mailboxes::incomplete_mailboxes(pool, account.id).await?;
+    if folders.is_empty() {
+        return Ok(0);
+    }
+    let mut session = imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        password,
+    )
+    .await?;
+    let mut total = 0;
+    for folder in &folders {
+        total += backfill_mailbox(pool, account.id, &mut session, folder, &on_batch).await?;
+    }
+    let _ = session.logout().await;
+    Ok(total)
+}
+
+/// Backfill one folder: one UID SEARCH for everything below the cached
+/// window, then page through it newest-first, upserting batch by batch.
+async fn backfill_mailbox(
+    pool: &SqlitePool,
+    account_id: i64,
+    session: &mut imap::ImapSession,
+    mailbox: &str,
+    on_batch: &impl Fn(),
+) -> Result<usize, AppError> {
+    let selected = session
+        .select(mailbox)
+        .await
+        .map_err(|e| AppError::Imap(format!("select {mailbox}: {e}")))?;
+    let server_validity = i64::from(selected.uid_validity.unwrap_or(0));
+    crate::storage::mailboxes::set_server_exists(
+        pool,
+        account_id,
+        mailbox,
+        i64::from(selected.exists),
+    )
+    .await?;
+
+    // Nothing cached yet — the regular sync owns a folder's first fetch.
+    let Some(oldest) = messages::min_uid(pool, account_id, mailbox).await? else {
+        return Ok(0);
+    };
+    let mut remaining = imap::search_uids_below(session, oldest).await?;
+    let mut total = 0;
+    while !remaining.is_empty() {
+        let page = imap::older_uid_page(remaining.clone(), BACKFILL_BATCH);
+        // why: page is never empty here, so the floor always exists and
+        // remaining strictly shrinks — the loop terminates.
+        let floor = *page.last().unwrap_or(&0);
+        remaining.retain(|uid| *uid < floor);
+
+        let uid_set = page
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let raw = imap::fetch_headers_by_uid(session, &uid_set).await?;
+        // A whole page can vanish mid-run (deleted elsewhere) — move on.
+        if raw.is_empty() {
+            continue;
+        }
+        let headers: Vec<FetchedHeader> =
+            raw.iter().map(|r| to_fetched(r, server_validity)).collect();
+        messages::upsert_headers(pool, account_id, mailbox, &headers).await?;
+        total += headers.len();
+        on_batch();
+    }
+    Ok(total)
+}
+
 /// Download, parse and cache one message body; returns the parsed body.
 pub async fn fetch_body_into_cache(
     pool: &SqlitePool,
