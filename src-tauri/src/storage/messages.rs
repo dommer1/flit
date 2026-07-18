@@ -429,6 +429,55 @@ pub async fn max_uid(
     Ok(uid)
 }
 
+/// Counts for one list view; `account_id: None` spans all accounts (the
+/// unified inbox). `threaded` must match how the view lists rows so
+/// `list_rows` agrees with what an unlimited `list`/`list_threaded` returns.
+pub async fn view_status(
+    pool: &SqlitePool,
+    account_id: Option<i64>,
+    mailbox: &str,
+    threaded: bool,
+) -> Result<crate::models::ViewStatus, AppError> {
+    let (cached, unread): (i64, i64) = sqlx::query_as(
+        "SELECT count(*), COALESCE(SUM(read = 0), 0) FROM messages
+         WHERE mailbox = ?2 AND (?1 IS NULL OR account_id = ?1)",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .fetch_one(pool)
+    .await?;
+    let list_rows = if threaded {
+        // Mirrors list_threaded's grouping: one row per (account, thread),
+        // keyless messages standing alone under a synthetic per-row key.
+        sqlx::query_scalar(
+            "SELECT count(DISTINCT account_id || '/' || COALESCE(thread_key, 'row:' || id))
+             FROM messages WHERE mailbox = ?2 AND (?1 IS NULL OR account_id = ?1)",
+        )
+        .bind(account_id)
+        .bind(mailbox)
+        .fetch_one(pool)
+        .await?
+    } else {
+        cached
+    };
+    // SUM of NULLs is NULL — folders never synced report no total rather
+    // than a misleading zero.
+    let server_total: Option<i64> = sqlx::query_scalar(
+        "SELECT SUM(server_exists) FROM mailboxes
+         WHERE name = ?2 AND (?1 IS NULL OR account_id = ?1)",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .fetch_one(pool)
+    .await?;
+    Ok(crate::models::ViewStatus {
+        list_rows,
+        unread,
+        cached,
+        server_total,
+    })
+}
+
 /// Lowest cached UID — where the header backfill continues downwards from;
 /// `None` when nothing is cached.
 pub async fn min_uid(
@@ -1512,6 +1561,142 @@ mod tests {
             stored_uid_validity(&pool, id, "INBOX").await.unwrap(),
             Some(7)
         );
+    }
+
+    #[tokio::test]
+    async fn view_status_counts_the_flat_view() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(1, "A", "2026-07-01T00:00:00Z", true),
+                header(2, "B", "2026-07-02T00:00:00Z", false),
+                header(3, "C", "2026-07-03T00:00:00Z", false),
+            ],
+        )
+        .await
+        .unwrap();
+        // Another folder must not leak into the view's counts.
+        upsert_headers(
+            &pool,
+            id,
+            "Archive",
+            &[header(9, "Z", "2026-07-04T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+
+        let status = view_status(&pool, Some(id), "INBOX", false).await.unwrap();
+
+        assert_eq!(
+            status,
+            crate::models::ViewStatus {
+                list_rows: 3,
+                unread: 2,
+                cached: 3,
+                // No mailboxes row yet — the server total is unknown.
+                server_total: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn view_status_reports_the_servers_total_once_synced() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        crate::storage::mailboxes::replace(
+            &pool,
+            id,
+            &[crate::storage::mailboxes::DiscoveredMailbox {
+                name: "INBOX".to_string(),
+                role: Some("inbox".to_string()),
+            }],
+        )
+        .await
+        .unwrap();
+        crate::storage::mailboxes::set_server_exists(&pool, id, "INBOX", 9999)
+            .await
+            .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "A", "2026-07-01T00:00:00Z", true)],
+        )
+        .await
+        .unwrap();
+
+        let status = view_status(&pool, Some(id), "INBOX", false).await.unwrap();
+
+        assert_eq!(status.cached, 1);
+        assert_eq!(status.server_total, Some(9999));
+    }
+
+    #[tokio::test]
+    async fn view_status_counts_each_conversation_once_when_threaded() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                threaded(1, "a@x", "", &[]),
+                threaded(2, "b@x", "a@x", &["a@x"]),
+                threaded(3, "solo@x", "", &[]),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let threaded_status = view_status(&pool, Some(id), "INBOX", true).await.unwrap();
+        assert_eq!(threaded_status.list_rows, 2);
+        assert_eq!(threaded_status.cached, 3);
+
+        let flat_status = view_status(&pool, Some(id), "INBOX", false).await.unwrap();
+        assert_eq!(flat_status.list_rows, 3);
+    }
+
+    #[tokio::test]
+    async fn view_status_spans_all_accounts_in_the_unified_view() {
+        let pool = test_pool().await;
+        let first = account(&pool, "Personal").await;
+        let second = account(&pool, "Work").await;
+        for id in [first, second] {
+            crate::storage::mailboxes::replace(
+                &pool,
+                id,
+                &[crate::storage::mailboxes::DiscoveredMailbox {
+                    name: "INBOX".to_string(),
+                    role: Some("inbox".to_string()),
+                }],
+            )
+            .await
+            .unwrap();
+            upsert_headers(
+                &pool,
+                id,
+                "INBOX",
+                &[header(1, "Hi", "2026-07-01T00:00:00Z", false)],
+            )
+            .await
+            .unwrap();
+        }
+        crate::storage::mailboxes::set_server_exists(&pool, first, "INBOX", 10)
+            .await
+            .unwrap();
+        crate::storage::mailboxes::set_server_exists(&pool, second, "INBOX", 5)
+            .await
+            .unwrap();
+
+        let status = view_status(&pool, None, "INBOX", false).await.unwrap();
+
+        assert_eq!(status.cached, 2);
+        assert_eq!(status.unread, 2);
+        assert_eq!(status.server_total, Some(15));
     }
 
     #[tokio::test]

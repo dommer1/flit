@@ -418,6 +418,29 @@ pub async fn list_messages(
     }
 }
 
+/// Counts for the current list view: header totals plus the backfill
+/// progress pair (cached vs. server total). Threading mirrors
+/// list_messages' rule so `list_rows` matches what the list shows.
+#[tauri::command]
+pub async fn view_status(
+    state: State<'_, AppState>,
+    account_id: Option<i64>,
+    mailbox: Option<String>,
+) -> Result<crate::models::ViewStatus, AppError> {
+    let mailbox = mailbox.as_deref().unwrap_or("INBOX");
+    let flat = match account_id {
+        Some(id) => matches!(
+            storage::mailboxes::role_of(&state.pool, id, mailbox)
+                .await?
+                .as_deref(),
+            Some("trash" | "junk" | "drafts")
+        ),
+        // why: the unified view only ever shows INBOX folders.
+        None => false,
+    };
+    storage::messages::view_status(&state.pool, account_id, mailbox, !flat).await
+}
+
 /// The full conversation of one message (all folders except
 /// trash/junk/drafts), oldest first — what the conversation view renders.
 #[tauri::command]

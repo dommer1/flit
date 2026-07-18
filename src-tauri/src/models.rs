@@ -458,3 +458,21 @@ pub struct MessageHeader {
     #[sqlx(default)]
     pub thread_unread: bool,
 }
+
+/// Counts for one list view (a folder, or a mailbox name across all
+/// accounts) — what the list header and the backfill progress line show.
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewStatus {
+    /// Rows the unlimited list query would return: conversations in
+    /// threaded views, messages in flat ones.
+    pub list_rows: i64,
+    /// Unread messages in the view, from the local cache.
+    pub unread: i64,
+    /// Messages the cache holds for the view.
+    pub cached: i64,
+    /// Messages the server holds (sum of the folders' EXISTS counts);
+    /// `None` until the first sync reports it. `cached < server_total`
+    /// means the header backfill is still running.
+    pub server_total: Option<i64>,
+}
