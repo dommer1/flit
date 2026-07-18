@@ -20,6 +20,7 @@ import type {
   Signature,
   SwipeActions,
   ThreadOrder,
+  ViewStatus,
 } from "./types";
 
 export function listAccounts(): Promise<Account[]> {
@@ -73,12 +74,26 @@ export function listMailboxes(accountId: number): Promise<Mailbox[]> {
   return invoke<Mailbox[]>("list_mailboxes", { accountId });
 }
 
-/** `accountId: null` = the given mailbox across all accounts. */
+/** `accountId: null` = the given mailbox across all accounts. `limit` caps
+ * the rows (the list reveals more on scroll); `null` = all. */
 export function listMessages(
   accountId: number | null,
   mailbox = "INBOX",
+  limit: number | null = null,
 ): Promise<MessageHeader[]> {
-  return invoke<MessageHeader[]>("list_messages", { accountId, mailbox });
+  return invoke<MessageHeader[]>("list_messages", {
+    accountId,
+    mailbox,
+    limit,
+  });
+}
+
+/** Counts for the current list view: header totals + backfill progress. */
+export function viewStatus(
+  accountId: number | null,
+  mailbox = "INBOX",
+): Promise<ViewStatus> {
+  return invoke<ViewStatus>("view_status", { accountId, mailbox });
 }
 
 /** The full conversation of one message (all folders except trash, junk

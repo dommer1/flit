@@ -208,6 +208,21 @@ export interface Mailbox {
   unreadCount: number;
 }
 
+/** Counts for one list view — the list header totals plus the backfill
+ * progress pair (cached vs. what the server holds). */
+export interface ViewStatus {
+  /** Rows the unlimited list query would return: conversations in threaded
+   * views, messages in flat ones. */
+  listRows: number;
+  /** Unread messages in the view, from the local cache. */
+  unread: number;
+  /** Messages the cache holds for the view. */
+  cached: number;
+  /** Messages the server holds; null until the first sync reports it.
+   * cached < serverTotal means the header backfill is still running. */
+  serverTotal: number | null;
+}
+
 export interface MessageHeader {
   id: number;
   accountId: number;
