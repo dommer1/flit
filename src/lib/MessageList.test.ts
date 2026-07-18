@@ -281,3 +281,81 @@ it("dots a read representative whose conversation is unread elsewhere", () => {
   const row = screen.getByRole("option", { name: /Alice/ });
   expect(row.querySelector(".dot")).not.toBeNull();
 });
+
+/** A view status: 500 of 10000 messages cached, 800 rows listable. */
+function status(overrides: Record<string, unknown> = {}) {
+  return {
+    listRows: 800,
+    unread: 56,
+    cached: 500,
+    serverTotal: 10000,
+    ...overrides,
+  };
+}
+
+/** Pin the scroll geometry jsdom doesn't compute, then fire a scroll. */
+function scrollTo(list: HTMLElement, top: number, height = 2000, view = 400) {
+  Object.defineProperty(list, "scrollHeight", {
+    value: height,
+    configurable: true,
+  });
+  Object.defineProperty(list, "clientHeight", {
+    value: view,
+    configurable: true,
+  });
+  list.scrollTop = top;
+  return fireEvent.scroll(list);
+}
+
+it("asks for more rows when scrolled near the bottom", async () => {
+  const onLoadMore = vi.fn();
+  renderList({ status: status(), onLoadMore });
+
+  await scrollTo(screen.getByRole("listbox"), 1500);
+
+  expect(onLoadMore).toHaveBeenCalledOnce();
+});
+
+it("asks for nothing far from the bottom", async () => {
+  const onLoadMore = vi.fn();
+  renderList({ status: status(), onLoadMore });
+
+  await scrollTo(screen.getByRole("listbox"), 0);
+
+  expect(onLoadMore).not.toHaveBeenCalled();
+});
+
+it("asks for nothing once every row is listed", async () => {
+  const onLoadMore = vi.fn();
+  renderList({ status: status({ listRows: messages.length }), onLoadMore });
+
+  await scrollTo(screen.getByRole("listbox"), 1500);
+
+  expect(onLoadMore).not.toHaveBeenCalled();
+});
+
+it("headers the view's totals, not the revealed slice", () => {
+  renderList({ status: status() });
+
+  const count = document.querySelector(".count");
+  expect(count?.textContent).toMatch(/800\s+messages/);
+  expect(count?.textContent).toContain("56 unread");
+});
+
+it("shows backfill progress while the cache trails the server", () => {
+  renderList({ status: status() });
+
+  expect(screen.getByText(/Syncing older messages/)).toBeTruthy();
+});
+
+it("hides the progress line once the mailbox is fully mirrored", () => {
+  renderList({ status: status({ cached: 10000 }) });
+
+  expect(screen.queryByText(/Syncing older messages/)).toBeNull();
+});
+
+it("hides the progress line while the server total is unknown", () => {
+  renderList({ status: status({ serverTotal: null }) });
+
+  expect(screen.queryByText(/Syncing older messages/)).toBeNull();
+});

@@ -8,7 +8,12 @@
     DRAG_SLOP,
     isHorizontal,
   } from "./swipe";
-  import type { MessageHeader, SwipeAction, SwipeActions } from "./types";
+  import type {
+    MessageHeader,
+    SwipeAction,
+    SwipeActions,
+    ViewStatus,
+  } from "./types";
 
   let {
     title,
@@ -22,6 +27,8 @@
     isArchived,
     onTrash,
     onReply,
+    status = null,
+    onLoadMore,
   }: {
     title: string;
     messages: MessageHeader[];
@@ -38,6 +45,12 @@
     isArchived?: (message: MessageHeader) => boolean;
     onTrash?: (id: number) => void;
     onReply?: (id: number) => void;
+    /** Whole-view totals + backfill progress; null (e.g. search results)
+     * falls back to counting the rows at hand. */
+    status?: ViewStatus | null;
+    /** Ask the parent to reveal more rows — fired near the list's bottom
+     * while more rows exist than are loaded. */
+    onLoadMore?: () => void;
   } = $props();
 
   /** Strip color + label for each swipe action ("none" never renders). */
@@ -155,7 +168,32 @@
     else if (action === "reply") onReply?.(message.id);
   }
 
-  let unreadCount = $derived(messages.filter((m) => !m.read).length);
+  let unreadCount = $derived(
+    status?.unread ?? messages.filter((m) => !m.read).length,
+  );
+  let totalRows = $derived(status?.listRows ?? messages.length);
+  let hasMore = $derived(status !== null && messages.length < status.listRows);
+  // Backfill progress, shown only while the server holds more than the
+  // cache; disappears on its own once the mailbox is fully mirrored.
+  let syncing = $derived(
+    status !== null &&
+      status.serverTotal !== null &&
+      status.cached < status.serverTotal
+      ? { cached: status.cached, total: status.serverTotal }
+      : null,
+  );
+
+  /** How close to the bottom (px) the scroll gets before asking for more. */
+  const LOAD_MORE_THRESHOLD = 300;
+
+  function handleScroll() {
+    if (!hasMore || !onLoadMore || listEl === null) return;
+    const remaining =
+      listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+    // Duplicate fires are fine — the parent's reveal logic is idempotent
+    // until the longer list actually arrives.
+    if (remaining < LOAD_MORE_THRESHOLD) onLoadMore();
+  }
 
   // why: keyboard navigation moves the selection without scrolling — keep the
   // selected row in view so arrowing through a long list stays usable.
@@ -172,14 +210,20 @@
   <header>
     <h1>{title}</h1>
     <p class="count">
-      {messages.length}
-      {messages.length === 1 ? "message" : "messages"}{unreadCount > 0
+      {totalRows}
+      {totalRows === 1 ? "message" : "messages"}{unreadCount > 0
         ? `, ${unreadCount} unread`
         : ""}
     </p>
   </header>
 
-  <div class="list" role="listbox" aria-label="Messages" bind:this={listEl}>
+  <div
+    class="list"
+    role="listbox"
+    aria-label="Messages"
+    bind:this={listEl}
+    onscroll={handleScroll}
+  >
     {#if messages.length === 0}
       <p class="empty">No Messages</p>
     {:else}
@@ -279,6 +323,21 @@
       {/each}
     {/if}
   </div>
+
+  {#if syncing}
+    <footer class="syncing" aria-live="polite">
+      <span class="syncing-row">
+        <span>Syncing older messages…</span>
+        <span>{syncing.cached.toLocaleString()} of {syncing.total.toLocaleString()}</span>
+      </span>
+      <span class="syncing-bar" aria-hidden="true">
+        <span
+          class="syncing-fill"
+          style:width={`${Math.min(100, (syncing.cached / syncing.total) * 100)}%`}
+        ></span>
+      </span>
+    </footer>
+  {/if}
 </div>
 
 <style>
@@ -320,6 +379,38 @@
   .empty {
     margin: auto;
     color: var(--text-tertiary);
+  }
+
+  /* Backfill progress: a quiet strip pinned under the list, gone once the
+     mailbox is fully mirrored. */
+  .syncing {
+    flex-shrink: 0;
+    padding: 6px 16px 8px;
+    border-top: 1px solid var(--hairline);
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  .syncing-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .syncing-bar {
+    display: block;
+    margin-top: 5px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--hairline);
+    overflow: hidden;
+  }
+
+  .syncing-fill {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.3s ease;
   }
 
   /* Each row: an absolutely-positioned action backdrop underneath, the row
