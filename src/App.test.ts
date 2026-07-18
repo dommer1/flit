@@ -178,6 +178,21 @@ vi.mock("./lib/api", () => ({
       ? pool
       : pool.filter((m) => m.accountId === accountId);
   }),
+  // Whole-view totals derived from the same canned pool the list serves;
+  // cached == serverTotal, so no backfill progress strip in these tests.
+  viewStatus: vi.fn(async (accountId: number | null, mailbox = "INBOX") => {
+    const pool = mailbox === "Archive" ? archivedMessages : currentMessages;
+    const rows =
+      accountId === null
+        ? pool
+        : pool.filter((m) => m.accountId === accountId);
+    return {
+      listRows: rows.length,
+      unread: rows.filter((m) => !m.read).length,
+      cached: rows.length,
+      serverTotal: rows.length,
+    };
+  }),
   // why: a canned single-hit result — App tests only assert the wiring
   // (what was called with what); real matching is covered by Rust tests.
   searchMessages: vi.fn(async () => [currentMessages[1]]),
@@ -276,6 +291,13 @@ beforeEach(() => {
   vi.mocked(api.listMailboxes).mockImplementation(defaultListMailboxes);
 });
 
+it("asks for the first page of rows, not the whole mailbox", async () => {
+  render(App);
+
+  await screen.findByText("Weekend plans");
+  expect(api.listMessages).toHaveBeenCalledWith(null, "INBOX", 500);
+});
+
 it("loads accounts and the unified inbox on start", async () => {
   render(App);
 
@@ -350,7 +372,7 @@ it("shows decoded folder names but talks to the backend in wire names", async ()
   expect(screen.queryByText("[Gmail]/Odoslan&AOk-")).not.toBeInTheDocument();
 
   // …while the IMAP wire name is what the backend receives.
-  expect(listMessages).toHaveBeenLastCalledWith(1, "[Gmail]/Odoslan&AOk-");
+  expect(listMessages).toHaveBeenLastCalledWith(1, "[Gmail]/Odoslan&AOk-", 500);
 });
 
 it("hides the folder toggle for accounts with no extra folders", async () => {

@@ -32,6 +32,7 @@
     setMessageRead,
     syncAccount,
     undoSend,
+    viewStatus,
   } from "./lib/api";
   import { debounce } from "./lib/debounce";
   import {
@@ -48,6 +49,7 @@
     ScheduledMessage,
     SwipeActions,
     ThreadOrder,
+    ViewStatus,
   } from "./lib/types";
   import { DEFAULT_SWIPE_ACTIONS } from "./lib/swipe";
   import { neighborId, nextMessageId, type NavDelta } from "./lib/messageNav";
@@ -72,6 +74,23 @@
   let selectedAccountId = $state<number | null>(null);
   let selectedMailbox = $state("INBOX");
   let selectedMessageId = $state<number | null>(null);
+
+  // Rows revealed per "page" of the list — the cache may mirror tens of
+  // thousands, but the DOM only grows as the user actually scrolls.
+  const LIST_PAGE = 500;
+  let visibleLimit = $state(LIST_PAGE);
+  // Whole-view totals + backfill progress; null while a search is active.
+  let listStatus = $state<ViewStatus | null>(null);
+
+  function handleLoadMore() {
+    // Fires repeatedly while the user sits near the bottom — bump once and
+    // ignore the rest until the longer list has actually arrived.
+    if (messages.length < visibleLimit) return;
+    visibleLimit += LIST_PAGE;
+    void refreshMessages().catch((err: unknown) =>
+      console.error("failed to load more messages:", err),
+    );
+  }
 
   let selectedMessage = $derived(
     messages.find((m) => m.id === selectedMessageId) ?? null,
@@ -448,6 +467,8 @@
     selectedAccountId = accountId;
     selectedMailbox = mailbox;
     selectedMessageId = null;
+    // A fresh view starts at the first page again.
+    visibleLimit = LIST_PAGE;
     await refreshMessages();
     startSync(accountId === null ? accounts.map((a) => a.id) : [accountId]);
   }
@@ -459,9 +480,19 @@
   // yanking the full list back.
   async function refreshMessages() {
     const query = searchQuery.trim();
-    messages = query
-      ? await searchMessages(selectedAccountId, query)
-      : await listMessages(selectedAccountId, selectedMailbox);
+    if (query) {
+      messages = await searchMessages(selectedAccountId, query);
+      // Search results are their own universe — whole-view totals and the
+      // load-more trigger don't apply to them.
+      listStatus = null;
+      return;
+    }
+    const [list, status] = await Promise.all([
+      listMessages(selectedAccountId, selectedMailbox, visibleLimit),
+      viewStatus(selectedAccountId, selectedMailbox),
+    ]);
+    messages = list;
+    listStatus = status;
   }
 
   // The sidebar's folder lists, mirrored per account. Refreshed alongside
@@ -646,6 +677,8 @@
         {isArchived}
         onTrash={handleTrash}
         onReply={handleSwipeReply}
+        status={listStatus}
+        onLoadMore={handleLoadMore}
       />
       <Outbox entries={outbox} onUndo={handleUndo} />
     </section>
