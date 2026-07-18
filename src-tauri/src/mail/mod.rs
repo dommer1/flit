@@ -3,6 +3,7 @@ pub mod css;
 pub mod draft;
 pub mod imap;
 pub mod parse;
+pub mod quote;
 pub mod remote;
 pub mod sanitize;
 pub mod smtp;
