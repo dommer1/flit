@@ -106,6 +106,37 @@ pub async fn set_server_exists(
     Ok(())
 }
 
+/// Folders whose server count exceeds what the cache holds — the header
+/// backfill's work list, in sidebar order so INBOX completes first. Folders
+/// that never synced (server_exists NULL) are skipped: the regular sync owns
+/// their first pass.
+pub async fn incomplete_mailboxes(
+    pool: &SqlitePool,
+    account_id: i64,
+) -> Result<Vec<String>, AppError> {
+    let names = sqlx::query_scalar(
+        "SELECT name FROM mailboxes b
+         WHERE account_id = ?
+           AND server_exists > (SELECT count(*) FROM messages m
+                                 WHERE m.account_id = b.account_id
+                                   AND m.mailbox = b.name)
+         ORDER BY CASE role
+                    WHEN 'inbox' THEN 0
+                    WHEN 'drafts' THEN 1
+                    WHEN 'sent' THEN 2
+                    WHEN 'archive' THEN 3
+                    WHEN 'junk' THEN 4
+                    WHEN 'trash' THEN 5
+                    ELSE 6
+                  END,
+                  name COLLATE NOCASE",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(names)
+}
+
 /// Full IMAP name of the account's folder for a special-use `role`
 /// ("sent" | "trash" | "archive" | …), if discovery found one.
 pub async fn name_for_role(
@@ -477,6 +508,62 @@ mod tests {
         assert_eq!(server_exists_of(&pool, id, "INBOX").await, Some(9876));
         // Only the selected folder is touched.
         assert_eq!(server_exists_of(&pool, id, "Work").await, None);
+    }
+
+    #[tokio::test]
+    async fn incomplete_mailboxes_lists_folders_with_uncached_mail() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(
+            &pool,
+            id,
+            &[
+                found("Work", None),
+                found("INBOX", Some("inbox")),
+                found("Empty", None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // INBOX: server holds 3, cache holds 1 → incomplete.
+        set_server_exists(&pool, id, "INBOX", 3).await.unwrap();
+        insert_message(&pool, id, "INBOX", 10, true).await;
+        // Work: server holds 1, cache holds 1 → complete.
+        set_server_exists(&pool, id, "Work", 1).await.unwrap();
+        insert_message(&pool, id, "Work", 5, true).await;
+        // Empty: never synced (server_exists NULL) → not listed; the
+        // regular sync owns the first pass.
+
+        assert_eq!(
+            incomplete_mailboxes(&pool, id).await.unwrap(),
+            vec!["INBOX".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn incomplete_mailboxes_orders_the_inbox_first() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(
+            &pool,
+            id,
+            &[
+                found("Archive", Some("archive")),
+                found("INBOX", Some("inbox")),
+            ],
+        )
+        .await
+        .unwrap();
+        set_server_exists(&pool, id, "Archive", 5).await.unwrap();
+        set_server_exists(&pool, id, "INBOX", 5).await.unwrap();
+        insert_message(&pool, id, "Archive", 1, true).await;
+        insert_message(&pool, id, "INBOX", 1, true).await;
+
+        assert_eq!(
+            incomplete_mailboxes(&pool, id).await.unwrap(),
+            vec!["INBOX".to_string(), "Archive".to_string()]
+        );
     }
 
     #[tokio::test]

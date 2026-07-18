@@ -27,6 +27,10 @@ pub struct AppState {
     pub passwords: PasswordCache,
     /// Accounts with a sync pass currently running — see try_begin_sync.
     syncing: Mutex<HashSet<i64>>,
+    /// Accounts with a header backfill currently running. Separate from
+    /// `syncing`: a backfill runs for minutes and must never block the
+    /// regular sync (or vice versa).
+    backfilling: Mutex<HashSet<i64>>,
 }
 
 /// Proof of holding an account's sync slot. Dropping it releases the slot —
@@ -43,6 +47,19 @@ impl Drop for SyncSlot<'_> {
     }
 }
 
+/// Proof of holding an account's backfill slot — same RAII contract as
+/// `SyncSlot`.
+pub struct BackfillSlot<'a> {
+    state: &'a AppState,
+    account_id: i64,
+}
+
+impl Drop for BackfillSlot<'_> {
+    fn drop(&mut self) {
+        self.state.lock_backfilling().remove(&self.account_id);
+    }
+}
+
 impl AppState {
     pub fn new(pool: SqlitePool) -> Self {
         Self {
@@ -51,6 +68,7 @@ impl AppState {
             pending_sends: Mutex::new(HashMap::new()),
             passwords: PasswordCache::default(),
             syncing: Mutex::new(HashSet::new()),
+            backfilling: Mutex::new(HashSet::new()),
         }
     }
 
@@ -61,6 +79,20 @@ impl AppState {
     pub fn try_begin_sync(&self, account_id: i64) -> Option<SyncSlot<'_>> {
         if self.lock_syncing().insert(account_id) {
             Some(SyncSlot {
+                state: self,
+                account_id,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Claim the account's backfill slot; `None` = a backfill of this
+    /// account is already running (every sync pass tries to start one — the
+    /// running loop already covers the work).
+    pub fn try_begin_backfill(&self, account_id: i64) -> Option<BackfillSlot<'_>> {
+        if self.lock_backfilling().insert(account_id) {
+            Some(BackfillSlot {
                 state: self,
                 account_id,
             })
@@ -117,6 +149,12 @@ impl AppState {
 
     fn lock_syncing(&self) -> MutexGuard<'_, HashSet<i64>> {
         self.syncing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_backfilling(&self) -> MutexGuard<'_, HashSet<i64>> {
+        self.backfilling
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -181,6 +219,22 @@ mod tests {
 
         drop(slot);
         assert!(state.try_begin_sync(1).is_some());
+    }
+
+    #[tokio::test]
+    async fn backfill_slot_is_independent_of_the_sync_slot() {
+        let state = AppState::new(test_pool().await);
+
+        let backfill = state.try_begin_backfill(1);
+        assert!(backfill.is_some());
+        // A second backfill of the same account must not start...
+        assert!(state.try_begin_backfill(1).is_none());
+        // ...but a regular sync of the same account still can.
+        assert!(state.try_begin_sync(1).is_some());
+        assert!(state.try_begin_backfill(2).is_some());
+
+        drop(backfill);
+        assert!(state.try_begin_backfill(1).is_some());
     }
 
     #[tokio::test]
