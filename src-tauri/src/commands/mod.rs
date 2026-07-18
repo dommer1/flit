@@ -902,11 +902,47 @@ pub async fn get_message_body(
     };
 
     let policy = storage::settings::remote_image_policy(&state.pool).await?;
-    let mut body = sanitized_body(&state.pool, html, text, &images, policy, load_remote).await?;
+    let redundant = quote_repeats_thread(&state.pool, message_id, text.as_deref()).await?;
+    let mut body = sanitized_body(
+        &state.pool,
+        html,
+        text,
+        &images,
+        policy,
+        load_remote,
+        redundant,
+    )
+    .await?;
     // why from the DB, not the parse result: both branches above have already
     // written the metadata (set_body), so one read serves cached and fresh.
     body.attachments = storage::messages::attachments(&state.pool, message_id).await?;
     Ok(body)
+}
+
+/// Whether this message's quoted history just repeats an earlier cached
+/// message of its conversation — such a quote renders nothing at all (the
+/// content sits one card up in the thread view).
+async fn quote_repeats_thread(
+    pool: &sqlx::SqlitePool,
+    message_id: i64,
+    text: Option<&str>,
+) -> Result<bool, AppError> {
+    let Some(text) = text else { return Ok(false) };
+    let (_, Some(quoted)) = mail::quote::split_text_quote(text) else {
+        return Ok(false);
+    };
+    let thread = storage::messages::thread_of(pool, message_id).await?;
+    let mut earlier = Vec::new();
+    for header in &thread {
+        if header.id == message_id {
+            break;
+        }
+        let row = storage::messages::get_body(pool, header.id).await?;
+        if let Some(body_text) = row.body_text {
+            earlier.push(body_text);
+        }
+    }
+    Ok(mail::quote::quote_matches_history(&quoted, &earlier))
 }
 
 /// Bodies for a whole conversation in one call — the conversation view's
@@ -981,9 +1017,20 @@ pub async fn thread_bodies(
 
     let policy = storage::settings::remote_image_policy(&state.pool).await?;
     let mut bodies = std::collections::HashMap::new();
+    // Oldest first (thread_of order): each message's quote is compared to
+    // the bodies before it — a quote that repeats one renders nothing.
+    let mut earlier_texts: Vec<String> = Vec::new();
     for header in &thread {
         let row = storage::messages::get_body(&state.pool, header.id).await?;
         let images = storage::messages::images(&state.pool, header.id).await?;
+        let redundant = row
+            .body_text
+            .as_deref()
+            .and_then(|t| mail::quote::split_text_quote(t).1)
+            .is_some_and(|q| mail::quote::quote_matches_history(&q, &earlier_texts));
+        if let Some(body_text) = &row.body_text {
+            earlier_texts.push(body_text.clone());
+        }
         let mut body = sanitized_body(
             &state.pool,
             row.body_html,
@@ -991,6 +1038,7 @@ pub async fn thread_bodies(
             &images,
             policy,
             None,
+            redundant,
         )
         .await?;
         body.attachments = storage::messages::attachments(&state.pool, header.id).await?;
@@ -1102,6 +1150,7 @@ async fn sanitized_body(
     images: &[mail::parse::InlineImage],
     policy: RemoteImagePolicy,
     load_remote: Option<bool>,
+    redundant_quote: bool,
 ) -> Result<MessageBody, AppError> {
     let load = policy == RemoteImagePolicy::Always
         || (policy == RemoteImagePolicy::Ask && load_remote.unwrap_or(false));
@@ -1115,7 +1164,7 @@ async fn sanitized_body(
             } else {
                 std::collections::HashMap::new()
             };
-            let body = mail::sanitize::build_srcdoc(h, images, &remote);
+            let body = mail::sanitize::build_srcdoc(h, images, &remote, redundant_quote);
             blocked_images = body.blocked_remote;
             Some(body.html)
         }
@@ -1123,11 +1172,12 @@ async fn sanitized_body(
     };
 
     // Text bodies fold their quoted history on the frontend — split here so
-    // the detection lives in one place (mail::quote).
+    // the detection lives in one place (mail::quote). A quote the caller
+    // verified as repeating an earlier thread message renders nothing.
     let (text, quoted_text) = match text {
         Some(t) => {
             let (own, quoted) = mail::quote::split_text_quote(&t);
-            (Some(own), quoted)
+            (Some(own), if redundant_quote { None } else { quoted })
         }
         None => (None, None),
     };

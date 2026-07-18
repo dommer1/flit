@@ -208,15 +208,23 @@ pub struct SanitizedBody {
 /// why: sanitization happens on every read, never at store time — the DB is
 /// treated as untrusted and future sanitizer improvements apply retroactively
 /// to already-cached mail.
+/// `redundant_quote`: the caller verified this message's quoted history
+/// repeats an earlier message of its conversation — cut it instead of
+/// folding it (the content sits one card up).
 pub fn build_srcdoc(
     untrusted_html: &str,
     images: &[InlineImage],
     remote: &HashMap<String, String>,
+    redundant_quote: bool,
 ) -> SanitizedBody {
     let (clean, blocked_remote) = sanitize(untrusted_html, images, remote);
     // Post-sanitize, pre-embed: our own constant markup wrapped around the
     // already-clean fragment at element boundaries (see mail::quote).
-    let clean = crate::mail::quote::fold_html_quote(clean);
+    let clean = if redundant_quote {
+        crate::mail::quote::strip_html_quote(clean)
+    } else {
+        crate::mail::quote::fold_html_quote(clean)
+    };
     // Message <style> blocks: sanitized separately (mail::css parses and
     // re-serialises them under the same property allowlist) and injected as
     // our own trusted <style>, AFTER BODY_STYLE so the message overrides our
@@ -434,7 +442,7 @@ mod tests {
 
     /// Most tests care only about the document, not the blocked count.
     fn srcdoc(untrusted_html: &str, images: &[InlineImage]) -> String {
-        build_srcdoc(untrusted_html, images, &HashMap::new()).html
+        build_srcdoc(untrusted_html, images, &HashMap::new(), false).html
     }
 
     #[test]
@@ -497,6 +505,7 @@ mod tests {
                <img src="http://plain.example/y.png"><img src="data:image/gif;base64,AA==">"#,
             &[],
             &HashMap::new(),
+            false,
         );
 
         // Both https refs count (each render blocks each occurrence); the
@@ -517,6 +526,7 @@ mod tests {
             r#"<img src="https://a.example/x.png"><img src="https://a.example/missing.png">"#,
             &[],
             &remote,
+            false,
         );
 
         assert!(body

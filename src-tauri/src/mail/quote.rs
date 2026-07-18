@@ -103,6 +103,52 @@ fn html_quote_start(html: &str) -> Option<usize> {
     }
 }
 
+/// Cut the trailing quoted history out of a *sanitized* HTML fragment —
+/// used instead of folding when the quote provably repeats an earlier
+/// message of the same conversation (shown one card up).
+pub fn strip_html_quote(html: String) -> String {
+    match html_quote_start(&html) {
+        Some(at) if visible_text_len(&html[..at]) > 0 => html[..at].to_string(),
+        _ => html,
+    }
+}
+
+/// Whether `quoted` (the split-off history of a reply) repeats one of the
+/// `earlier` message bodies. Compared in a normalized form — quote markers
+/// and attribution lines stripped, whitespace collapsed — so re-wrapped
+/// lines and nesting levels still match; containment covers selective
+/// quoting. An edited quote no longer matches and stays visible.
+pub fn quote_matches_history(quoted: &str, earlier: &[String]) -> bool {
+    let needle = normalize(quoted);
+    if needle.is_empty() {
+        return false;
+    }
+    earlier.iter().any(|body| normalize(body).contains(&needle))
+}
+
+/// The comparison form of a text: per line, ">" markers (any nesting) and
+/// attribution/divider lines dropped; then all whitespace collapsed. Both
+/// sides of the match go through this, so a body that itself quotes an
+/// older mail compares equal to its re-quoted (deeper-nested) form.
+fn normalize(text: &str) -> String {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(|line| {
+            let mut rest = line.trim_start();
+            while let Some(stripped) = rest.strip_prefix('>') {
+                rest = stripped.trim_start();
+            }
+            rest
+        })
+        .filter(|line| !is_attribution(line) && !is_outlook_divider(line))
+        .collect();
+    lines
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Rough count of the characters a reader would see: everything outside
 /// tags, entities counted as one.
 fn visible_text_len(html: &str) -> usize {
@@ -191,6 +237,50 @@ mod tests {
     fn a_fully_quoted_body_stays_whole() {
         let text = "> všetko\n> je\n> citát";
         assert_eq!(split_text_quote(text), (text.to_string(), None));
+    }
+
+    #[test]
+    fn quote_matching_survives_markers_wrapping_and_nesting() {
+        let earlier = vec![
+            "Ahoj, posielam ti projekt bridgeai v takom stave ako si ho prezentoval.\n\
+             Sú tam aj exporty db z fmuk verzie."
+                .to_string(),
+        ];
+        // The reply re-wraps lines differently and prefixes them with "> ".
+        let quoted = "On Wednesday, Mar 18, 2026, Dominik wrote:\n\
+                      > Ahoj, posielam ti projekt bridgeai v takom\n\
+                      > stave ako si ho prezentoval. Sú tam aj exporty db z fmuk verzie.";
+        assert!(quote_matches_history(quoted, &earlier));
+
+        // Selective quoting (only part of the body) still matches…
+        let partial = "> Sú tam aj exporty db z fmuk verzie.";
+        assert!(quote_matches_history(partial, &earlier));
+
+        // …an edited quote does not.
+        let edited = "> Ahoj, posielam ti projekt TOTO SOM DOPISAL v takom stave.";
+        assert!(!quote_matches_history(edited, &earlier));
+
+        // A quote of a mail we never cached matches nothing.
+        assert!(!quote_matches_history("> niečo úplne iné", &[]));
+    }
+
+    #[test]
+    fn nested_quotes_match_the_body_that_already_carried_them() {
+        // B's body itself ends with a quote of A; C quotes B, so every
+        // line gains one more ">" level. Normalization equalizes both.
+        let b_body = "Uhradené. Ďakujem.\n\n> Dobrý deň,\n> posielam údaje.".to_string();
+        let c_quote =
+            "On Monday, X wrote:\n> Uhradené. Ďakujem.\n>\n>> Dobrý deň,\n>> posielam údaje.";
+        assert!(quote_matches_history(c_quote, &[b_body]));
+    }
+
+    #[test]
+    fn strip_html_quote_cuts_the_tail_but_never_blanks_the_body() {
+        let html = "<p>Moja odpoveď.</p><blockquote><p>stará správa</p></blockquote>".to_string();
+        assert_eq!(strip_html_quote(html), "<p>Moja odpoveď.</p>");
+
+        let all_quote = "<blockquote><p>iba citát</p></blockquote>".to_string();
+        assert_eq!(strip_html_quote(all_quote.clone()), all_quote);
     }
 
     #[test]
