@@ -429,6 +429,22 @@ pub async fn max_uid(
     Ok(uid)
 }
 
+/// Lowest cached UID — where the header backfill continues downwards from;
+/// `None` when nothing is cached.
+pub async fn min_uid(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+) -> Result<Option<i64>, AppError> {
+    let uid =
+        sqlx::query_scalar("SELECT MIN(uid) FROM messages WHERE account_id = ? AND mailbox = ?")
+            .bind(account_id)
+            .bind(mailbox)
+            .fetch_one(pool)
+            .await?;
+    Ok(uid)
+}
+
 /// UIDVALIDITY the cache was built against; `None` when nothing is cached.
 pub async fn stored_uid_validity(
     pool: &SqlitePool,
@@ -1496,6 +1512,30 @@ mod tests {
             stored_uid_validity(&pool, id, "INBOX").await.unwrap(),
             Some(7)
         );
+    }
+
+    #[tokio::test]
+    async fn min_uid_reflects_the_cache() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+
+        assert_eq!(min_uid(&pool, id, "INBOX").await.unwrap(), None);
+
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(3, "A", "2026-07-01T00:00:00Z", false),
+                header(9, "B", "2026-07-02T00:00:00Z", false),
+            ],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(min_uid(&pool, id, "INBOX").await.unwrap(), Some(3));
+        // Other folders don't leak into the minimum.
+        assert_eq!(min_uid(&pool, id, "Archive").await.unwrap(), None);
     }
 
     #[tokio::test]

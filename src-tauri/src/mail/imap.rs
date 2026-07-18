@@ -354,6 +354,28 @@ pub fn initial_seq_range(exists: u32, count: u32) -> Option<String> {
     Some(format!("{start}:*"))
 }
 
+/// UIDs the selected folder holds below `uid` — the not-yet-cached older
+/// part of the mailbox. Numbers only (UID SEARCH), no headers; the caller
+/// pages through the result with `older_uid_page`.
+pub async fn search_uids_below(session: &mut ImapSession, uid: i64) -> Result<Vec<i64>, AppError> {
+    if uid <= 1 {
+        return Ok(Vec::new());
+    }
+    let uids = session
+        .uid_search(format!("UID 1:{}", uid - 1))
+        .await
+        .map_err(imap_err)?;
+    Ok(uids.into_iter().map(i64::from).collect())
+}
+
+/// The next backfill page: the `count` largest UIDs, newest first, so the
+/// mailbox fills in backwards from where the cache ends.
+pub fn older_uid_page(mut uids: Vec<i64>, count: usize) -> Vec<i64> {
+    uids.sort_unstable_by(|a, b| b.cmp(a));
+    uids.truncate(count);
+    uids
+}
+
 /// Drop everything at or below the last cached UID.
 ///
 /// why: `UID FETCH last+1:*` always returns at least the mailbox's newest
@@ -503,6 +525,19 @@ mod tests {
     fn initial_range_is_none_for_empty_mailbox() {
         assert_eq!(initial_seq_range(0, 50), None);
         assert_eq!(initial_seq_range(10, 0), None);
+    }
+
+    #[test]
+    fn older_uid_page_picks_the_newest_n() {
+        // SEARCH results arrive unordered; the page is the N largest, newest
+        // first, so backfill walks the mailbox backwards in date-ish order.
+        assert_eq!(older_uid_page(vec![4, 40, 2, 30, 7], 3), vec![40, 30, 7]);
+    }
+
+    #[test]
+    fn older_uid_page_returns_everything_when_fewer_than_n() {
+        assert_eq!(older_uid_page(vec![2, 9], 500), vec![9, 2]);
+        assert_eq!(older_uid_page(Vec::new(), 500), Vec::<i64>::new());
     }
 
     #[test]
