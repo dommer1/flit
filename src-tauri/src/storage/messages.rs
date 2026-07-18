@@ -256,14 +256,17 @@ pub async fn backfill_quoted_snippets(pool: &SqlitePool) -> Result<u64, AppError
 }
 
 /// Headers of one mailbox for one account — or across all accounts when
-/// `account_id` is `None` (the "All Inboxes" view), newest first.
+/// `account_id` is `None` (the "All Inboxes" view), newest first. `limit`
+/// caps the rows (the UI reveals more as the user scrolls); `None` = all.
 pub async fn list(
     pool: &SqlitePool,
     account_id: Option<i64>,
     mailbox: &str,
+    limit: Option<i64>,
 ) -> Result<Vec<MessageHeader>, AppError> {
-    // why: sqlx 0.9 rejects runtime-built SQL strings (SqlSafeStr), so the
-    // column list is spelled out twice instead of shared via format!().
+    // why unwrap_or(-1): SQLite treats a negative LIMIT as "no limit", which
+    // keeps the query one static string (sqlx 0.9 rejects runtime-built SQL).
+    let limit = limit.unwrap_or(-1);
     let headers = match account_id {
         Some(id) => {
             sqlx::query_as(
@@ -271,10 +274,11 @@ pub async fn list(
                           cc_addr AS cc, reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read, has_attachments,
                           COALESCE(message_id_hdr, '') AS message_id,
                           references_hdr AS "references"
-                   FROM messages WHERE account_id = ? AND mailbox = ? ORDER BY date DESC"#,
+                   FROM messages WHERE account_id = ? AND mailbox = ? ORDER BY date DESC LIMIT ?"#,
             )
             .bind(id)
             .bind(mailbox)
+            .bind(limit)
             .fetch_all(pool)
             .await?
         }
@@ -284,9 +288,10 @@ pub async fn list(
                           cc_addr AS cc, reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read, has_attachments,
                           COALESCE(message_id_hdr, '') AS message_id,
                           references_hdr AS "references"
-                   FROM messages WHERE mailbox = ? ORDER BY date DESC"#,
+                   FROM messages WHERE mailbox = ? ORDER BY date DESC LIMIT ?"#,
             )
             .bind(mailbox)
+            .bind(limit)
             .fetch_all(pool)
             .await?
         }
@@ -309,6 +314,7 @@ pub async fn list_threaded(
     pool: &SqlitePool,
     account_id: Option<i64>,
     mailbox: &str,
+    limit: Option<i64>,
 ) -> Result<Vec<MessageHeader>, AppError> {
     let rows = sqlx::query_as(
         r#"WITH visible AS (
@@ -346,10 +352,11 @@ pub async fn list_threaded(
            FROM ranked r
            JOIN stats s ON s.account_id = r.account_id
                        AND s.tkey = COALESCE(r.thread_key, 'row:' || r.id)
-           WHERE r.rn = 1 ORDER BY r.date DESC"#,
+           WHERE r.rn = 1 ORDER BY r.date DESC LIMIT ?3"#,
     )
     .bind(account_id)
     .bind(mailbox)
+    .bind(limit.unwrap_or(-1))
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -995,7 +1002,7 @@ mod tests {
         .await
         .unwrap();
 
-        let all = list(&pool, Some(id), "INBOX").await.unwrap();
+        let all = list(&pool, Some(id), "INBOX", None).await.unwrap();
 
         let reply = all.iter().find(|m| m.message_id == "b@x").unwrap();
         assert_eq!(reply.references, "a@x");
@@ -1042,7 +1049,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+        let rows = list_threaded(&pool, Some(id), "INBOX", None).await.unwrap();
 
         assert_eq!(rows.len(), 2);
         // Newest first: the solo message (uid 4 → date 07-04) precedes the
@@ -1068,7 +1075,7 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+        let rows = list_threaded(&pool, Some(id), "INBOX", None).await.unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].thread_count, 2);
@@ -1087,7 +1094,7 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+        let rows = list_threaded(&pool, Some(id), "INBOX", None).await.unwrap();
 
         assert_eq!(rows.len(), 1);
         // The representative (newest) is read, but the thread is not.
@@ -1109,7 +1116,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+        let rows = list_threaded(&pool, Some(id), "INBOX", None).await.unwrap();
 
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| r.thread_count == 1));
@@ -1129,7 +1136,7 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = list_threaded(&pool, None, "INBOX").await.unwrap();
+        let rows = list_threaded(&pool, None, "INBOX", None).await.unwrap();
 
         // Identical thread keys in different accounts must not collapse.
         assert_eq!(rows.len(), 2);
@@ -1162,7 +1169,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let anchor = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+        let anchor = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
 
         let thread = thread_of(&pool, anchor).await.unwrap();
 
@@ -1191,7 +1198,7 @@ mod tests {
         upsert_headers(&pool, id, "Sent", &[threaded(1, "c@x", "a@x", &["a@x"])])
             .await
             .unwrap();
-        let anchor = list(&pool, Some(id), "INBOX")
+        let anchor = list(&pool, Some(id), "INBOX", None)
             .await
             .unwrap()
             .into_iter()
@@ -1218,7 +1225,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let anchor = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+        let anchor = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
 
         let rows = thread_rows_in_mailbox(&pool, anchor).await.unwrap();
 
@@ -1271,7 +1278,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let anchor = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+        let anchor = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
 
         let thread = thread_of(&pool, anchor).await.unwrap();
 
@@ -1300,7 +1307,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+        let rows = list_threaded(&pool, Some(id), "INBOX", None).await.unwrap();
 
         assert_eq!(rows.len(), 1);
         assert!(rows[0].has_attachments);
@@ -1351,7 +1358,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = list_threaded(&pool, Some(id), "INBOX").await.unwrap();
+        let rows = list_threaded(&pool, Some(id), "INBOX", None).await.unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].thread_count, 2);
@@ -1370,7 +1377,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let anchor = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+        let anchor = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
 
         let thread = thread_of(&pool, anchor).await.unwrap();
 
@@ -1470,7 +1477,7 @@ mod tests {
         .await
         .unwrap();
 
-        let all = list(&pool, None, "INBOX").await.unwrap();
+        let all = list(&pool, None, "INBOX", None).await.unwrap();
 
         let subjects: Vec<&str> = all.iter().map(|m| m.subject.as_str()).collect();
         assert_eq!(subjects, vec!["New", "Old"]);
@@ -1502,11 +1509,14 @@ mod tests {
         .await
         .unwrap();
 
-        let mine = list(&pool, Some(first), "INBOX").await.unwrap();
+        let mine = list(&pool, Some(first), "INBOX", None).await.unwrap();
 
         assert_eq!(mine.len(), 1);
         assert_eq!(mine[0].subject, "Mine");
-        assert!(list(&pool, Some(999), "INBOX").await.unwrap().is_empty());
+        assert!(list(&pool, Some(999), "INBOX", None)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -1531,7 +1541,7 @@ mod tests {
         .await
         .unwrap();
 
-        let all = list(&pool, Some(id), "INBOX").await.unwrap();
+        let all = list(&pool, Some(id), "INBOX", None).await.unwrap();
         assert_eq!(all.len(), 1);
         assert!(all[0].read);
     }
@@ -1561,6 +1571,52 @@ mod tests {
             stored_uid_validity(&pool, id, "INBOX").await.unwrap(),
             Some(7)
         );
+    }
+
+    #[tokio::test]
+    async fn list_honors_the_row_limit() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(1, "Oldest", "2026-07-01T00:00:00Z", false),
+                header(2, "Middle", "2026-07-02T00:00:00Z", false),
+                header(3, "Newest", "2026-07-03T00:00:00Z", false),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let limited = list(&pool, Some(id), "INBOX", Some(2)).await.unwrap();
+
+        let subjects: Vec<String> = limited.into_iter().map(|m| m.subject).collect();
+        assert_eq!(subjects, vec!["Newest", "Middle"]);
+    }
+
+    #[tokio::test]
+    async fn list_threaded_honors_the_row_limit() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "old@x", "", &[]), threaded(2, "new@x", "", &[])],
+        )
+        .await
+        .unwrap();
+
+        let limited = list_threaded(&pool, Some(id), "INBOX", Some(1))
+            .await
+            .unwrap();
+
+        // The newest conversation wins the single row (threaded() dates
+        // follow uid order).
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].message_id, "new@x");
     }
 
     #[tokio::test]
@@ -1744,7 +1800,7 @@ mod tests {
         .await
         .unwrap();
 
-        let inbox: Vec<String> = list(&pool, Some(id), "INBOX")
+        let inbox: Vec<String> = list(&pool, Some(id), "INBOX", None)
             .await
             .unwrap()
             .into_iter()
@@ -1752,7 +1808,7 @@ mod tests {
             .collect();
         assert_eq!(inbox, vec!["In inbox"]);
 
-        let unified: Vec<String> = list(&pool, None, "Archive")
+        let unified: Vec<String> = list(&pool, None, "Archive", None)
             .await
             .unwrap()
             .into_iter()
@@ -1773,7 +1829,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let row_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+        let row_id = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
 
         // e.g. an attachment-only message: the parser yields no text or html.
         set_body(&pool, row_id, None, None, "", &[], &[])
@@ -1804,7 +1860,7 @@ mod tests {
         .unwrap();
         assert!(has_missing_bodies(&pool, id).await.unwrap());
 
-        let row_id = list(&pool, Some(id), "Archive").await.unwrap()[0].id;
+        let row_id = list(&pool, Some(id), "Archive", None).await.unwrap()[0].id;
         set_body(&pool, row_id, Some("text"), None, "text", &[], &[])
             .await
             .unwrap();
@@ -1827,7 +1883,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let cached_id = list(&pool, Some(id), "INBOX")
+        let cached_id = list(&pool, Some(id), "INBOX", None)
             .await
             .unwrap()
             .iter()
@@ -1859,7 +1915,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let message_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+        let message_id = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
 
         let before = get_body(&pool, message_id).await.unwrap();
         assert_eq!(before.body_text, None);
@@ -1882,7 +1938,7 @@ mod tests {
         let after = get_body(&pool, message_id).await.unwrap();
         assert_eq!(after.body_text.as_deref(), Some("plain body"));
         assert_eq!(after.body_html.as_deref(), Some("<p>html body</p>"));
-        let headers = list(&pool, Some(id), "INBOX").await.unwrap();
+        let headers = list(&pool, Some(id), "INBOX", None).await.unwrap();
         assert_eq!(headers[0].snippet, "plain body");
     }
 
@@ -1898,7 +1954,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let message_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+        let message_id = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
 
         let photo = InlineImage {
             content_id: "photo1".to_string(),
@@ -1957,7 +2013,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let message_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+        let message_id = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
 
         // Cached before any body arrived: nothing scanned, nothing listed.
         assert!(
@@ -2040,7 +2096,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let message_id = list(&pool, Some(id), "INBOX").await.unwrap()[0].id;
+        let message_id = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
         let meta = AttachmentMeta {
             part_index: 0,
             filename: "a.zip".to_string(),
@@ -2103,7 +2159,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let message_id = list(&pool, Some(id), "Archive").await.unwrap()[0].id;
+        let message_id = list(&pool, Some(id), "Archive", None).await.unwrap()[0].id;
 
         let loc = location(&pool, message_id).await.unwrap();
         assert_eq!(loc.account_id, id);
@@ -2129,7 +2185,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let rows = list(&pool, Some(id), "INBOX").await.unwrap();
+        let rows = list(&pool, Some(id), "INBOX", None).await.unwrap();
         let stale = rows.iter().find(|m| m.subject == "Freelo").unwrap().id;
         let clean = rows.iter().find(|m| m.subject == "Clean").unwrap().id;
 
@@ -2158,7 +2214,7 @@ mod tests {
         let fixed = backfill_url_snippets(&pool).await.unwrap();
         assert_eq!(fixed, 1);
 
-        let after = list(&pool, Some(id), "INBOX").await.unwrap();
+        let after = list(&pool, Some(id), "INBOX", None).await.unwrap();
         let snip = |subject: &str| {
             after
                 .iter()
@@ -2199,8 +2255,11 @@ mod tests {
 
         clear_mailbox(&pool, id, "INBOX").await.unwrap();
 
-        assert!(list(&pool, Some(id), "INBOX").await.unwrap().is_empty());
-        let remaining = list(&pool, Some(id), "Archive").await.unwrap();
+        assert!(list(&pool, Some(id), "INBOX", None)
+            .await
+            .unwrap()
+            .is_empty());
+        let remaining = list(&pool, Some(id), "Archive", None).await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].subject, "Archived");
     }

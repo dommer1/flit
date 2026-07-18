@@ -399,6 +399,7 @@ pub async fn list_messages(
     state: State<'_, AppState>,
     account_id: Option<i64>,
     mailbox: Option<String>,
+    limit: Option<i64>,
 ) -> Result<Vec<MessageHeader>, AppError> {
     let mailbox = mailbox.as_deref().unwrap_or("INBOX");
     let flat = match account_id {
@@ -412,9 +413,9 @@ pub async fn list_messages(
         None => false,
     };
     if flat {
-        storage::messages::list(&state.pool, account_id, mailbox).await
+        storage::messages::list(&state.pool, account_id, mailbox, limit).await
     } else {
-        storage::messages::list_threaded(&state.pool, account_id, mailbox).await
+        storage::messages::list_threaded(&state.pool, account_id, mailbox, limit).await
     }
 }
 
