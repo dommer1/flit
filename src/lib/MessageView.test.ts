@@ -280,6 +280,24 @@ it("shows no attachment strip when a message has none", async () => {
   ).not.toBeInTheDocument();
 });
 
+it("folds quoted text history behind a toggle", async () => {
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({
+      text: "Uhradené. Ďakujem.",
+      quotedText: "On Monday, Tomáš wrote:\n> pôvodná správa",
+    }),
+  });
+  renderView();
+  await screen.findByText("Uhradené. Ďakujem.");
+
+  // The history is hidden until the ••• pill is clicked.
+  expect(screen.queryByText(/pôvodná správa/)).not.toBeInTheDocument();
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Show quoted text" }),
+  );
+  expect(screen.getByText(/pôvodná správa/)).toBeInTheDocument();
+});
+
 // ── Conversation view ──────────────────────────────────────────────────
 
 const conversation: MessageHeader[] = [
