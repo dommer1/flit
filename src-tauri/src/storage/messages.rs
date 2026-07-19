@@ -255,6 +255,36 @@ pub async fn backfill_quoted_snippets(pool: &SqlitePool) -> Result<u64, AppError
     Ok(fixed)
 }
 
+/// Recompute stored snippets that still carry literal entity padding
+/// ("Bistro.sk &zwnj; &zwnj; …"), using the current snippet rules. Runs
+/// once at startup: the LIKE filter doubles as the work-list — a corrected
+/// snippet no longer matches it (rows with legit "&#" prose re-run, as
+/// cheap no-ops).
+pub async fn backfill_entity_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
+    let stale: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, body_text FROM messages
+         WHERE body_text IS NOT NULL
+           AND (snippet LIKE '%&zwnj;%' OR snippet LIKE '%&zwj;%'
+                OR snippet LIKE '%&shy;%' OR snippet LIKE '%&nbsp;%'
+                OR snippet LIKE '%&#%')",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut fixed = 0;
+    for (id, body_text) in stale {
+        let snippet = snippet_of(&body_text);
+        let changed = sqlx::query("UPDATE messages SET snippet = ? WHERE id = ? AND snippet <> ?")
+            .bind(&snippet)
+            .bind(id)
+            .bind(&snippet)
+            .execute(pool)
+            .await?;
+        fixed += changed.rows_affected();
+    }
+    Ok(fixed)
+}
+
 /// Headers of one mailbox for one account — or across all accounts when
 /// `account_id` is `None` (the "All Inboxes" view), newest first. `limit`
 /// caps the rows (the UI reveals more as the user scrolls); `None` = all.
@@ -2296,6 +2326,67 @@ mod tests {
 
         // Second run finds nothing left to fix.
         assert_eq!(backfill_url_snippets(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn backfill_recomputes_snippets_carrying_entity_padding() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(1, "Bistro", "2026-07-01T00:00:00Z", false),
+                header(2, "Clean", "2026-07-02T00:00:00Z", false),
+            ],
+        )
+        .await
+        .unwrap();
+        let rows = list(&pool, Some(id), "INBOX", None).await.unwrap();
+        let stale = rows.iter().find(|m| m.subject == "Bistro").unwrap().id;
+        let clean = rows.iter().find(|m| m.subject == "Clean").unwrap().id;
+
+        // Simulate a body cached by the OLD build: snippet kept the literal
+        // "&zwnj;" padding the parser now strips.
+        let body = "Bistro.sk\n&zwnj; &zwnj; &zwnj;\nVeľké finále je tu";
+        sqlx::query("UPDATE messages SET body_text = ?, snippet = ? WHERE id = ?")
+            .bind(body)
+            .bind("Bistro.sk &zwnj; &zwnj; &zwnj; Veľké finále je tu")
+            .bind(stale)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // A row without padding must be left untouched.
+        set_body(
+            &pool,
+            clean,
+            Some("Just prose here"),
+            None,
+            "Just prose here",
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let fixed = backfill_entity_snippets(&pool).await.unwrap();
+        assert_eq!(fixed, 1);
+
+        let after = list(&pool, Some(id), "INBOX", None).await.unwrap();
+        let snip = |subject: &str| {
+            after
+                .iter()
+                .find(|m| m.subject == subject)
+                .unwrap()
+                .snippet
+                .clone()
+        };
+        assert_eq!(snip("Bistro"), "Bistro.sk Veľké finále je tu");
+        assert_eq!(snip("Clean"), "Just prose here");
+
+        // Second run finds nothing left to fix.
+        assert_eq!(backfill_entity_snippets(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]
