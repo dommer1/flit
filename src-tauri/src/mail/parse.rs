@@ -337,8 +337,69 @@ fn is_invisible(c: char) -> bool {
 
 /// The text with invisible padding characters removed — runs that were
 /// nothing but padding dissolve into the surrounding whitespace.
+///
+/// why: padding also arrives as literal ASCII "&zwnj;" — broken sender
+/// templates leak HTML entities into the text/plain part — so entity
+/// references are decoded first, and the decoded characters then fall to
+/// the same filter.
 pub fn strip_invisible(text: &str) -> String {
-    text.chars().filter(|c| !is_invisible(*c)).collect()
+    decode_padding_entities(text)
+        .chars()
+        .filter(|c| !is_invisible(*c))
+        .collect()
+}
+
+/// The character a literal HTML entity reference stands for, but only when
+/// it is padding (invisible or whitespace) — visible entities like "&amp;"
+/// stay encoded, because in a text/plain body they are literal text.
+fn decode_padding_entity(entity: &str) -> Option<char> {
+    let name = entity.strip_prefix('&')?.strip_suffix(';')?;
+    let c = match name {
+        "zwnj" => '\u{200C}',
+        "zwj" => '\u{200D}',
+        "shy" => '\u{00AD}',
+        "nbsp" => '\u{00A0}',
+        _ => {
+            let digits = name.strip_prefix('#')?;
+            let code = match digits.strip_prefix(['x', 'X']) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                None => digits.parse().ok()?,
+            };
+            char::from_u32(code)?
+        }
+    };
+    (is_invisible(c) || c.is_whitespace()).then_some(c)
+}
+
+/// The text with padding entity references replaced by the characters they
+/// name; everything else — including "&" that starts no such entity —
+/// passes through verbatim.
+fn decode_padding_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        let (before, tail) = rest.split_at(amp);
+        out.push_str(before);
+        // An entity is short ("&#65279;" is 8 chars) — a ';' any further
+        // away means this '&' is ordinary prose.
+        let semi = tail
+            .char_indices()
+            .take(10)
+            .find(|(_, c)| *c == ';')
+            .map(|(i, _)| i);
+        match semi.and_then(|i| Some((i, decode_padding_entity(&tail[..=i])?))) {
+            Some((i, c)) => {
+                out.push(c);
+                rest = &tail[i + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A whitespace-delimited token that is just a URL, optionally wrapped in the
@@ -688,6 +749,28 @@ mod tests {
             snippet_of(text),
             "Build Week is open. Submissions close July 21."
         );
+    }
+
+    #[test]
+    fn snippet_drops_literal_entity_padding() {
+        // A Bistro.sk-style text part whose preheader padding arrived as
+        // literal ASCII "&zwnj;" — the sender's template leaked HTML
+        // entities into text/plain, so there are no invisible chars to
+        // strip, just entity text repeated hundreds of times.
+        let text = "Bistro.sk\n\
+                    &zwnj; &zwnj; &#8204; &#x200C;&zwnj; &nbsp;&shy;\n\
+                    Veľké finále je tu";
+
+        assert_eq!(snippet_of(text), "Bistro.sk Veľké finále je tu");
+    }
+
+    #[test]
+    fn entity_decoding_leaves_visible_entities_and_plain_ampersands_alone() {
+        // Only padding entities decode — visible ones ("&amp;", "&#65;")
+        // and bare ampersands must survive verbatim.
+        let text = "Tom &amp; Jerry & co; order &#65; ships";
+
+        assert_eq!(snippet_of(text), "Tom &amp; Jerry & co; order &#65; ships");
     }
 
     #[test]
