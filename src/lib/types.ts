@@ -216,10 +216,12 @@ export interface ViewStatus {
   listRows: number;
   /** Unread messages in the view, from the local cache. */
   unread: number;
-  /** Messages the cache holds for the view. */
+  /** Messages cached across every folder of the view's account (all
+   * accounts in the unified view) — progress is account-wide so the
+   * backfill is visible from any view. */
   cached: number;
-  /** Messages the server holds; null until the first sync reports it.
-   * cached < serverTotal means the header backfill is still running. */
+  /** Messages the server holds in those same folders; null until the first
+   * sync reports it. cached < serverTotal = backfill still running. */
   serverTotal: number | null;
 }
 

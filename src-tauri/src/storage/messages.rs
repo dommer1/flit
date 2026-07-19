@@ -439,13 +439,18 @@ pub async fn max_uid(
 /// Counts for one list view; `account_id: None` spans all accounts (the
 /// unified inbox). `threaded` must match how the view lists rows so
 /// `list_rows` agrees with what an unlimited `list`/`list_threaded` returns.
+///
+/// Header totals (`list_rows`, `unread`) are scoped to the viewed folder;
+/// the progress pair (`cached`, `server_total`) spans every folder of the
+/// account (or of all accounts) — the user asked to see the backfill from
+/// any view, not just the folder it happens to be working on.
 pub async fn view_status(
     pool: &SqlitePool,
     account_id: Option<i64>,
     mailbox: &str,
     threaded: bool,
 ) -> Result<crate::models::ViewStatus, AppError> {
-    let (cached, unread): (i64, i64) = sqlx::query_as(
+    let (view_count, unread): (i64, i64) = sqlx::query_as(
         "SELECT count(*), COALESCE(SUM(read = 0), 0) FROM messages
          WHERE mailbox = ?2 AND (?1 IS NULL OR account_id = ?1)",
     )
@@ -465,16 +470,19 @@ pub async fn view_status(
         .fetch_one(pool)
         .await?
     } else {
-        cached
+        view_count
     };
+    let cached: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM messages WHERE ?1 IS NULL OR account_id = ?1")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await?;
     // SUM of NULLs is NULL — folders never synced report no total rather
     // than a misleading zero.
     let server_total: Option<i64> = sqlx::query_scalar(
-        "SELECT SUM(server_exists) FROM mailboxes
-         WHERE name = ?2 AND (?1 IS NULL OR account_id = ?1)",
+        "SELECT SUM(server_exists) FROM mailboxes WHERE ?1 IS NULL OR account_id = ?1",
     )
     .bind(account_id)
-    .bind(mailbox)
     .fetch_one(pool)
     .await?;
     Ok(crate::models::ViewStatus {
@@ -1650,13 +1658,71 @@ mod tests {
         assert_eq!(
             status,
             crate::models::ViewStatus {
+                // Header totals stay scoped to the viewed folder…
                 list_rows: 3,
                 unread: 2,
-                cached: 3,
+                // …while sync progress spans the whole account, so the
+                // strip shows in every view while any folder still syncs.
+                cached: 4,
                 // No mailboxes row yet — the server total is unknown.
                 server_total: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn view_status_progress_spans_all_folders_of_the_account() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        crate::storage::mailboxes::replace(
+            &pool,
+            id,
+            &[
+                crate::storage::mailboxes::DiscoveredMailbox {
+                    name: "INBOX".to_string(),
+                    role: Some("inbox".to_string()),
+                },
+                crate::storage::mailboxes::DiscoveredMailbox {
+                    name: "Archive".to_string(),
+                    role: Some("archive".to_string()),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+        crate::storage::mailboxes::set_server_exists(&pool, id, "INBOX", 2)
+            .await
+            .unwrap();
+        crate::storage::mailboxes::set_server_exists(&pool, id, "Archive", 5000)
+            .await
+            .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(1, "A", "2026-07-01T00:00:00Z", true),
+                header(2, "B", "2026-07-02T00:00:00Z", true),
+            ],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "Archive",
+            &[header(1, "Old", "2026-07-03T00:00:00Z", true)],
+        )
+        .await
+        .unwrap();
+
+        // Viewing the fully-mirrored INBOX still reports the account-wide
+        // backfill (Archive is far from done).
+        let status = view_status(&pool, Some(id), "INBOX", false).await.unwrap();
+
+        assert_eq!(status.list_rows, 2);
+        assert_eq!(status.cached, 3);
+        assert_eq!(status.server_total, Some(5002));
     }
 
     #[tokio::test]

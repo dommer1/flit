@@ -469,10 +469,12 @@ pub struct ViewStatus {
     pub list_rows: i64,
     /// Unread messages in the view, from the local cache.
     pub unread: i64,
-    /// Messages the cache holds for the view.
+    /// Messages the cache holds across every folder of the view's account
+    /// (all accounts in the unified view) — progress is account-wide so the
+    /// backfill is visible from any view.
     pub cached: i64,
-    /// Messages the server holds (sum of the folders' EXISTS counts);
-    /// `None` until the first sync reports it. `cached < server_total`
-    /// means the header backfill is still running.
+    /// Messages the server holds in those same folders (sum of EXISTS
+    /// counts); `None` until the first sync reports it. `cached <
+    /// server_total` means the header backfill is still running.
     pub server_total: Option<i64>,
 }
