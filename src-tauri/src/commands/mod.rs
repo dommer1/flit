@@ -758,8 +758,9 @@ async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppE
     Ok(())
 }
 
-/// Remove the sent message's autosaved version from the Drafts folder, so
-/// it stops looking like unfinished work here and in webmail.
+/// Remove one autosaved draft version from the account's server Drafts
+/// folder — after a send (so it stops looking like unfinished work) or on
+/// an explicit "Don't Save".
 async fn delete_sent_draft(
     state: &AppState,
     account: &Account,
@@ -856,6 +857,20 @@ pub async fn save_draft(
     let _ = session.logout().await;
     appended?;
     Ok(message_id)
+}
+
+/// "Don't Save" on compose close: remove the autosaved draft version from
+/// the account's server Drafts folder. A missing folder or version is fine —
+/// the state the user asked for (no draft) already holds.
+#[tauri::command]
+pub async fn discard_draft(
+    state: State<'_, AppState>,
+    account_id: i64,
+    draft_message_id: String,
+) -> Result<(), AppError> {
+    let account = storage::accounts::get(&state.pool, account_id).await?;
+    let password = state.password(account_id).await?;
+    delete_sent_draft(&state, &account, &password, &draft_message_id).await
 }
 
 /// Delete one draft version by Message-ID from `drafts`, if it still exists.

@@ -105,6 +105,7 @@ pub fn run() {
             commands::send_scheduled_now,
             commands::cancel_scheduled,
             commands::save_draft,
+            commands::discard_draft,
             commands::open_draft,
             commands::test_connection,
             commands::open_compose,

@@ -295,6 +295,17 @@ export function saveDraft(
 }
 
 /**
+ * "Don't Save" on compose close: delete the autosaved draft version from
+ * the account's server Drafts folder.
+ */
+export function discardDraft(
+  accountId: number,
+  draftMessageId: string,
+): Promise<void> {
+  return invoke<void>("discard_draft", { accountId, draftMessageId });
+}
+
+/**
  * Park a message until `scheduledAt` (unix seconds) — "Send Later". The
  * message is validated now; delivery happens in the backend scheduler.
  */
