@@ -5,7 +5,7 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::models::Contact;
+use crate::models::{Contact, SenderAnomaly};
 
 /// One display-formatted address list ("Ann <a@x>, b@y") split into
 /// `(name, email)` pairs.
@@ -128,6 +128,59 @@ pub async fn suggest(pool: &SqlitePool, query: &str) -> Result<Vec<Contact>, App
     .fetch_all(pool)
     .await?;
     Ok(contacts)
+}
+
+/// A name counts as "familiar" once seen this often on one address…
+const FAMILIAR_MIN: i64 = 3;
+/// …and an address still counts as "new" up to this many sightings.
+/// why > 0: the message being viewed has usually been harvested already,
+/// so a first-contact address arrives here with a count of at least 1.
+const NEW_MAX: i64 = 2;
+
+/// The Canary-style sender check: does this From line pair a familiar
+/// display name with an address that name does not usually use?
+///
+/// Purely local — compares the message against the harvested contact
+/// history, no external lookup. `own_emails` (the user's accounts and
+/// aliases) never warn: two own accounts sharing one display name is
+/// normal, not suspicious.
+pub async fn sender_anomaly(
+    pool: &SqlitePool,
+    from: &str,
+    own_emails: &[String],
+) -> Result<Option<SenderAnomaly>, AppError> {
+    let Some((name, email)) = split_address_list(from).into_iter().next() else {
+        return Ok(None);
+    };
+    if name.is_empty()
+        || own_emails
+            .iter()
+            .any(|own| own.eq_ignore_ascii_case(&email))
+    {
+        return Ok(None);
+    }
+    // Every address this display name has appeared with, busiest first.
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT email, seen_count FROM contacts
+         WHERE name = ? COLLATE NOCASE
+         ORDER BY seen_count DESC, email",
+    )
+    .bind(&name)
+    .fetch_all(pool)
+    .await?;
+    let this_count = rows
+        .iter()
+        .find(|(e, _)| e.eq_ignore_ascii_case(&email))
+        .map_or(0, |(_, count)| *count);
+    match rows.iter().find(|(e, _)| !e.eq_ignore_ascii_case(&email)) {
+        Some((usual_email, count)) if *count >= FAMILIAR_MIN && this_count <= NEW_MAX => {
+            Ok(Some(SenderAnomaly {
+                name,
+                usual_email: usual_email.clone(),
+            }))
+        }
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -292,5 +345,114 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count, 1);
+    }
+
+    /// Shorthand: record `n` sightings of one formatted address.
+    async fn seen(pool: &SqlitePool, addr: &str, n: usize) {
+        for _ in 0..n {
+            harvest(pool, &[addr], "2026-07-01T00:00:00Z")
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn warns_when_a_familiar_name_writes_from_a_new_address() {
+        let pool = test_pool().await;
+        seen(&pool, "Jakub Šarvaic <jakub@satori.sk>", 3).await;
+        seen(&pool, "Jakub Šarvaic <jakub@hellosatori.sk>", 1).await;
+
+        let anomaly = sender_anomaly(&pool, "Jakub Šarvaic <jakub@hellosatori.sk>", &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            anomaly,
+            Some(SenderAnomaly {
+                name: "Jakub Šarvaic".to_string(),
+                usual_email: "jakub@satori.sk".to_string(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn stays_quiet_for_the_established_address_itself() {
+        let pool = test_pool().await;
+        seen(&pool, "Ann <ann@example.com>", 5).await;
+
+        let anomaly = sender_anomaly(&pool, "Ann <ann@example.com>", &[])
+            .await
+            .unwrap();
+        assert_eq!(anomaly, None);
+    }
+
+    #[tokio::test]
+    async fn stays_quiet_once_the_new_address_is_established_too() {
+        let pool = test_pool().await;
+        seen(&pool, "Ann <ann@example.com>", 5).await;
+        seen(&pool, "Ann <ann@other.com>", 3).await;
+
+        let anomaly = sender_anomaly(&pool, "Ann <ann@other.com>", &[])
+            .await
+            .unwrap();
+        assert_eq!(anomaly, None);
+    }
+
+    #[tokio::test]
+    async fn stays_quiet_when_the_name_is_barely_known_elsewhere() {
+        let pool = test_pool().await;
+        seen(&pool, "Ann <ann@example.com>", 2).await;
+
+        let anomaly = sender_anomaly(&pool, "Ann <ann@other.com>", &[])
+            .await
+            .unwrap();
+        assert_eq!(anomaly, None);
+    }
+
+    #[tokio::test]
+    async fn stays_quiet_for_unknown_names_and_bare_addresses() {
+        let pool = test_pool().await;
+        seen(&pool, "Ann <ann@example.com>", 5).await;
+
+        assert_eq!(
+            sender_anomaly(&pool, "Bob <bob@example.com>", &[])
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            sender_anomaly(&pool, "ann@other.com", &[]).await.unwrap(),
+            None
+        );
+        assert_eq!(sender_anomaly(&pool, "", &[]).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn matches_names_case_insensitively() {
+        let pool = test_pool().await;
+        seen(&pool, "ANN BOE <ann@example.com>", 3).await;
+
+        let anomaly = sender_anomaly(&pool, "Ann Boe <ann@other.com>", &[])
+            .await
+            .unwrap();
+        assert_eq!(anomaly.unwrap().usual_email, "ann@example.com");
+    }
+
+    #[tokio::test]
+    async fn never_warns_about_the_users_own_addresses() {
+        let pool = test_pool().await;
+        seen(&pool, "Dominik Mery <hello@vocalio.sk>", 5).await;
+        seen(&pool, "Dominik Mery <dominik@vocalio.sk>", 1).await;
+
+        let anomaly = sender_anomaly(
+            &pool,
+            "Dominik Mery <dominik@vocalio.sk>",
+            &[
+                "hello@vocalio.sk".to_string(),
+                "Dominik@Vocalio.sk".to_string(),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(anomaly, None);
     }
 }

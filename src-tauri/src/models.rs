@@ -380,6 +380,19 @@ pub struct Contact {
     pub name: String,
 }
 
+/// A sender whose display name is well known in the local contact history —
+/// but under a different address. Shown as a warning banner on the message
+/// ("X does not usually use this email address"). Computed purely from the
+/// local contacts table; nothing ever leaves the machine.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SenderAnomaly {
+    /// The familiar display name the message arrived under.
+    pub name: String,
+    /// The address this name usually writes from (its busiest contact row).
+    pub usual_email: String,
+}
+
 /// One attachment of a cached message — metadata only. The bytes stay on
 /// the server and are re-fetched by part_index when the user saves the file.
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
