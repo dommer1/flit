@@ -4,6 +4,7 @@
   import {
     attachmentPreview,
     closeCompose,
+    discardDraft,
     inspectAttachments,
     listAccounts,
     listAliases,
@@ -146,8 +147,17 @@
   // mount sequence settled count as the user's.
   let watching = false;
   let dirty = false;
+  /** The user edited something in THIS window — unlike `dirty`, never
+   * cleared by an autosave. Gates the close dialog: only the user's own
+   * edits are worth asking about. */
+  let everDirty = false;
+  /** Don't Save was chosen — no save may run from here to teardown. */
+  let discarded = false;
   let saving = false;
   let sent = false;
+
+  /** The Save / Don't Save / Cancel prompt shown by a close request. */
+  let showCloseDialog = $state(false);
 
   /** The send-later popover; presets are computed fresh on every open so a
    * long-lived window never offers a moment that has already passed. */
@@ -236,11 +246,21 @@
       });
       unlistenClose = await getCurrentWindow().onCloseRequested(
         async (event) => {
-          if (sent || !dirty) return;
+          if (sent || discarded) return;
           const message = currentMessage();
-          if (!message || (isDraftEmpty(message) && draftMessageId === null)) {
+          const nothingToKeep =
+            !message || (isDraftEmpty(message) && draftMessageId === null);
+          if (everDirty) {
+            if (nothingToKeep) return; // typed, then cleared it all again
+            // The user's own edits — their call: Save / Don't Save / Cancel.
+            event.preventDefault();
+            showCloseDialog = true;
             return;
           }
+          if (!dirty || nothingToKeep) return;
+          // An untouched handback (undo, failed send) re-saves silently, no
+          // questions: the text is not this window's edits, and its newest
+          // version may never have been autosaved.
           // why: hold the window open until the save lands — destroying the
           // webview mid-save could lose the newest keystrokes.
           event.preventDefault();
@@ -262,7 +282,7 @@
   }
 
   async function saveNow() {
-    if (saving || sent || !dirty) return;
+    if (saving || sent || discarded || !dirty) return;
     const message = currentMessage();
     if (!message) return;
     // An untouched-then-cleared window has nothing worth a server round
@@ -289,8 +309,45 @@
     void [to, cc, bcc, subject, body, attachments, quote];
     if (!watching) return;
     dirty = true;
+    everDirty = true;
     scheduleAutosave();
   });
+
+  /** Resolve once no save is in flight — an autosave can overlap the close
+   * dialog, and both outcomes below must act on its result, not race it. */
+  async function saveSettled() {
+    while (saving) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  async function saveAndClose() {
+    showCloseDialog = false;
+    await saveSettled();
+    // A no-op when an autosave already holds this exact content.
+    await saveNow();
+    if (dirty) return; // save failed; the error strip explains, window stays
+    await getCurrentWindow().destroy();
+  }
+
+  async function discardAndClose() {
+    showCloseDialog = false;
+    discarded = true;
+    await saveSettled();
+    if (draftMessageId !== null && accountId !== null) {
+      try {
+        await discardDraft(accountId, draftMessageId);
+      } catch {
+        // why swallowed: an orphaned server draft is cosmetic — never hold
+        // a window the user explicitly discarded hostage over cleanup.
+      }
+    }
+    await getCurrentWindow().destroy();
+  }
+
+  function onDialogKey(event: KeyboardEvent) {
+    if (!showCloseDialog || event.key !== "Escape") return;
+    event.preventDefault();
+    showCloseDialog = false;
+  }
 
   /** ••• click: the quote moves into the editor and becomes editable —
    * one-way, like Proton/Gmail; removing it again is ordinary editing. */
@@ -411,6 +468,8 @@
     }
   }
 </script>
+
+<svelte:window onkeydown={onDialogKey} />
 
 <form
   class="window"
@@ -697,6 +756,34 @@
         </li>
       {/each}
     </ul>
+  {/if}
+
+  {#if showCloseDialog}
+    <!-- macOS-alert-style prompt, rendered in-window: the native dialog
+         plugin caps out at two buttons, and this stays on our flat look. -->
+    <div class="dialog-backdrop">
+      <div
+        class="close-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="close-dialog-title"
+      >
+        <h2 id="close-dialog-title">Save this message as a draft?</h2>
+        <p>
+          This message has not been sent and contains unsaved changes. You
+          can save it as a draft to work on later.
+        </p>
+        <!-- svelte-ignore a11y_autofocus — Enter should mean Save, like the
+             default button of a native alert. -->
+        <button type="button" class="primary" autofocus onclick={saveAndClose}>
+          Save
+        </button>
+        <button type="button" onclick={discardAndClose}>Don't Save</button>
+        <button type="button" onclick={() => (showCloseDialog = false)}>
+          Cancel
+        </button>
+      </div>
+    </div>
   {/if}
 </form>
 
@@ -1146,5 +1233,67 @@
      with thumbnails are taller than the old chips. */
   .body-area.with-attachments :global(.tiptap) {
     padding-bottom: 140px;
+  }
+
+  /* Dims the whole window while the close prompt decides its fate. */
+  .dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.18);
+  }
+
+  .close-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 250px;
+    padding: 16px 14px 14px;
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    background: var(--bg-window);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+    text-align: center;
+  }
+
+  .close-dialog h2 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .close-dialog p {
+    margin: 0 0 8px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+  }
+
+  .close-dialog button {
+    padding: 6px 10px;
+    border: none;
+    border-radius: 7px;
+    background: var(--bg-hover);
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .close-dialog button:hover {
+    background: color-mix(in srgb, var(--text-primary) 12%, var(--bg-hover));
+  }
+
+  .close-dialog button.primary {
+    background: var(--accent);
+    font-weight: 600;
+    color: #ffffff;
+  }
+
+  .close-dialog button.primary:hover {
+    background: color-mix(in srgb, #000000 12%, var(--accent));
   }
 </style>

@@ -86,6 +86,7 @@ vi.mock("./api", () => ({
   scheduleSend: vi.fn(async (): Promise<void> => undefined),
   closeCompose: vi.fn(async (): Promise<void> => undefined),
   saveDraft: vi.fn(async (): Promise<string> => "draft-id-1@flit.local"),
+  discardDraft: vi.fn(async (): Promise<void> => undefined),
   inspectAttachments: vi.fn(async (paths: string[]) =>
     paths.map((path) => ({
       path,
@@ -404,18 +405,85 @@ it("never autosaves an untouched or emptied-out new draft", async () => {
   }
 });
 
-it("saves a dirty draft before the window closes", async () => {
+it("asks before closing an edited compose and saves on Save", async () => {
   await renderLoaded();
 
   const preventDefault = vi.fn();
   await closeHandler!({ preventDefault });
 
+  // The close is held while the dialog asks what to do with the edits.
   expect(preventDefault).toHaveBeenCalled();
+  expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+  expect(api.saveDraft).not.toHaveBeenCalled();
+  expect(destroyWindow).not.toHaveBeenCalled();
+
+  await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(destroyWindow).toHaveBeenCalled());
   expect(api.saveDraft).toHaveBeenCalledWith(
     expect.objectContaining({ to: "bob@example.com" }),
     null,
   );
-  expect(destroyWindow).toHaveBeenCalled();
+});
+
+it("deletes the autosaved server version on Don't Save", async () => {
+  await renderLoaded();
+
+  // The 30s autosave already parked a version on the server.
+  vi.useFakeTimers();
+  try {
+    await fireEvent.input(screen.getByLabelText("Subject"), {
+      target: { value: "Rozpísané" },
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+  } finally {
+    vi.useRealTimers();
+  }
+
+  await closeHandler!({ preventDefault: vi.fn() });
+  await fireEvent.click(screen.getByRole("button", { name: "Don't Save" }));
+
+  await waitFor(() => expect(destroyWindow).toHaveBeenCalled());
+  expect(api.discardDraft).toHaveBeenCalledWith(1, "draft-id-1@flit.local");
+  // The autosave stays the only save — Don't Save must not snapshot again.
+  expect(api.saveDraft).toHaveBeenCalledTimes(1);
+});
+
+it("skips the server round trip when Don't Save has nothing to delete", async () => {
+  await renderLoaded();
+
+  await closeHandler!({ preventDefault: vi.fn() });
+  await fireEvent.click(screen.getByRole("button", { name: "Don't Save" }));
+
+  await waitFor(() => expect(destroyWindow).toHaveBeenCalled());
+  expect(api.discardDraft).not.toHaveBeenCalled();
+  expect(api.saveDraft).not.toHaveBeenCalled();
+});
+
+it("keeps the window and the pending edits on Cancel", async () => {
+  await renderLoaded();
+
+  const preventDefault = vi.fn();
+  await closeHandler!({ preventDefault });
+  await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(destroyWindow).not.toHaveBeenCalled();
+  expect(api.saveDraft).not.toHaveBeenCalled();
+  // A second close attempt asks again.
+  await closeHandler!({ preventDefault });
+  expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+});
+
+it("dismisses the dialog with Escape", async () => {
+  await renderLoaded();
+
+  await closeHandler!({ preventDefault: vi.fn() });
+  expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+  await fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(destroyWindow).not.toHaveBeenCalled();
 });
 
 it("lets a clean window close without saving", async () => {
@@ -434,14 +502,13 @@ it("stays open and shows the failure when the close-save fails", async () => {
   vi.mocked(api.saveDraft).mockRejectedValueOnce("imap error: offline");
   await renderLoaded();
 
-  const preventDefault = vi.fn();
-  await closeHandler!({ preventDefault });
+  await closeHandler!({ preventDefault: vi.fn() });
+  await fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-  expect(preventDefault).toHaveBeenCalled();
-  expect(destroyWindow).not.toHaveBeenCalled();
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "Draft not saved: imap error: offline",
   );
+  expect(destroyWindow).not.toHaveBeenCalled();
 });
 
 it("does not snapshot a sent message back into drafts on close", async () => {
