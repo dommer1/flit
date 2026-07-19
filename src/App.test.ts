@@ -217,6 +217,10 @@ vi.mock("./lib/api", () => ({
     canLoadRemote: false,
     attachments: [],
   })),
+  getMessageQuote: vi.fn(async () => ({
+    html: "<p>body text</p>",
+    text: "body text",
+  })),
   syncAccount: vi.fn(async () => undefined),
   setMessageRead: vi.fn(async () => undefined),
   moveToTrash: vi.fn(async () => undefined),
@@ -470,7 +474,12 @@ it("opens a reply draft from the account the message arrived on", async () => {
       accountId: 1,
       to: "alice@example.com",
       subject: "Re: Weekend plans",
-      body: expect.stringContaining("> body text"),
+      body: "",
+      quote: {
+        attribution: expect.stringContaining("wrote:"),
+        html: "<p>body text</p>",
+        text: "body text",
+      },
     }),
   );
 });
@@ -491,7 +500,12 @@ it("opens a reply-all draft without the receiving account's address", async () =
       to: "Alice <alice@example.com>, Bob <bob@example.com>",
       cc: "carol@example.com",
       subject: "Re: Weekend plans",
-      body: expect.stringContaining("> body text"),
+      body: "",
+      quote: {
+        attribution: expect.stringContaining("wrote:"),
+        html: "<p>body text</p>",
+        text: "body text",
+      },
     }),
   );
 });
@@ -933,14 +947,19 @@ it("opens a quoted reply when the right swipe is configured to reply", async () 
   await vi.advanceTimersByTimeAsync(200);
   vi.useRealTimers();
 
-  // The list has no body loaded — the reply fetches it to quote it.
-  expect(api.getMessageBody).toHaveBeenCalledWith(1);
+  // The list has no body loaded — the reply fetches quote material.
+  expect(api.getMessageQuote).toHaveBeenCalledWith(1);
   await waitFor(() =>
     expect(api.openCompose).toHaveBeenCalledWith({
       accountId: 1,
       to: "alice@example.com",
       subject: "Re: Weekend plans",
-      body: expect.stringContaining("> body text"),
+      body: "",
+      quote: {
+        attribution: expect.stringContaining("wrote:"),
+        html: "<p>body text</p>",
+        text: "body text",
+      },
     }),
   );
 });

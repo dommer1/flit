@@ -4,7 +4,14 @@
 
 import { formatFullDate, senderName } from "./format";
 import { splitRecipients } from "./recipients";
-import type { Alias, MessageHeader, OutgoingMessage } from "./types";
+import { escapeHtml } from "./richtext";
+import type {
+  Alias,
+  DraftQuote,
+  MessageHeader,
+  MessageQuote,
+  OutgoingMessage,
+} from "./types";
 
 /** Bare address out of `Name <addr>`; a plain address passes through. */
 function senderAddress(from: string): string {
@@ -41,14 +48,68 @@ function forwardSubject(subject: string): string {
   return /^fwd:/i.test(trimmed) ? trimmed : `Fwd: ${trimmed}`;
 }
 
-function quote(message: MessageHeader, bodyText: string): string {
-  const quoted = bodyText
-    .trimEnd()
+/** The quote field of a reply draft: material + the attribution line built
+ * for it. Absent when the original had nothing quotable. */
+function draftQuote(
+  message: MessageHeader,
+  quote: MessageQuote | null,
+): Pick<OutgoingMessage, "quote"> {
+  if (!quote || (quote.html === "" && quote.text === "")) return {};
+  return {
+    quote: {
+      attribution: `On ${formatFullDate(message.date)}, ${senderName(message.from)} wrote:`,
+      html: quote.html,
+      text: quote.text,
+    },
+  };
+}
+
+/** Marker the composed bodyHtml wraps its quote block in — the split point
+ * when a reopened draft separates editor content from the quote again. */
+const QUOTE_MARKER = '<div class="flit-draft-quote">';
+
+/** Inline-styled (Gmail-style bar) so every recipient client renders it —
+ * a receiving Flit recognizes the <blockquote> and folds it as history. */
+const QUOTE_BLOCK_STYLE =
+  "margin:0 0 0 0.8ex;border-left:2px solid #c8ccd4;padding-left:1ex";
+
+/** The outgoing plain-text body: the editor's text with the quote riding
+ * below the attribution as "> " lines. */
+export function composePlainBody(
+  editorText: string,
+  quote?: DraftQuote | null,
+): string {
+  if (!quote) return editorText;
+  const quoted = quote.text
     .split("\n")
-    .map((line) => `> ${line}`)
+    .map((line) => (line === "" ? ">" : `> ${line}`))
     .join("\n");
-  const attribution = `On ${formatFullDate(message.date)}, ${senderName(message.from)} wrote:`;
-  return `\n\n${attribution}\n${quoted}\n`;
+  return `${editorText.trimEnd()}\n\n${quote.attribution}\n${quoted}\n`;
+}
+
+/** The outgoing HTML body: the editor's HTML with the quote block appended
+ * under the attribution line. */
+export function composeHtmlBody(
+  editorHtml: string,
+  quote?: DraftQuote | null,
+): string {
+  if (!quote) return editorHtml;
+  return (
+    `${editorHtml}${QUOTE_MARKER}<p>${escapeHtml(quote.attribution)}</p>` +
+    `<blockquote type="cite" style="${QUOTE_BLOCK_STYLE}">${quote.html}</blockquote></div>`
+  );
+}
+
+/** Separate a composed bodyHtml back into the editor's own content and the
+ * quote block ("did it carry one") — a reopened draft (undo, failed send)
+ * must not feed the quote into the editor, where it would be mangled. */
+export function splitComposedHtml(bodyHtml: string): {
+  own: string;
+  hasQuote: boolean;
+} {
+  const at = bodyHtml.indexOf(QUOTE_MARKER);
+  if (at < 0) return { own: bodyHtml, hasQuote: false };
+  return { own: bodyHtml.slice(0, at), hasQuote: true };
 }
 
 /** Threading identity a reply carries so recipients (and our own Sent copy)
@@ -88,7 +149,7 @@ function matchAlias(
  * it was addressed to, when one matches — to its sender. */
 export function replyDraft(
   message: MessageHeader,
-  bodyText: string | null,
+  quote: MessageQuote | null,
   aliases: Alias[] = [],
 ): OutgoingMessage {
   return {
@@ -96,7 +157,10 @@ export function replyDraft(
     aliasId: matchAlias(message, aliases)?.id,
     to: senderAddress(message.from),
     subject: replySubject(message.subject),
-    body: bodyText ? quote(message, bodyText) : "",
+    // The editor opens empty; the quote rides separately and is merged
+    // into body/bodyHtml at save/send time (composePlainBody/composeHtmlBody).
+    body: "",
+    ...draftQuote(message, quote),
     ...threading(message),
   };
 }
@@ -105,7 +169,7 @@ export function replyDraft(
  * Cc — minus the receiving account's own address and any duplicates. */
 export function replyAllDraft(
   message: MessageHeader,
-  bodyText: string | null,
+  quote: MessageQuote | null,
   ownEmail: string,
   aliases: Alias[] = [],
 ): OutgoingMessage {
@@ -133,7 +197,8 @@ export function replyAllDraft(
     to: to.length > 0 ? to.join(", ") : senderAddress(message.from),
     cc: cc.join(", "),
     subject: replySubject(message.subject),
-    body: bodyText ? quote(message, bodyText) : "",
+    body: "",
+    ...draftQuote(message, quote),
     ...threading(message),
   };
 }

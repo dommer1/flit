@@ -1,5 +1,5 @@
 /** Escape text for safe embedding inside an HTML element. */
-function escapeHtml(line: string): string {
+export function escapeHtml(line: string): string {
   return line
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

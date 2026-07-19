@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { forwardDraft, isDraftEmpty, replyAllDraft, replyDraft } from "./draft";
+import {
+  composeHtmlBody,
+  composePlainBody,
+  forwardDraft,
+  isDraftEmpty,
+  replyAllDraft,
+  replyDraft,
+  splitComposedHtml,
+} from "./draft";
 import type { Alias, MessageHeader, OutgoingMessage } from "./types";
 
 const message: MessageHeader = {
@@ -96,16 +104,21 @@ describe("replyDraft", () => {
     expect(replyDraft(re, null).subject).toBe("RE: Weekend plans");
   });
 
-  it("quotes the original text under an attribution line", () => {
-    const body = replyDraft(message, "First line\nSecond line").body;
+  it("opens with an empty body and carries the quote separately", () => {
+    const draft = replyDraft(message, {
+      html: "<p>First line</p>",
+      text: "First line",
+    });
 
-    expect(body).toContain("Alice Doe wrote:");
-    expect(body).toContain("> First line");
-    expect(body).toContain("> Second line");
+    expect(draft.body).toBe("");
+    expect(draft.quote?.attribution).toContain("Alice Doe wrote:");
+    expect(draft.quote?.html).toBe("<p>First line</p>");
+    expect(draft.quote?.text).toBe("First line");
   });
 
-  it("leaves the body empty when the original has no text", () => {
-    expect(replyDraft(message, null).body).toBe("");
+  it("carries no quote when the original has no content", () => {
+    expect(replyDraft(message, null).quote).toBeUndefined();
+    expect(replyDraft(message, { html: "", text: "" }).quote).toBeUndefined();
   });
 
   it("stamps the reply with the original's threading identity", () => {
@@ -192,10 +205,14 @@ describe("replyAllDraft", () => {
   });
 
   it("prefixes the subject with Re: and quotes like a plain reply", () => {
-    const draft = replyAllDraft(group, "Hello", "me@example.com");
+    const draft = replyAllDraft(
+      group,
+      { html: "<p>Hello</p>", text: "Hello" },
+      "me@example.com",
+    );
 
     expect(draft.subject).toBe("Re: Weekend plans");
-    expect(draft.body).toContain("> Hello");
+    expect(draft.quote?.text).toBe("Hello");
     expect(draft.accountId).toBe(2);
   });
 
@@ -255,6 +272,51 @@ describe("forwardDraft", () => {
 
     expect(draft.inReplyTo).toBeUndefined();
     expect(draft.references).toBeUndefined();
+  });
+});
+
+describe("composing a draft with its quote", () => {
+  const quote = {
+    attribution: "On July 17, 2026, OpenAI <dev@openai.com> wrote:",
+    html: "<p>Build Week is open.</p>",
+    text: "Build Week is open.\n\nSubmissions close July 21.",
+  };
+
+  it("plain body rides the quote below the attribution as > lines", () => {
+    expect(composePlainBody("Thanks!", quote)).toBe(
+      "Thanks!\n\n" +
+        "On July 17, 2026, OpenAI <dev@openai.com> wrote:\n" +
+        "> Build Week is open.\n>\n> Submissions close July 21.\n",
+    );
+  });
+
+  it("plain body passes through without a quote", () => {
+    expect(composePlainBody("Thanks!", null)).toBe("Thanks!");
+    expect(composePlainBody("Thanks!", undefined)).toBe("Thanks!");
+  });
+
+  it("html body appends a marked, inline-styled blockquote", () => {
+    const html = composeHtmlBody("<p>Thanks!</p>", quote);
+
+    expect(html.startsWith("<p>Thanks!</p>")).toBe(true);
+    expect(html).toContain('<div class="flit-draft-quote">');
+    // The attribution's <angle brackets> must be escaped, not markup.
+    expect(html).toContain("OpenAI &lt;dev@openai.com&gt; wrote:");
+    expect(html).toContain('<blockquote type="cite" style="');
+    expect(html).toContain("<p>Build Week is open.</p></blockquote></div>");
+  });
+
+  it("splitComposedHtml gives the editor back only its own content", () => {
+    const html = composeHtmlBody("<p>Thanks!</p>", quote);
+
+    expect(splitComposedHtml(html)).toEqual({
+      own: "<p>Thanks!</p>",
+      hasQuote: true,
+    });
+    expect(splitComposedHtml("<p>No quote</p>")).toEqual({
+      own: "<p>No quote</p>",
+      hasQuote: false,
+    });
   });
 });
 

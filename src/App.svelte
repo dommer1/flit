@@ -5,6 +5,7 @@
     archiveThread,
     cancelScheduled,
     getMessageBody,
+    getMessageQuote,
     getSwipeActions,
     getThreadOrder,
     listAccounts,
@@ -46,6 +47,7 @@
     Alias,
     Mailbox,
     MessageHeader,
+    MessageQuote,
     ScheduledMessage,
     SwipeActions,
     ThreadOrder,
@@ -186,17 +188,23 @@
     threadOrder = await getThreadOrder();
   }
 
-  // why fetch the body: neither the list rows nor the toolbar hold the body
-  // text, but a draft should quote the message like one opened from the
-  // viewer — the fetch is a local cache hit, and a failure still opens the
-  // compose window, just without the quote.
+  // why fetch first: neither the list rows nor the toolbar hold the body —
+  // replies fetch quote material, forwards the plain text. Both are local
+  // cache hits, and a failure still opens the compose window, just without
+  // the quoted content.
   function openDraftWithBody(kind: DraftKind, message: MessageHeader) {
-    void getMessageBody(message.id)
-      .then((body) => openDraft(kind, message, body.text))
-      .catch((err: unknown) => {
-        console.error("failed to load body for draft:", err);
-        openDraft(kind, message, null);
-      });
+    const open =
+      kind === "forward"
+        ? getMessageBody(message.id).then((body) =>
+            openDraft(kind, message, null, body.text),
+          )
+        : getMessageQuote(message.id).then((quote) =>
+            openDraft(kind, message, quote, null),
+          );
+    void open.catch((err: unknown) => {
+      console.error("failed to load content for draft:", err);
+      openDraft(kind, message, null, null);
+    });
   }
 
   function handleSwipeReply(id: number) {
@@ -383,6 +391,7 @@
   function openDraft(
     kind: DraftKind,
     message: MessageHeader,
+    quote: MessageQuote | null,
     bodyText: string | null,
   ) {
     // why: reply-all must not echo mail back to the mailbox it landed in —
@@ -391,9 +400,9 @@
       accounts.find((a) => a.id === message.accountId)?.email ?? "";
     const draft =
       kind === "reply"
-        ? replyDraft(message, bodyText, aliases)
+        ? replyDraft(message, quote, aliases)
         : kind === "reply-all"
-          ? replyAllDraft(message, bodyText, ownEmail, aliases)
+          ? replyAllDraft(message, quote, ownEmail, aliases)
           : forwardDraft(message, bodyText, aliases);
     void openCompose(draft).catch((err: unknown) =>
       console.error(`failed to open ${kind}:`, err),
