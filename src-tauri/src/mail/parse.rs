@@ -314,13 +314,31 @@ fn format_addr(addr: &Addr) -> String {
 pub fn snippet_of(text: &str) -> String {
     // why: previews must show the reply's own words — never the quoted
     // history riding below them ("Uhradené. > On Monday, X wrote: …").
-    let (own, _) = crate::mail::quote::split_text_quote(text);
+    let (own, _) = crate::mail::quote::split_text_quote(&strip_invisible(text));
     let collapsed = own
         .split_whitespace()
         .filter(|word| !is_url_token(word))
         .collect::<Vec<_>>()
         .join(" ");
     collapsed.chars().take(120).collect()
+}
+
+/// Zero-width and formatting characters marketing mail packs into its
+/// "preheader" padding (combining grapheme joiners, zero-width joiners,
+/// soft hyphens…). Invisible to a reader but not whitespace, so they
+/// survive word-splitting and eat snippet/quote space as ghost words.
+fn is_invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}' | '\u{034F}' | '\u{180E}' | '\u{200B}'..='\u{200F}'
+        | '\u{2060}'..='\u{2064}' | '\u{FEFF}'
+    )
+}
+
+/// The text with invisible padding characters removed — runs that were
+/// nothing but padding dissolve into the surrounding whitespace.
+pub fn strip_invisible(text: &str) -> String {
+    text.chars().filter(|c| !is_invisible(*c)).collect()
 }
 
 /// A whitespace-delimited token that is just a URL, optionally wrapped in the
@@ -655,6 +673,21 @@ mod tests {
 
         assert!(snippet.starts_with("a b c x"));
         assert_eq!(snippet.chars().count(), 120);
+    }
+
+    #[test]
+    fn snippet_drops_invisible_preheader_padding() {
+        // The zero-width run an ESP pads its preview text with — invisible
+        // on screen, but each cluster counted as a "word" and burned the
+        // 120-char budget on nothing.
+        let text = "Build Week is open\u{00AD}.\n\
+                    \u{200D}\u{034F} \u{034F} \u{200C}\u{034F} \u{2060}\u{034F} \u{FEFF}\n\
+                    Submissions close July 21.";
+
+        assert_eq!(
+            snippet_of(text),
+            "Build Week is open. Submissions close July 21."
+        );
     }
 
     #[test]
