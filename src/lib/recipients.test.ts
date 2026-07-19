@@ -1,5 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { activeTerm, applySuggestion } from "./recipients";
+import { activeTerm, applySuggestion, splitRecipients } from "./recipients";
+
+describe("splitRecipients", () => {
+  it("splits a comma-separated list and trims each entry", () => {
+    expect(splitRecipients("a@x.com, b@y.com,c@z.com")).toEqual([
+      "a@x.com",
+      "b@y.com",
+      "c@z.com",
+    ]);
+  });
+
+  it("skips empty pieces", () => {
+    expect(splitRecipients("")).toEqual([]);
+    expect(splitRecipients("a@x.com, , b@y.com,")).toEqual([
+      "a@x.com",
+      "b@y.com",
+    ]);
+  });
+
+  it("keeps a comma inside a quoted display name", () => {
+    expect(splitRecipients('"Novák, Ján" <jan@x.sk>, b@y.com')).toEqual([
+      '"Novák, Ján" <jan@x.sk>',
+      "b@y.com",
+    ]);
+  });
+});
 
 describe("activeTerm", () => {
   it("is the whole value while typing the first recipient", () => {

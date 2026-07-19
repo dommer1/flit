@@ -3,6 +3,7 @@
 // share one shape.
 
 import { formatFullDate, senderName } from "./format";
+import { splitRecipients } from "./recipients";
 import type { Alias, MessageHeader, OutgoingMessage } from "./types";
 
 /** Bare address out of `Name <addr>`; a plain address passes through. */
@@ -38,24 +39,6 @@ function replySubject(subject: string): string {
 function forwardSubject(subject: string): string {
   const trimmed = subject.trim();
   return /^fwd:/i.test(trimmed) ? trimmed : `Fwd: ${trimmed}`;
-}
-
-/** Split a display list on commas, except commas inside a display name —
- * a piece without an @ belongs to the name before the address
- * (`"Novák, Ján" <jan@x>`), so it is glued back onto the previous piece. */
-function splitRecipients(list: string): string[] {
-  const entries: string[] = [];
-  for (const piece of list.split(",")) {
-    const trimmed = piece.trim();
-    if (trimmed === "") continue;
-    const last = entries.length - 1;
-    if (last >= 0 && !entries[last].includes("@")) {
-      entries[last] += `, ${trimmed}`;
-    } else {
-      entries.push(trimmed);
-    }
-  }
-  return entries;
 }
 
 function quote(message: MessageHeader, bodyText: string): string {

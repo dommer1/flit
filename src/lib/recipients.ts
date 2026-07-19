@@ -2,6 +2,24 @@
 // user is typing (feeds the contact lookup) and how a picked suggestion
 // replaces it. Pure functions — the dropdown component stays thin.
 
+/** Split a display list on commas, except commas inside a display name —
+ * a piece without an @ belongs to the name before the address
+ * (`"Novák, Ján" <jan@x>`), so it is glued back onto the previous piece. */
+export function splitRecipients(list: string): string[] {
+  const entries: string[] = [];
+  for (const piece of list.split(",")) {
+    const trimmed = piece.trim();
+    if (trimmed === "") continue;
+    const last = entries.length - 1;
+    if (last >= 0 && !entries[last].includes("@")) {
+      entries[last] += `, ${trimmed}`;
+    } else {
+      entries.push(trimmed);
+    }
+  }
+  return entries;
+}
+
 /** The recipient fragment being typed at `caret`: everything between the
  * last comma before the caret and the caret. */
 export function activeTerm(value: string, caret: number): string {
