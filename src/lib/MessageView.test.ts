@@ -10,6 +10,8 @@ function body(partial: Partial<MessageBody>): MessageBody {
     blockedImages: 0,
     canLoadRemote: false,
     attachments: [],
+    auth: null,
+    senderAnomaly: null,
     ...partial,
   };
 }
@@ -23,6 +25,8 @@ vi.mock("./api", () => ({
     blockedImages: 0,
     canLoadRemote: false,
     attachments: [],
+    auth: null,
+    senderAnomaly: null,
   })),
   saveAttachment: vi.fn(async () => {}),
   saveAllAttachments: vi.fn(async () => {}),
@@ -414,4 +418,51 @@ it("opens a reply draft for the message whose card action was clicked", async ()
     "reply-all",
     expect.objectContaining({ id: 3 }),
   );
+});
+
+it("warns when a familiar sender writes from an unusual address", async () => {
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({
+      text: "please pay this invoice",
+      senderAnomaly: { name: "Alice", usualEmail: "alice@example.com" },
+    }),
+  });
+
+  renderView();
+
+  expect(
+    await screen.findByText(/Alice does not usually use this email address/),
+  ).toBeInTheDocument();
+});
+
+it("warns when authentication checks failed", async () => {
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({
+      text: "hello",
+      auth: { spf: "pass", dkim: "fail", dmarc: "fail" },
+    }),
+  });
+
+  renderView();
+
+  // Only the failing checks are named, in SPF/DKIM/DMARC order.
+  expect(
+    await screen.findByText(/failed DKIM, DMARC authentication/),
+  ).toBeInTheDocument();
+});
+
+it("stays silent on passing or unknown authentication", async () => {
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({
+      text: "hello",
+      // softfail and none are common on legitimate mail — no warning.
+      auth: { spf: "softfail", dkim: "pass", dmarc: null },
+    }),
+  });
+
+  renderView();
+
+  await screen.findByText("hello");
+  expect(screen.queryByText(/authentication/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/does not usually use/)).not.toBeInTheDocument();
 });

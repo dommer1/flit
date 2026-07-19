@@ -75,6 +75,15 @@
   // Folded quoted history of a text body; opens per card, like Gmail's •••.
   let showQuoted = $state(false);
 
+  // Trust warnings, both computed locally by the backend (contact history
+  // and the receiving server's own Authentication-Results header) — only
+  // an explicit "fail" warns; missing verdicts prove nothing and stay quiet.
+  let failedChecks = $derived(
+    (["spf", "dkim", "dmarc"] as const)
+      .filter((method) => shown?.auth?.[method] === "fail")
+      .map((method) => method.toUpperCase()),
+  );
+
   // Saving pulls the bytes from the server (they are never cached), so the
   // chips lock while a fetch is in flight and errors surface inline.
   let savingAttachments = $state(false);
@@ -242,6 +251,34 @@
 
   {#if expanded}
     <div class="content">
+      {#if shown?.senderAnomaly || failedChecks.length > 0}
+        <div class="trust-banner" role="alert">
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              d="M10 1.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17Zm-.9 4h1.8v6.2H9.1V5.5Zm.9 9.9a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2Z"
+            />
+          </svg>
+          <span class="trust-lines">
+            {#if shown?.senderAnomaly}
+              <span title="Usually writes from {shown.senderAnomaly.usualEmail}">
+                {shown.senderAnomaly.name} does not usually use this email
+                address.
+              </span>
+            {/if}
+            {#if failedChecks.length > 0}
+              <span>
+                This message failed {failedChecks.join(", ")} authentication.
+              </span>
+            {/if}
+          </span>
+        </div>
+      {/if}
       {#if shown && shown.attachments.length > 0}
         <div class="atts-label">
           <svg
@@ -608,6 +645,29 @@
     margin: 8px 0 0;
     font-size: 12px;
     color: #d9302c;
+  }
+
+  .trust-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    padding: 6px 12px;
+    border: 1px solid rgba(217, 48, 44, 0.25);
+    border-radius: 8px;
+    background: rgba(217, 48, 44, 0.08);
+    font-size: 12px;
+    color: #d9302c;
+  }
+
+  .trust-banner svg {
+    flex-shrink: 0;
+  }
+
+  .trust-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .remote-banner {

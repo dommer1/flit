@@ -194,6 +194,28 @@ export interface MessageBody {
   canLoadRemote: boolean;
   /** Attachments — metadata only; saving re-fetches bytes from the server. */
   attachments: MessageAttachment[];
+  /** SPF/DKIM/DMARC verdicts of the message; null = unknown (no
+   * Authentication-Results header). Warn only on explicit "fail". */
+  auth: AuthResults | null;
+  /** Set when a familiar name arrived from an address it doesn't usually
+   * use — the Canary-style warning, computed from local history only. */
+  senderAnomaly: SenderAnomaly | null;
+}
+
+/** Mirrors AuthResults in models.rs. Each field is the lowercase verdict
+ * token ("pass", "fail", "softfail", …); null = not mentioned. */
+export interface AuthResults {
+  spf: string | null;
+  dkim: string | null;
+  dmarc: string | null;
+}
+
+/** Mirrors SenderAnomaly in models.rs. */
+export interface SenderAnomaly {
+  /** The familiar display name the message arrived under. */
+  name: string;
+  /** The address this name usually writes from. */
+  usualEmail: string;
 }
 
 /** One attachment of a received message, as cached metadata. */
