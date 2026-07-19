@@ -397,6 +397,21 @@ pub struct MessageBody {
     pub attachments: Vec<MessageAttachment>,
 }
 
+/// Quote material for a reply: the original message rendered for embedding
+/// below the user's own text in a compose window. Deserialize too — the
+/// compose draft carries it back and forth (see OutgoingMessage).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageQuote {
+    /// Sanitized HTML fragment of the original — cid images inlined as
+    /// data: URIs, remote refs left unresolved, plain-text mail upconverted
+    /// to blockquote markup. Empty = nothing quotable.
+    pub html: String,
+    /// Plain text of the original, invisible padding stripped — source of
+    /// the "> " lines in the outgoing text/plain part.
+    pub text: String,
+}
+
 /// One folder of one account, as shown in the sidebar.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]

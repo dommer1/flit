@@ -3,6 +3,27 @@
 //! "> " lines — in a conversation view that reads as every message repeating
 //! the one before it. The viewer folds that tail away, Gmail-style.
 
+use crate::mail::parse::{strip_invisible, InlineImage};
+use crate::mail::sanitize::sanitize_fragment;
+use crate::models::MessageQuote;
+
+/// Everything a reply needs to quote a message: the sanitized HTML fragment
+/// (plain-text mail upconverted to blockquote markup) plus the cleaned text
+/// feeding the outgoing "> " fallback part. Invisible preheader padding is
+/// stripped from both — it otherwise rides invisibly into the sent mail.
+pub fn quote_material(
+    html: Option<&str>,
+    text: Option<&str>,
+    images: &[InlineImage],
+) -> MessageQuote {
+    let text = strip_invisible(text.unwrap_or_default()).trim().to_string();
+    let html = match html {
+        Some(h) => strip_invisible(&sanitize_fragment(h, images)),
+        None => text_to_quote_html(&text),
+    };
+    MessageQuote { html, text }
+}
+
 /// Split plain text into (own content, quoted history). The text stays
 /// whole when no boundary is found, when nothing precedes the quote (a
 /// fully-quoted body is better shown than hidden), or when the quote is
@@ -335,6 +356,29 @@ mod tests {
 
         let all_quote = "<blockquote><p>iba citát</p></blockquote>".to_string();
         assert_eq!(strip_html_quote(all_quote.clone()), all_quote);
+    }
+
+    #[test]
+    fn quote_material_sanitizes_html_and_cleans_text() {
+        let quote = quote_material(
+            Some("<p>Novinky\u{200D}\u{034F}</p><script>alert(1)</script>"),
+            Some("Novinky\u{200D}\u{034F}\n\u{034F} \u{200C}"),
+            &[],
+        );
+
+        assert_eq!(quote.html, "<p>Novinky</p>");
+        assert_eq!(quote.text, "Novinky");
+    }
+
+    #[test]
+    fn quote_material_upconverts_text_only_mail() {
+        let quote = quote_material(None, Some("Ahoj,\n> starý riadok"), &[]);
+
+        assert_eq!(
+            quote.html,
+            "<p>Ahoj,</p><blockquote><p>starý riadok</p></blockquote>"
+        );
+        assert_eq!(quote.text, "Ahoj,\n> starý riadok");
     }
 
     #[test]

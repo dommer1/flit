@@ -2,8 +2,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::models::{
-    Account, Alias, Mailbox, MessageBody, MessageHeader, NewAccount, NotificationSettings,
-    OutgoingMessage, RemoteImagePolicy, Signature, SwipeActions, ThreadOrder,
+    Account, Alias, Mailbox, MessageBody, MessageHeader, MessageQuote, NewAccount,
+    NotificationSettings, OutgoingMessage, RemoteImagePolicy, Signature, SwipeActions, ThreadOrder,
 };
 use crate::state::AppState;
 use crate::{auth, mail, storage};
@@ -951,6 +951,23 @@ async fn quote_repeats_thread(
         }
     }
     Ok(mail::quote::quote_matches_history(&quoted, &earlier))
+}
+
+/// Quote material for a reply to this message — served from the same body
+/// cache as the viewer; a miss fetches the body first. Thin wrapper over
+/// mail::quote::quote_material.
+#[tauri::command]
+pub async fn get_message_quote(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<MessageQuote, AppError> {
+    let (html, text, images) = load_body(&app, &state, message_id).await?;
+    Ok(mail::quote::quote_material(
+        html.as_deref(),
+        text.as_deref(),
+        &images,
+    ))
 }
 
 /// A message's raw cached body — HTML, text and inline images — fetched
