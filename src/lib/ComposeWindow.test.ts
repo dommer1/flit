@@ -121,7 +121,9 @@ it("prefills the form from the parked draft", async () => {
   await waitFor(() =>
     expect(screen.getByLabelText("From")).toHaveValue("2"),
   );
-  expect(screen.getByLabelText("To")).toHaveValue("alice@example.com");
+  // Prefilled recipients arrive committed — a chip, not editable text.
+  expect(await screen.findByText("alice@example.com")).toBeInTheDocument();
+  expect(screen.getByLabelText("To")).toHaveValue("");
   expect(screen.getByLabelText("Subject")).toHaveValue("Re: Weekend plans");
   expect(
     await screen.findByRole("textbox", { name: "Message body" }),
@@ -235,8 +237,9 @@ it("shows the cc/bcc fields right away when the draft carries them", async () =>
   render(ComposeWindow);
 
   await waitFor(() =>
-    expect(screen.getByLabelText("Cc")).toHaveValue("carol@example.com"),
+    expect(screen.getByText("carol@example.com")).toBeInTheDocument(),
   );
+  expect(screen.getByLabelText("Cc")).toHaveValue("");
   expect(screen.getByLabelText("Bcc")).toHaveValue("");
 });
 
@@ -629,7 +632,7 @@ it("follows the From account's default until touched by hand", async () => {
   expect(box).not.toHaveTextContent("Vocalio tím");
 });
 
-it("suggests known contacts in To and fills the field on pick", async () => {
+it("suggests known contacts in To and turns the pick into a chip", async () => {
   vi.mocked(api.listContacts).mockResolvedValue([
     { name: "Ann Boe", email: "ann@example.com" },
     { name: "", email: "anton@example.sk" },
@@ -637,16 +640,17 @@ it("suggests known contacts in To and fills the field on pick", async () => {
   render(ComposeWindow);
   const to = (await screen.findByLabelText("To")) as HTMLInputElement;
 
-  to.value = "an";
-  to.setSelectionRange(2, 2);
-  await fireEvent.input(to);
+  await fireEvent.input(to, { target: { value: "an" } });
 
   const option = await screen.findByRole("option", { name: /ann@example\.com/ });
   expect(api.listContacts).toHaveBeenCalledWith("an");
   await fireEvent.mouseDown(option);
 
-  expect(to.value).toBe("ann@example.com");
-  // Picking closes the dropdown.
+  expect(
+    screen.getByRole("button", { name: "Remove ann@example.com" }),
+  ).toBeInTheDocument();
+  // The input clears for the next recipient and the dropdown closes.
+  expect(to.value).toBe("");
   await waitFor(() =>
     expect(
       screen.queryByRole("option", { name: /ann@example\.com/ }),
@@ -662,17 +666,41 @@ it("navigates suggestions with arrows and picks with Enter", async () => {
   render(ComposeWindow);
   const to = (await screen.findByLabelText("To")) as HTMLInputElement;
 
-  to.value = "existing@x.sk, an";
-  to.setSelectionRange(17, 17);
-  await fireEvent.input(to);
+  await fireEvent.input(to, { target: { value: "existing@x.sk, an" } });
   await screen.findByRole("option", { name: /ann@example\.com/ });
 
   await fireEvent.keyDown(to, { key: "ArrowDown" });
   await fireEvent.keyDown(to, { key: "Enter" });
 
-  // Only the fragment being typed is replaced; Enter must not submit.
-  expect(to.value).toBe("existing@x.sk, anton@example.sk");
+  // Both the committed address and the pick are chips; Enter must not submit.
+  expect(
+    screen.getByRole("button", { name: "Remove existing@x.sk" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Remove anton@example.sk" }),
+  ).toBeInTheDocument();
+  expect(to.value).toBe("");
   expect(api.queueSend).not.toHaveBeenCalled();
+});
+
+it("queues every chip plus the still-typed address", async () => {
+  await renderLoaded();
+
+  await fireEvent.input(screen.getByLabelText("To"), {
+    target: { value: "bob@example.com, carol@example.com," },
+  });
+  await fireEvent.input(screen.getByLabelText("To"), {
+    target: { value: "dan@example.com" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "bob@example.com, carol@example.com, dan@example.com",
+      }),
+    ),
+  );
 });
 
 it("closes the suggestions with Escape", async () => {
