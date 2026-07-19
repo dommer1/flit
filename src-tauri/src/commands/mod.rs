@@ -907,39 +907,7 @@ pub async fn get_message_body(
     message_id: i64,
     load_remote: Option<bool>,
 ) -> Result<MessageBody, AppError> {
-    let row = storage::messages::get_body(&state.pool, message_id).await?;
-
-    let cached = row.body_text.is_some() || row.body_html.is_some();
-    // why: bodies cached before message_images existed have cid: references
-    // but no stored images, and bodies cached before message_attachments
-    // existed were never scanned for attachments — a one-off refetch
-    // backfills either instead of rendering blanks/nothing forever.
-    let backfill = cached
-        && (!row.attachments_scanned
-            || (row.body_html.as_deref().is_some_and(|h| h.contains("cid:"))
-                && storage::messages::images(&state.pool, message_id)
-                    .await?
-                    .is_empty()));
-
-    let (html, text, images) = if cached && !backfill {
-        let images = storage::messages::images(&state.pool, message_id).await?;
-        (row.body_html, row.body_text, images)
-    } else {
-        let account = storage::accounts::get(&state.pool, row.account_id).await?;
-        let password = state.password(account.id).await?;
-        let parsed = mail::sync::fetch_body_into_cache(
-            &state.pool,
-            &account,
-            &password,
-            message_id,
-            &row.mailbox,
-            row.uid,
-        )
-        .await?;
-        // why: the snippet just became real — lists should refresh.
-        app.emit("messages-changed", row.account_id)?;
-        (parsed.html, parsed.text, parsed.images)
-    };
+    let (html, text, images) = load_body(&app, &state, message_id).await?;
 
     let policy = storage::settings::remote_image_policy(&state.pool).await?;
     let redundant = quote_repeats_thread(&state.pool, message_id, text.as_deref()).await?;
@@ -983,6 +951,52 @@ async fn quote_repeats_thread(
         }
     }
     Ok(mail::quote::quote_matches_history(&quoted, &earlier))
+}
+
+/// A message's raw cached body — HTML, text and inline images — fetched
+/// from the server on a cache miss, or refetched once for cache rows
+/// written before message_images/message_attachments existed (they'd
+/// otherwise render blanks/nothing forever).
+async fn load_body(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    message_id: i64,
+) -> Result<
+    (
+        Option<String>,
+        Option<String>,
+        Vec<mail::parse::InlineImage>,
+    ),
+    AppError,
+> {
+    let row = storage::messages::get_body(&state.pool, message_id).await?;
+
+    let cached = row.body_text.is_some() || row.body_html.is_some();
+    let backfill = cached
+        && (!row.attachments_scanned
+            || (row.body_html.as_deref().is_some_and(|h| h.contains("cid:"))
+                && storage::messages::images(&state.pool, message_id)
+                    .await?
+                    .is_empty()));
+
+    if cached && !backfill {
+        let images = storage::messages::images(&state.pool, message_id).await?;
+        return Ok((row.body_html, row.body_text, images));
+    }
+    let account = storage::accounts::get(&state.pool, row.account_id).await?;
+    let password = state.password(account.id).await?;
+    let parsed = mail::sync::fetch_body_into_cache(
+        &state.pool,
+        &account,
+        &password,
+        message_id,
+        &row.mailbox,
+        row.uid,
+    )
+    .await?;
+    // why: the snippet just became real — lists should refresh.
+    app.emit("messages-changed", row.account_id)?;
+    Ok((parsed.html, parsed.text, parsed.images))
 }
 
 /// Bodies for a whole conversation in one call — the conversation view's
