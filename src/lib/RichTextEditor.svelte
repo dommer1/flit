@@ -111,7 +111,12 @@
     if (!editor) return;
     editor
       .chain()
-      .insertContentAt(editor.state.doc.content.size, blockHtml)
+      .insertContentAt(editor.state.doc.content.size, blockHtml, {
+        // why: insertContent's default parse KEEPS whitespace runs from the
+        // source markup — a table-heavy newsletter fragment exploded into
+        // hundreds of empty paragraphs when expanded.
+        parseOptions: { preserveWhitespace: false },
+      })
       .focus("end")
       .run();
   }

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import RichTextEditor from "./RichTextEditor.svelte";
 
 it("renders the initial text as editable content", async () => {
@@ -57,6 +57,22 @@ it("keeps inline data: images but drops remote ones", async () => {
   const box = await screen.findByRole("textbox", { name: "Message body" });
   expect(box.querySelector('img[src^="data:image/"]')).not.toBeNull();
   expect(box.querySelector('img[src^="https:"]')).toBeNull();
+});
+
+it("appendContent drops source whitespace instead of spawning empty lines", async () => {
+  // A table-heavy newsletter fragment is full of whitespace runs between
+  // tags — parsed as-is they exploded into hundreds of empty paragraphs.
+  const { component } = render(RichTextEditor, {
+    props: { initialText: "hi" },
+  });
+  const box = await screen.findByRole("textbox", { name: "Message body" });
+
+  component.appendContent(
+    "<blockquote>\n  \n  <p>quoted</p>\n  \n  <p>line</p>\n  \n</blockquote>",
+  );
+
+  await waitFor(() => expect(box.querySelector("blockquote")).not.toBeNull());
+  expect(box.querySelectorAll("blockquote p")).toHaveLength(2);
 });
 
 it("disables the formatting controls while queueing", async () => {
