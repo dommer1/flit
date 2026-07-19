@@ -792,3 +792,111 @@ it("starts a blank compose from the account's default identity", async () => {
     expect(screen.getByLabelText("From")).toHaveValue("1:20"),
   );
 });
+
+// ————— Reply quote: the parked ••• block —————
+
+const quotedDraft: OutgoingMessage = {
+  accountId: 1,
+  to: "openai@example.com",
+  subject: "Re: Build Week",
+  body: "",
+  quote: {
+    attribution: "On July 17, 2026, OpenAI wrote:",
+    html: "<p>Build Week is open.</p>",
+    text: "Build Week is open.",
+  },
+};
+
+it("parks a reply's quote behind the ••• bar, not in the editor", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({ ...quotedDraft });
+
+  render(ComposeWindow);
+
+  await screen.findByText("On July 17, 2026, OpenAI wrote:");
+  expect(
+    screen.getByRole("button", { name: "Show quoted text" }),
+  ).toBeInTheDocument();
+  const box = screen.getByRole("textbox", { name: "Message body" });
+  expect(box).not.toHaveTextContent("Build Week");
+});
+
+it("sends the parked quote merged below the typed reply", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({ ...quotedDraft });
+  render(ComposeWindow);
+  await screen.findByRole("button", { name: "Show quoted text" });
+
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.stringContaining("> Build Week is open."),
+        bodyHtml: expect.stringContaining('<div class="flit-draft-quote">'),
+      }),
+    ),
+  );
+});
+
+it("expands the quote into the editor as an editable blockquote", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({ ...quotedDraft });
+  render(ComposeWindow);
+
+  await fireEvent.click(
+    await screen.findByRole("button", { name: "Show quoted text" }),
+  );
+
+  const box = screen.getByRole("textbox", { name: "Message body" });
+  await waitFor(() =>
+    expect(box.querySelector("blockquote")).toHaveTextContent(
+      "Build Week is open.",
+    ),
+  );
+  expect(screen.queryByRole("button", { name: "Show quoted text" })).toBeNull();
+
+  // From here the quote is ordinary editor content — the fallback text
+  // still carries its "> " markers via the quote-aware serializer.
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.stringContaining("> Build Week is open."),
+      }),
+    ),
+  );
+});
+
+it("removes the quote entirely on ×", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({ ...quotedDraft });
+  render(ComposeWindow);
+
+  await fireEvent.click(
+    await screen.findByRole("button", { name: "Remove quoted text" }),
+  );
+
+  expect(screen.queryByRole("button", { name: "Show quoted text" })).toBeNull();
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "" }),
+    ),
+  );
+});
+
+it("splits a reopened draft's composed quote back out of the editor", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    ...quotedDraft,
+    body: "Thanks!\n\nOn July 17, 2026, OpenAI wrote:\n> Build Week is open.\n",
+    bodyHtml:
+      '<p>Thanks!</p><div class="flit-draft-quote">' +
+      "<p>On July 17, 2026, OpenAI wrote:</p>" +
+      '<blockquote type="cite"><p>Build Week is open.</p></blockquote></div>',
+    draftMessageId: "d1@flit.local",
+  });
+
+  render(ComposeWindow);
+
+  const box = await screen.findByRole("textbox", { name: "Message body" });
+  await screen.findByRole("button", { name: "Show quoted text" });
+  expect(box).toHaveTextContent("Thanks!");
+  expect(box).not.toHaveTextContent("Build Week");
+});

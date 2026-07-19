@@ -100,6 +100,13 @@ export function composeHtmlBody(
   );
 }
 
+/** The quote as editor content — what expanding the ••• block inserts:
+ * attribution paragraph + blockquote, no marker div. From then on the
+ * editor owns the quote; it ships as ordinary edited content. */
+export function quoteEditorHtml(quote: DraftQuote): string {
+  return `<p></p><p>${escapeHtml(quote.attribution)}</p><blockquote>${quote.html}</blockquote>`;
+}
+
 /** Separate a composed bodyHtml back into the editor's own content and the
  * quote block ("did it carry one") — a reopened draft (undo, failed send)
  * must not feed the quote into the editor, where it would be mangled. */

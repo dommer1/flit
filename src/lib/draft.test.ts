@@ -4,6 +4,7 @@ import {
   composePlainBody,
   forwardDraft,
   isDraftEmpty,
+  quoteEditorHtml,
   replyAllDraft,
   replyDraft,
   splitComposedHtml,
@@ -304,6 +305,15 @@ describe("composing a draft with its quote", () => {
     expect(html).toContain("OpenAI &lt;dev@openai.com&gt; wrote:");
     expect(html).toContain('<blockquote type="cite" style="');
     expect(html).toContain("<p>Build Week is open.</p></blockquote></div>");
+  });
+
+  it("quoteEditorHtml escapes the attribution and drops the marker", () => {
+    const html = quoteEditorHtml(quote);
+
+    expect(html).toBe(
+      "<p></p><p>On July 17, 2026, OpenAI &lt;dev@openai.com&gt; wrote:</p>" +
+        "<blockquote><p>Build Week is open.</p></blockquote>",
+    );
   });
 
   it("splitComposedHtml gives the editor back only its own content", () => {

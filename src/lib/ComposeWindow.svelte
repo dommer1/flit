@@ -15,12 +15,19 @@
     takeComposeDraft,
   } from "./api";
   import { debounce } from "./debounce";
-  import { isDraftEmpty } from "./draft";
+  import {
+    composeHtmlBody,
+    composePlainBody,
+    isDraftEmpty,
+    quoteEditorHtml,
+    splitComposedHtml,
+  } from "./draft";
   import { textToHtml } from "./richtext";
   import type {
     Account,
     Alias,
     AttachmentInfo,
+    DraftQuote,
     OutgoingMessage,
     Signature,
   } from "./types";
@@ -68,10 +75,19 @@
   // content at construction, so mounting early would show an empty body.
   let loaded = $state(false);
 
+  // The reply's quote of the original, parked OUTSIDE the editor and shown
+  // as a collapsed ••• bar. Expanding inserts it into the editor (and this
+  // becomes null); sending/saving while parked merges it into body/bodyHtml.
+  let quote = $state<DraftQuote | null>(null);
+
   let signatures = $state<Signature[]>([]);
   let signatureId = $state<number | null>(null);
   let editorRef = $state<
-    { swapBlock: (prev: string, next: string) => void } | undefined
+    | {
+        swapBlock: (prev: string, next: string) => void;
+        appendContent: (blockHtml: string) => void;
+      }
+    | undefined
   >();
   // Plain lets — bookkeeping only, never rendered.
   /** The signature HTML currently sitting in the body (swap target). */
@@ -187,9 +203,19 @@
       if (draft?.bodyHtml) {
         // A reopened draft (undo, failed send) already carries whatever
         // signature it had — don't guess and don't insert another one.
-        initialHtml = draft.bodyHtml;
+        // Its quote block is split back out of the composed HTML so the
+        // editor never chews on the original's markup; without the ridden
+        // quote data the composed HTML stays whole as a fallback.
+        const { own, hasQuote } = splitComposedHtml(draft.bodyHtml);
+        if (hasQuote && draft.quote) {
+          initialHtml = own;
+          quote = draft.quote;
+        } else {
+          initialHtml = draft.bodyHtml;
+        }
         signatureTouched = true;
       } else {
+        quote = draft?.quote ?? null;
         const sig = defaultSignatureFor(accountId);
         signatureId = sig?.id ?? null;
         appliedSigBody = sig?.body ?? "";
@@ -260,11 +286,23 @@
   const scheduleAutosave = debounce(() => void saveNow(), AUTOSAVE_MS);
 
   $effect(() => {
-    void [to, cc, bcc, subject, body, attachments];
+    void [to, cc, bcc, subject, body, attachments, quote];
     if (!watching) return;
     dirty = true;
     scheduleAutosave();
   });
+
+  /** ••• click: the quote moves into the editor and becomes editable —
+   * one-way, like Proton/Gmail; removing it again is ordinary editing. */
+  function expandQuote() {
+    if (!quote) return;
+    editorRef?.appendContent(quoteEditorHtml(quote));
+    quote = null;
+  }
+
+  function removeQuote() {
+    quote = null;
+  }
 
   async function addAttachments(paths: string[]) {
     if (queueing) return;
@@ -318,10 +356,13 @@
       cc,
       bcc,
       subject,
-      body,
+      // A parked quote is merged in here — the editor content stays clean.
+      body: composePlainBody(body, quote),
       // why || undefined: an empty editor reports "" — the wire format
-      // treats a missing field as "plain text only".
-      bodyHtml: bodyHtml || undefined,
+      // treats a missing field as "plain text only". An empty editor WITH
+      // a quote still composes (quote-only reply).
+      bodyHtml: composeHtmlBody(bodyHtml, quote) || undefined,
+      quote: quote ?? undefined,
       attachments: attachments.map(({ path, name }) => ({ path, name })),
       // why: rides along into queue_send so the backend can clear the
       // autosaved server draft once the send succeeds.
@@ -590,6 +631,33 @@
         bind:html={bodyHtml}
         disabled={queueing}
       />
+      {#if quote}
+        <!-- The parked reply-quote, Gmail-style: sent as-is unless expanded
+             into the editor (•••) or removed (×). -->
+        <div class="quote-bar">
+          <button
+            type="button"
+            class="quote-toggle"
+            aria-label="Show quoted text"
+            title="Show quoted text"
+            onclick={expandQuote}
+            disabled={queueing}
+          >
+            •••
+          </button>
+          <span class="quote-attribution">{quote.attribution}</span>
+          <button
+            type="button"
+            class="quote-remove"
+            aria-label="Remove quoted text"
+            title="Remove quoted text"
+            onclick={removeQuote}
+            disabled={queueing}
+          >
+            ×
+          </button>
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -1020,8 +1088,53 @@
 
   .body-area {
     display: flex;
+    flex-direction: column;
     flex: 1;
     min-height: 0;
+  }
+
+  .quote-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    margin: 0 20px;
+    padding: 8px 0 12px;
+    border-top: 1px solid var(--hairline);
+  }
+
+  .quote-toggle {
+    padding: 1px 9px;
+    border: none;
+    border-radius: 9px;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+  }
+
+  .quote-attribution {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .quote-remove {
+    padding: 0 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .quote-remove:hover,
+  .quote-toggle:hover {
+    color: var(--text-primary);
   }
 
   /* Keep the last lines of text visible above the floating panel — cards
