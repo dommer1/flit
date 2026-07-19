@@ -1088,6 +1088,7 @@ pub async fn thread_bodies(
                         &parsed.snippet,
                         &parsed.images,
                         &parsed.attachments,
+                        parsed.auth.as_ref(),
                     )
                     .await?;
                 }

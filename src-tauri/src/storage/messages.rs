@@ -2,7 +2,7 @@ use sqlx::SqlitePool;
 
 use crate::error::AppError;
 use crate::mail::parse::{snippet_of, AttachmentMeta, InlineImage};
-use crate::models::{MessageAttachment, MessageHeader};
+use crate::models::{AuthResults, MessageAttachment, MessageHeader};
 
 /// Header data as it arrives from an IMAP fetch, before it has a row id.
 #[derive(Debug, Clone, Default)]
@@ -567,11 +567,14 @@ pub struct BodyRow {
     /// False for bodies cached before attachment metadata existed — the
     /// next open refetches once to harvest it.
     pub attachments_scanned: bool,
+    /// Cached AuthResults as JSON; None = unknown (no header, or the body
+    /// was cached before verdicts were harvested).
+    pub auth_results: Option<String>,
 }
 
 pub async fn get_body(pool: &SqlitePool, message_id: i64) -> Result<BodyRow, AppError> {
     let row = sqlx::query_as(
-        "SELECT account_id, mailbox, uid, body_text, body_html, attachments_scanned
+        "SELECT account_id, mailbox, uid, body_text, body_html, attachments_scanned, auth_results
          FROM messages WHERE id = ?",
     )
     .bind(message_id)
@@ -586,6 +589,10 @@ pub async fn get_body(pool: &SqlitePool, message_id: i64) -> Result<BodyRow, App
 /// (see uids_missing_body). A message whose download parsed to nothing —
 /// attachment-only mail, unparsable MIME — must still count as cached, or
 /// the prefetcher would re-download it on every sync forever.
+// why allow: the args mirror ParsedBody's fields one-to-one; tests set
+// each independently, so bundling them into a param struct here would
+// just add a second shape for the same data.
+#[allow(clippy::too_many_arguments)]
 pub async fn set_body(
     pool: &SqlitePool,
     message_id: i64,
@@ -594,17 +601,23 @@ pub async fn set_body(
     snippet: &str,
     images: &[InlineImage],
     attachments: &[AttachmentMeta],
+    auth: Option<&AuthResults>,
 ) -> Result<(), AppError> {
+    // why .ok() instead of ?: a verdict that somehow fails to serialize
+    // must not lose the whole body write.
+    let auth_json = auth.and_then(|a| serde_json::to_string(a).ok());
     // why attachments_scanned = 1: this body was parsed by a build that
     // harvests attachment metadata, so no rescan is ever needed for it.
     sqlx::query(
         "UPDATE messages SET body_text = ?, body_html = ?, snippet = ?,
-                             has_attachments = ?, attachments_scanned = 1 WHERE id = ?",
+                             has_attachments = ?, attachments_scanned = 1,
+                             auth_results = ? WHERE id = ?",
     )
     .bind(text.unwrap_or(""))
     .bind(html)
     .bind(snippet)
     .bind(!attachments.is_empty())
+    .bind(auth_json)
     .bind(message_id)
     .execute(pool)
     .await?;
@@ -1928,7 +1941,7 @@ mod tests {
         let row_id = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
 
         // e.g. an attachment-only message: the parser yields no text or html.
-        set_body(&pool, row_id, None, None, "", &[], &[])
+        set_body(&pool, row_id, None, None, "", &[], &[], None)
             .await
             .unwrap();
 
@@ -1957,7 +1970,7 @@ mod tests {
         assert!(has_missing_bodies(&pool, id).await.unwrap());
 
         let row_id = list(&pool, Some(id), "Archive", None).await.unwrap()[0].id;
-        set_body(&pool, row_id, Some("text"), None, "text", &[], &[])
+        set_body(&pool, row_id, Some("text"), None, "text", &[], &[], None)
             .await
             .unwrap();
         assert!(!has_missing_bodies(&pool, id).await.unwrap());
@@ -1986,7 +1999,7 @@ mod tests {
             .find(|m| m.subject == "Cached")
             .unwrap()
             .id;
-        set_body(&pool, cached_id, Some("text"), None, "text", &[], &[])
+        set_body(&pool, cached_id, Some("text"), None, "text", &[], &[], None)
             .await
             .unwrap();
 
@@ -2027,6 +2040,7 @@ mod tests {
             "plain body",
             &[],
             &[],
+            None,
         )
         .await
         .unwrap();
@@ -2034,8 +2048,47 @@ mod tests {
         let after = get_body(&pool, message_id).await.unwrap();
         assert_eq!(after.body_text.as_deref(), Some("plain body"));
         assert_eq!(after.body_html.as_deref(), Some("<p>html body</p>"));
+        // No auth verdicts came with this body — the cache says "unknown".
+        assert_eq!(after.auth_results, None);
         let headers = list(&pool, Some(id), "INBOX", None).await.unwrap();
         assert_eq!(headers[0].snippet, "plain body");
+    }
+
+    #[tokio::test]
+    async fn auth_verdicts_ride_the_body_cache_as_json() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "Hello", "2026-07-08T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        let message_id = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
+
+        let auth = AuthResults {
+            spf: Some("pass".to_string()),
+            dkim: None,
+            dmarc: Some("fail".to_string()),
+        };
+        set_body(
+            &pool,
+            message_id,
+            Some("t"),
+            None,
+            "t",
+            &[],
+            &[],
+            Some(&auth),
+        )
+        .await
+        .unwrap();
+
+        let row = get_body(&pool, message_id).await.unwrap();
+        let cached: AuthResults = serde_json::from_str(&row.auth_results.unwrap()).unwrap();
+        assert_eq!(cached, auth);
     }
 
     #[tokio::test]
@@ -2057,9 +2110,18 @@ mod tests {
             content_type: "image/png".to_string(),
             data: b"\x89PNG".to_vec(),
         };
-        set_body(&pool, message_id, None, Some("<img>"), "", &[photo], &[])
-            .await
-            .unwrap();
+        set_body(
+            &pool,
+            message_id,
+            None,
+            Some("<img>"),
+            "",
+            &[photo],
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
 
         let stored = images(&pool, message_id).await.unwrap();
         assert_eq!(stored.len(), 1);
@@ -2068,9 +2130,18 @@ mod tests {
         assert_eq!(stored[0].data, b"\x89PNG");
 
         // A re-fetched body replaces its images instead of stacking them.
-        set_body(&pool, message_id, None, Some("<p>plain</p>"), "", &[], &[])
-            .await
-            .unwrap();
+        set_body(
+            &pool,
+            message_id,
+            None,
+            Some("<p>plain</p>"),
+            "",
+            &[],
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(images(&pool, message_id).await.unwrap(), Vec::new());
 
         // And deleting the message must not strand image blobs.
@@ -2086,6 +2157,7 @@ mod tests {
                 data: b"JJ".to_vec(),
             }],
             &[],
+            None,
         )
         .await
         .unwrap();
@@ -2134,6 +2206,7 @@ mod tests {
             "see file",
             &[],
             &[pdf],
+            None,
         )
         .await
         .unwrap();
@@ -2166,6 +2239,7 @@ mod tests {
             "see file",
             &[],
             &[],
+            None,
         )
         .await
         .unwrap();
@@ -2199,7 +2273,7 @@ mod tests {
             content_type: "application/zip".to_string(),
             size: 10,
         };
-        set_body(&pool, message_id, None, None, "", &[], &[meta])
+        set_body(&pool, message_id, None, None, "", &[], &[meta], None)
             .await
             .unwrap();
 
@@ -2303,6 +2377,7 @@ mod tests {
             "Just prose here",
             &[],
             &[],
+            None,
         )
         .await
         .unwrap();
@@ -2366,6 +2441,7 @@ mod tests {
             "Just prose here",
             &[],
             &[],
+            None,
         )
         .await
         .unwrap();
