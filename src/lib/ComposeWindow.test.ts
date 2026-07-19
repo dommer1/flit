@@ -789,13 +789,14 @@ it("groups the From identities by account", async () => {
   render(ComposeWindow);
   await waitFor(() => expect(screen.getByLabelText("From")).toHaveValue("1"));
 
-  // Each account is an optgroup holding its own address plus its aliases.
-  const personal = screen.getByRole("group", { name: "Personal" });
+  // Each account is an optgroup holding its own address plus its aliases,
+  // labelled by the address — display names repeat across accounts.
+  const personal = screen.getByRole("group", { name: "domco@example.com" });
   expect(
     within(personal).getByRole("option", { name: "domco@example.com" }),
   ).toBeInTheDocument();
 
-  const work = screen.getByRole("group", { name: "Work" });
+  const work = screen.getByRole("group", { name: "hello@vocalio.sk" });
   expect(
     within(work).getByRole("option", { name: "hello@vocalio.sk" }),
   ).toBeInTheDocument();

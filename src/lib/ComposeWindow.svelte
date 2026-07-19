@@ -543,8 +543,10 @@
       disabled={queueing}
     >
       {#each accounts as account (account.id)}
-        <!-- One group per account: its own address first, aliases below. -->
-        <optgroup label={account.name || account.email}>
+        <!-- One group per account: its own address first, aliases below.
+             why the email as label: account display names repeat across
+             accounts (all "me"), only the address tells them apart. -->
+        <optgroup label={account.email}>
           <option value={String(account.id)}>{account.email}</option>
           {#each aliasesFor(account.id) as alias (alias.id)}
             <option value={`${account.id}:${alias.id}`}>{alias.email}</option>
