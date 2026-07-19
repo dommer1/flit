@@ -34,6 +34,31 @@ it("wraps the current paragraph when toggling a bullet list", async () => {
   expect(box.querySelector("ul li")).not.toBeNull();
 });
 
+it("renders an initial blockquote as a real quote block", async () => {
+  render(RichTextEditor, {
+    props: {
+      initialHtml: "<p>Vďaka!</p><blockquote><p>pôvodný</p></blockquote>",
+    },
+  });
+
+  const box = await screen.findByRole("textbox", { name: "Message body" });
+  expect(box.querySelector("blockquote p")).toHaveTextContent("pôvodný");
+});
+
+it("keeps inline data: images but drops remote ones", async () => {
+  render(RichTextEditor, {
+    props: {
+      initialHtml:
+        '<p>pics</p><img src="data:image/gif;base64,R0lGOD" alt="inline">' +
+        '<img src="https://t.example/pixel.png" alt="tracker">',
+    },
+  });
+
+  const box = await screen.findByRole("textbox", { name: "Message body" });
+  expect(box.querySelector('img[src^="data:image/"]')).not.toBeNull();
+  expect(box.querySelector('img[src^="https:"]')).toBeNull();
+});
+
 it("disables the formatting controls while queueing", async () => {
   render(RichTextEditor, { props: { initialText: "", disabled: true } });
 

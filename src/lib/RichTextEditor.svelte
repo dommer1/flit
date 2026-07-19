@@ -1,10 +1,29 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { Editor, generateHTML, generateJSON } from "@tiptap/core";
+  import Image from "@tiptap/extension-image";
   import StarterKit from "@tiptap/starter-kit";
-  import { textToHtml } from "./richtext";
+  import { quotedPlainText, textToHtml } from "./richtext";
 
-  const EXTENSIONS = [StarterKit];
+  // SECURITY: the compose editor may hold an expanded reply-quote — images
+  // are limited to the message's own inline forms (data:/cid:). A remote
+  // URL would be a network load in the app's main frame, so it is rejected
+  // at parse time and the node is dropped.
+  const InlineImage = Image.extend({
+    parseHTML() {
+      return [
+        {
+          tag: "img[src]",
+          getAttrs: (element) =>
+            /^(data:image\/|cid:)/i.test(element.getAttribute("src") ?? "")
+              ? null
+              : false,
+        },
+      ];
+    },
+  });
+
+  const EXTENSIONS = [StarterKit, InlineImage];
 
   /** Any HTML → the exact string this editor's getHTML() would produce for
    * it, so stored fragments become string-comparable with live content. */
@@ -38,11 +57,9 @@
   let view = $state<{ editor: Editor | null }>({ editor: null });
 
   function syncOut(editor: Editor) {
-    // why blockSeparator "\n": textToHtml maps one line to one paragraph,
-    // so this separator turns paragraphs back into lines.
-    // why trim: nested blocks (list items) and the editor's own trailing
-    // paragraph leak extra separators at the edges of the fallback text.
-    text = editor.getText({ blockSeparator: "\n" }).trim();
+    // why not getText: it flattens blockquotes silently — an expanded
+    // reply-quote must keep its "> " markers in the fallback text.
+    text = quotedPlainText(editor.getJSON());
     html = editor.isEmpty ? "" : editor.getHTML();
   }
 
@@ -85,6 +102,18 @@
     } else if (next) {
       editor.commands.setContent(`${current}<p></p>${next}`);
     }
+  }
+
+  /** Append an HTML block at the very end of the document — reply-quote
+   * expansion. The caret moves to the end so the insertion is visible. */
+  export function appendContent(blockHtml: string) {
+    const editor = view.editor;
+    if (!editor) return;
+    editor
+      .chain()
+      .insertContentAt(editor.state.doc.content.size, blockHtml)
+      .focus("end")
+      .run();
   }
 
   $effect(() => {
@@ -209,5 +238,16 @@
   .content :global(.tiptap ol) {
     margin: 0;
     padding-left: 1.4em;
+  }
+
+  /* Quote bars, Gmail-style: nesting draws one bar per level on its own. */
+  .content :global(.tiptap blockquote) {
+    margin: 2px 0 2px 2px;
+    padding-left: 10px;
+    border-left: 2px solid var(--hairline);
+  }
+
+  .content :global(.tiptap img) {
+    max-width: 100%;
   }
 </style>
