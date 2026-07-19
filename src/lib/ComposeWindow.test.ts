@@ -1,5 +1,11 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/svelte";
 import type {
   Account,
   Alias,
@@ -775,6 +781,27 @@ it("degrades a draft's deleted alias to the account's own address", async () => 
   render(ComposeWindow);
 
   await waitFor(() => expect(screen.getByLabelText("From")).toHaveValue("2"));
+});
+
+it("groups the From identities by account", async () => {
+  vi.mocked(api.listAliases).mockResolvedValueOnce(aliases);
+
+  render(ComposeWindow);
+  await waitFor(() => expect(screen.getByLabelText("From")).toHaveValue("1"));
+
+  // Each account is an optgroup holding its own address plus its aliases.
+  const personal = screen.getByRole("group", { name: "Personal" });
+  expect(
+    within(personal).getByRole("option", { name: "domco@example.com" }),
+  ).toBeInTheDocument();
+
+  const work = screen.getByRole("group", { name: "Work" });
+  expect(
+    within(work).getByRole("option", { name: "hello@vocalio.sk" }),
+  ).toBeInTheDocument();
+  expect(
+    within(work).getByRole("option", { name: "igor@vocalio.sk" }),
+  ).toBeInTheDocument();
 });
 
 it("starts a blank compose from the account's default identity", async () => {

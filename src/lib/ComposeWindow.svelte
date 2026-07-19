@@ -543,10 +543,13 @@
       disabled={queueing}
     >
       {#each accounts as account (account.id)}
-        <option value={String(account.id)}>{account.email}</option>
-        {#each aliasesFor(account.id) as alias (alias.id)}
-          <option value={`${account.id}:${alias.id}`}>{alias.email}</option>
-        {/each}
+        <!-- One group per account: its own address first, aliases below. -->
+        <optgroup label={account.name || account.email}>
+          <option value={String(account.id)}>{account.email}</option>
+          {#each aliasesFor(account.id) as alias (alias.id)}
+            <option value={`${account.id}:${alias.id}`}>{alias.email}</option>
+          {/each}
+        </optgroup>
       {/each}
     </select>
     <span class="chevron" aria-hidden="true">⌄</span>
