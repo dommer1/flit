@@ -80,6 +80,28 @@ export interface OutgoingMessage {
   /** Space-separated ancestor Message-IDs for the References header,
    * oldest first, ending with `inReplyTo`. */
   references?: string;
+  /** The reply-quote riding below the editor, still un-merged into
+   * body/bodyHtml. Never read by the backend — it travels so a reopened
+   * draft (undo, failed send) can restore its quote block. */
+  quote?: DraftQuote | null;
+}
+
+/** get_message_quote result — the original rendered for quoting in a
+ * reply. Mirrors MessageQuote in models.rs. */
+export interface MessageQuote {
+  /** Sanitized HTML fragment (cid images inlined, remote refs unresolved,
+   * text mail upconverted to blockquotes). Empty = nothing quotable. */
+  html: string;
+  /** Cleaned plain text — source of the outgoing "> " fallback lines. */
+  text: string;
+}
+
+/** A compose draft's quote of the original: quote material plus the
+ * attribution line built for it. Mirrors DraftQuote in models.rs. */
+export interface DraftQuote {
+  attribution: string;
+  html: string;
+  text: string;
 }
 
 /** One file attached to an outgoing message, referenced by path. */

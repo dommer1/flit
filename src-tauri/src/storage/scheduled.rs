@@ -129,6 +129,7 @@ mod tests {
             draft_message_id: None,
             in_reply_to: None,
             references: None,
+            quote: None,
         }
     }
 

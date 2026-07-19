@@ -10,6 +10,7 @@ import type {
   Mailbox,
   MessageAttachment,
   MessageBody,
+  MessageQuote,
   MessageHeader,
   NewAccount,
   NotificationSettings,
@@ -108,6 +109,12 @@ export function threadBodies(
   messageId: number,
 ): Promise<Record<number, MessageBody>> {
   return invoke<Record<number, MessageBody>>("thread_bodies", { messageId });
+}
+
+/** Quote material for a reply to this message — served from the same body
+ * cache as the viewer; a miss fetches the body first. */
+export function getMessageQuote(messageId: number): Promise<MessageQuote> {
+  return invoke<MessageQuote>("get_message_quote", { messageId });
 }
 
 /**

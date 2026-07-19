@@ -1323,6 +1323,8 @@ pub async fn open_draft(
             draft_message_id: parsed.message_id,
             in_reply_to: parsed.in_reply_to,
             references: parsed.references,
+            // A server draft already merged its quote into the body text.
+            quote: None,
         },
     )
     .await

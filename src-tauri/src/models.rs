@@ -119,6 +119,23 @@ pub struct OutgoingMessage {
     /// oldest first, ending with `in_reply_to`.
     #[serde(default)]
     pub references: Option<String>,
+    /// The reply-quote riding below the compose editor, still un-merged
+    /// into body/body_html. The backend never reads it — it travels so a
+    /// reopened draft (undo, failed send) can restore its quote block.
+    #[serde(default)]
+    pub quote: Option<DraftQuote>,
+}
+
+/// A compose draft's quote of the original message: quote material plus the
+/// attribution line the frontend built for it ("On …, X wrote:").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftQuote {
+    pub attribution: String,
+    /// Sanitized HTML fragment of the original (see MessageQuote::html).
+    pub html: String,
+    /// Cleaned plain text of the original (see MessageQuote::text).
+    pub text: String,
 }
 
 /// What inspect_attachments returns for one dropped file — the metadata the
@@ -198,6 +215,9 @@ impl ScheduledMessage {
             draft_message_id: None,
             in_reply_to: self.in_reply_to.clone(),
             references: self.references.clone(),
+            // Scheduled rows store the already-composed body; a cancelled
+            // reply reopens with its quote merged into the editor content.
+            quote: None,
         }
     }
 }
