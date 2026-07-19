@@ -380,6 +380,19 @@ pub struct Contact {
     pub name: String,
 }
 
+/// SPF/DKIM/DMARC verdicts read from a message's topmost
+/// Authentication-Results header — the one stamped by the user's own
+/// receiving server. Each field holds the lowercase verdict token ("pass",
+/// "fail", "softfail", …); None = the header did not mention that method.
+/// Deserialize too: the verdicts are cached in the DB as JSON.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthResults {
+    pub spf: Option<String>,
+    pub dkim: Option<String>,
+    pub dmarc: Option<String>,
+}
+
 /// A sender whose display name is well known in the local contact history —
 /// but under a different address. Shown as a warning banner on the message
 /// ("X does not usually use this email address"). Computed purely from the

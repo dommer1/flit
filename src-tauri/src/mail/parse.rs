@@ -1,5 +1,7 @@
 use mail_parser::{Addr, Address, HeaderValue, Message, MessageParser, MimeHeaders};
 
+use crate::models::AuthResults;
+
 /// Fields extracted from a message's headers.
 #[derive(Debug, Default, PartialEq)]
 pub struct ParsedHeader {
@@ -64,6 +66,9 @@ pub struct ParsedBody {
     pub snippet: String,
     pub images: Vec<InlineImage>,
     pub attachments: Vec<AttachmentMeta>,
+    /// SPF/DKIM/DMARC verdicts of the topmost Authentication-Results
+    /// header; None when the message carries none.
+    pub auth: Option<AuthResults>,
 }
 
 /// Parse raw header bytes (from `BODY.PEEK[HEADER]`).
@@ -120,13 +125,53 @@ pub fn parse_body(raw: &[u8]) -> ParsedBody {
     let snippet = text.as_deref().map(snippet_of).unwrap_or_default();
     let images = inline_images(&message);
     let attachments = attachment_meta(&message);
+    let auth = auth_results(&message);
     ParsedBody {
         text,
         html,
         snippet,
         images,
         attachments,
+        auth,
     }
+}
+
+/// SPF/DKIM/DMARC verdicts from the TOPMOST Authentication-Results header.
+///
+/// why topmost only: each receiving hop prepends its own header, so the
+/// first one was stamped by the user's own server — anything below it came
+/// with the message and could be forged by the sender. A missing header
+/// proves nothing either way (small servers often don't stamp one), so
+/// absent or unparseable yields None and the UI stays silent.
+fn auth_results(message: &Message) -> Option<AuthResults> {
+    let raw = message
+        .headers_raw()
+        .find(|(name, _)| name.eq_ignore_ascii_case("Authentication-Results"))
+        .map(|(_, value)| value)?;
+    let mut results = AuthResults::default();
+    // Shape: "authserv.example; spf=pass (…) …; dkim=fail …; dmarc=pass …" —
+    // clauses split on ';', each starting with method=verdict. The leading
+    // authserv-id clause has no '=' and falls through.
+    for clause in raw.split(';') {
+        let Some((method, rest)) = clause.trim().split_once('=') else {
+            continue;
+        };
+        let verdict = rest
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let slot = match method.trim().to_ascii_lowercase().as_str() {
+            "spf" => &mut results.spf,
+            "dkim" => &mut results.dkim,
+            "dmarc" => &mut results.dmarc,
+            _ => continue,
+        };
+        if slot.is_none() && !verdict.is_empty() {
+            *slot = Some(verdict);
+        }
+    }
+    (results != AuthResults::default()).then_some(results)
 }
 
 /// Whether this part renders inline via a `cid:` reference — those live in
@@ -783,5 +828,52 @@ mod tests {
         let snippet = snippet_of(text);
 
         assert_eq!(snippet, "Pavlo assigned you to a task. Open here:");
+    }
+
+    #[test]
+    fn reads_auth_verdicts_from_authentication_results() {
+        // A Gmail-shaped header: folded across lines, verdicts trailed by
+        // comments and properties that must not leak into the verdict.
+        let raw = b"Authentication-Results: mx.google.com;\r\n\
+                    \x20      dkim=pass header.i=@example.com header.b=abc;\r\n\
+                    \x20      spf=softfail (google.com: domain of x transitions) smtp.mailfrom=x@example.com;\r\n\
+                    \x20      dmarc=fail (p=REJECT sp=REJECT dis=NONE) header.from=example.com\r\n\
+                    From: a@example.com\r\n\
+                    \r\n\
+                    body";
+
+        let auth = parse_body(raw).auth.unwrap();
+
+        assert_eq!(auth.dkim.as_deref(), Some("pass"));
+        assert_eq!(auth.spf.as_deref(), Some("softfail"));
+        assert_eq!(auth.dmarc.as_deref(), Some("fail"));
+    }
+
+    #[test]
+    fn only_the_topmost_authentication_results_header_counts() {
+        // The lower header (dmarc=pass) rode in with the message — a forger
+        // can append one, so only our own server's topmost header is read.
+        let raw = b"Authentication-Results: mx.own-server.com; dmarc=fail header.from=x\r\n\
+                    Authentication-Results: evil.relay.com; dmarc=pass; spf=pass\r\n\
+                    From: a@example.com\r\n\
+                    \r\n\
+                    body";
+
+        let auth = parse_body(raw).auth.unwrap();
+
+        assert_eq!(auth.dmarc.as_deref(), Some("fail"));
+        // spf appeared only in the untrusted lower header — ignored.
+        assert_eq!(auth.spf, None);
+    }
+
+    #[test]
+    fn missing_or_unrelated_authentication_results_yield_none() {
+        let plain = b"From: a@example.com\r\n\r\nbody";
+        assert_eq!(parse_body(plain).auth, None);
+
+        // A header mentioning none of spf/dkim/dmarc proves nothing.
+        let arc_only =
+            b"Authentication-Results: mx.example.com; arc=pass\r\nFrom: a@example.com\r\n\r\nbody";
+        assert_eq!(parse_body(arc_only).auth, None);
     }
 }
