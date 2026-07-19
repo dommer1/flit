@@ -10,18 +10,41 @@ use crate::models::MessageQuote;
 /// Everything a reply needs to quote a message: the sanitized HTML fragment
 /// (plain-text mail upconverted to blockquote markup) plus the cleaned text
 /// feeding the outgoing "> " fallback part. Invisible preheader padding is
-/// stripped from both — it otherwise rides invisibly into the sent mail.
+/// stripped from both — it otherwise rides invisibly into the sent mail —
+/// and the text's blank-line runs collapse to one (ESP text parts pad
+/// with dozens, which became "> \n> \n> …" spam in the fallback).
 pub fn quote_material(
     html: Option<&str>,
     text: Option<&str>,
     images: &[InlineImage],
 ) -> MessageQuote {
-    let text = strip_invisible(text.unwrap_or_default()).trim().to_string();
+    let stripped = strip_invisible(text.unwrap_or_default());
+    let text = collapse_blank_runs(&stripped);
     let html = match html {
         Some(h) => strip_invisible(&sanitize_fragment(h, images)),
         None => text_to_quote_html(&text),
     };
     MessageQuote { html, text }
+}
+
+/// Lines trimmed at the right edge, runs of blank lines squeezed to a
+/// single one, blank edges dropped.
+fn collapse_blank_runs(text: &str) -> String {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut blank_pending = false;
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            blank_pending = true;
+            continue;
+        }
+        if blank_pending && !lines.is_empty() {
+            lines.push("");
+        }
+        blank_pending = false;
+        lines.push(line);
+    }
+    lines.join("\n")
 }
 
 /// Split plain text into (own content, quoted history). The text stays
@@ -368,6 +391,20 @@ mod tests {
 
         assert_eq!(quote.html, "<p>Novinky</p>");
         assert_eq!(quote.text, "Novinky");
+    }
+
+    #[test]
+    fn quote_material_collapses_blank_line_runs() {
+        // The shape of an ESP text part: content islands separated by
+        // 10+ blank padding lines (some holding only spaces).
+        let text = "The Final kicks off tonight.\n\n\n   \n\n\n\nHey Dominik,\n  \n\nWatch the game.\n\n\n";
+
+        let quote = quote_material(None, Some(text), &[]);
+
+        assert_eq!(
+            quote.text,
+            "The Final kicks off tonight.\n\nHey Dominik,\n\nWatch the game."
+        );
     }
 
     #[test]
