@@ -149,6 +149,60 @@ fn normalize(text: &str) -> String {
         .join(" ")
 }
 
+/// Plain text — possibly carrying its own "> " quoted history — rendered as
+/// HTML for a reply's quoted block: one <p> per line, "> " runs nested as
+/// real <blockquote>s, so a text mail gets the same bar-styled look as an
+/// HTML one. Output is built from escaped text only, safe to embed.
+pub fn text_to_quote_html(text: &str) -> String {
+    let mut html = String::new();
+    let mut open = 0usize;
+    for line in text.lines() {
+        let (depth, content) = quote_markers(line);
+        // Blank lines add nothing between per-line <p>s — and skipping
+        // BEFORE the depth adjustment keeps a blank from splitting one
+        // quote run into two blockquotes.
+        if content.is_empty() {
+            continue;
+        }
+        while open < depth {
+            html.push_str("<blockquote>");
+            open += 1;
+        }
+        while open > depth {
+            html.push_str("</blockquote>");
+            open -= 1;
+        }
+        html.push_str("<p>");
+        html.push_str(&escape_html(content));
+        html.push_str("</p>");
+    }
+    html.push_str(&"</blockquote>".repeat(open));
+    html
+}
+
+/// Leading ">" markers of a quoted line: nesting depth plus the content
+/// after them ("> > x" and ">>x" both parse as depth 2, "x").
+fn quote_markers(line: &str) -> (usize, &str) {
+    let mut depth = 0;
+    let mut rest = line;
+    loop {
+        let trimmed = rest.trim_start();
+        match trimmed.strip_prefix('>') {
+            Some(after) => {
+                depth += 1;
+                rest = after;
+            }
+            None => return (depth, trimmed),
+        }
+    }
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// Rough count of the characters a reader would see: everything outside
 /// tags, entities counted as one.
 fn visible_text_len(html: &str) -> usize {
@@ -281,6 +335,39 @@ mod tests {
 
         let all_quote = "<blockquote><p>iba citát</p></blockquote>".to_string();
         assert_eq!(strip_html_quote(all_quote.clone()), all_quote);
+    }
+
+    #[test]
+    fn text_becomes_paragraphs_without_quote_markers() {
+        let html = text_to_quote_html("Ahoj,\n\nposielam <b>odkaz</b> & fakturu.");
+
+        assert_eq!(
+            html,
+            "<p>Ahoj,</p><p>posielam &lt;b&gt;odkaz&lt;/b&gt; &amp; fakturu.</p>"
+        );
+    }
+
+    #[test]
+    fn quote_runs_become_nested_blockquotes() {
+        let text = "odpoveď\n> prvý citát\n> > starší citát\n>>ešte starší\n> späť";
+
+        assert_eq!(
+            text_to_quote_html(text),
+            "<p>odpoveď</p>\
+             <blockquote><p>prvý citát</p>\
+             <blockquote><p>starší citát</p><p>ešte starší</p></blockquote>\
+             <p>späť</p></blockquote>"
+        );
+    }
+
+    #[test]
+    fn blank_lines_do_not_split_a_quote_run() {
+        let text = "> jedna\n\n> dva";
+
+        assert_eq!(
+            text_to_quote_html(text),
+            "<blockquote><p>jedna</p><p>dva</p></blockquote>"
+        );
     }
 
     #[test]
