@@ -40,6 +40,16 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<Account>, AppError> {
     Ok(accounts)
 }
 
+/// Every address the user sends as — account addresses plus stored
+/// aliases. Used to exempt the user's own identities from sender warnings.
+pub async fn own_emails(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
+    let emails =
+        sqlx::query_scalar("SELECT email FROM accounts UNION SELECT email FROM account_aliases")
+            .fetch_all(pool)
+            .await?;
+    Ok(emails)
+}
+
 /// Record the outcome of a connection check (`None` error = healthy).
 pub async fn set_status(
     pool: &SqlitePool,
@@ -217,5 +227,18 @@ mod tests {
         let pool = test_pool().await;
 
         assert!(delete(&pool, 999).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn own_emails_covers_accounts_and_aliases() {
+        let pool = test_pool().await;
+        let account = insert(&pool, &sample("Personal")).await.unwrap();
+        crate::storage::aliases::add(&pool, account.id, "P", "alias@example.com")
+            .await
+            .unwrap();
+
+        let mut emails = own_emails(&pool).await.unwrap();
+        emails.sort();
+        assert_eq!(emails, vec!["alias@example.com", "personal@example.com"]);
     }
 }

@@ -441,6 +441,13 @@ pub struct MessageBody {
     /// Attachments of this message — metadata only; saving re-fetches the
     /// bytes from the server.
     pub attachments: Vec<MessageAttachment>,
+    /// SPF/DKIM/DMARC verdicts of this message; None = unknown (no
+    /// Authentication-Results header, or cached before harvesting). The
+    /// viewer warns only on explicit "fail" — unknown stays silent.
+    pub auth: Option<AuthResults>,
+    /// Set when the From line pairs a familiar name with an address that
+    /// name does not usually use (see storage::contacts::sender_anomaly).
+    pub sender_anomaly: Option<SenderAnomaly>,
 }
 
 /// Quote material for a reply: the original message rendered for embedding

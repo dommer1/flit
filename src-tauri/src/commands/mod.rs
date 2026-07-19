@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::models::{
-    Account, Alias, Mailbox, MessageBody, MessageHeader, MessageQuote, NewAccount,
+    Account, Alias, AuthResults, Mailbox, MessageBody, MessageHeader, MessageQuote, NewAccount,
     NotificationSettings, OutgoingMessage, RemoteImagePolicy, Signature, SwipeActions, ThreadOrder,
 };
 use crate::state::AppState;
@@ -922,15 +922,15 @@ pub async fn get_message_body(
     message_id: i64,
     load_remote: Option<bool>,
 ) -> Result<MessageBody, AppError> {
-    let (html, text, images) = load_body(&app, &state, message_id).await?;
+    let loaded = load_body(&app, &state, message_id).await?;
 
     let policy = storage::settings::remote_image_policy(&state.pool).await?;
-    let redundant = quote_repeats_thread(&state.pool, message_id, text.as_deref()).await?;
+    let redundant = quote_repeats_thread(&state.pool, message_id, loaded.text.as_deref()).await?;
     let mut body = sanitized_body(
         &state.pool,
-        html,
-        text,
-        &images,
+        loaded.html,
+        loaded.text,
+        &loaded.images,
         policy,
         load_remote,
         redundant,
@@ -939,6 +939,10 @@ pub async fn get_message_body(
     // why from the DB, not the parse result: both branches above have already
     // written the metadata (set_body), so one read serves cached and fresh.
     body.attachments = storage::messages::attachments(&state.pool, message_id).await?;
+    body.auth = loaded.auth;
+    let own = storage::accounts::own_emails(&state.pool).await?;
+    body.sender_anomaly =
+        storage::contacts::sender_anomaly(&state.pool, &loaded.from, &own).await?;
     Ok(body)
 }
 
@@ -977,12 +981,30 @@ pub async fn get_message_quote(
     state: State<'_, AppState>,
     message_id: i64,
 ) -> Result<MessageQuote, AppError> {
-    let (html, text, images) = load_body(&app, &state, message_id).await?;
+    let loaded = load_body(&app, &state, message_id).await?;
     Ok(mail::quote::quote_material(
-        html.as_deref(),
-        text.as_deref(),
-        &images,
+        loaded.html.as_deref(),
+        loaded.text.as_deref(),
+        &loaded.images,
     ))
+}
+
+/// One message's body as load_body hands it out: the cached (or freshly
+/// fetched) content plus the metadata that rides along with it.
+struct LoadedBody {
+    html: Option<String>,
+    text: Option<String>,
+    images: Vec<mail::parse::InlineImage>,
+    /// SPF/DKIM/DMARC verdicts; None = unknown.
+    auth: Option<AuthResults>,
+    /// The stored From line ("Name <addr>"), for the sender check.
+    from: String,
+}
+
+/// Cached AuthResults JSON back into the struct; unreadable or absent
+/// means "unknown", never an error.
+fn parse_auth(json: Option<&str>) -> Option<AuthResults> {
+    json.and_then(|j| serde_json::from_str(j).ok())
 }
 
 /// A message's raw cached body — HTML, text and inline images — fetched
@@ -993,14 +1015,7 @@ async fn load_body(
     app: &AppHandle,
     state: &State<'_, AppState>,
     message_id: i64,
-) -> Result<
-    (
-        Option<String>,
-        Option<String>,
-        Vec<mail::parse::InlineImage>,
-    ),
-    AppError,
-> {
+) -> Result<LoadedBody, AppError> {
     let row = storage::messages::get_body(&state.pool, message_id).await?;
 
     let cached = row.body_text.is_some() || row.body_html.is_some();
@@ -1013,7 +1028,13 @@ async fn load_body(
 
     if cached && !backfill {
         let images = storage::messages::images(&state.pool, message_id).await?;
-        return Ok((row.body_html, row.body_text, images));
+        return Ok(LoadedBody {
+            html: row.body_html,
+            text: row.body_text,
+            images,
+            auth: parse_auth(row.auth_results.as_deref()),
+            from: row.from_addr,
+        });
     }
     let account = storage::accounts::get(&state.pool, row.account_id).await?;
     let password = state.password(account.id).await?;
@@ -1028,7 +1049,13 @@ async fn load_body(
     .await?;
     // why: the snippet just became real — lists should refresh.
     app.emit("messages-changed", row.account_id)?;
-    Ok((parsed.html, parsed.text, parsed.images))
+    Ok(LoadedBody {
+        html: parsed.html,
+        text: parsed.text,
+        images: parsed.images,
+        auth: parsed.auth,
+        from: row.from_addr,
+    })
 }
 
 /// Bodies for a whole conversation in one call — the conversation view's
@@ -1103,6 +1130,7 @@ pub async fn thread_bodies(
     }
 
     let policy = storage::settings::remote_image_policy(&state.pool).await?;
+    let own = storage::accounts::own_emails(&state.pool).await?;
     let mut bodies = std::collections::HashMap::new();
     // Oldest first (thread_of order): each message's quote is compared to
     // the bodies before it — a quote that repeats one renders nothing.
@@ -1118,6 +1146,7 @@ pub async fn thread_bodies(
         if let Some(body_text) = &row.body_text {
             earlier_texts.push(body_text.clone());
         }
+        let auth = parse_auth(row.auth_results.as_deref());
         let mut body = sanitized_body(
             &state.pool,
             row.body_html,
@@ -1129,6 +1158,9 @@ pub async fn thread_bodies(
         )
         .await?;
         body.attachments = storage::messages::attachments(&state.pool, header.id).await?;
+        body.auth = auth;
+        body.sender_anomaly =
+            storage::contacts::sender_anomaly(&state.pool, &header.from, &own).await?;
         bodies.insert(header.id, body);
     }
     Ok(bodies)
@@ -1277,8 +1309,10 @@ async fn sanitized_body(
         // why: !load, not just Ask — after the click the banner disappears
         // even when some images failed to fetch (no endless "load" loop).
         can_load_remote: policy == RemoteImagePolicy::Ask && !load && blocked_images > 0,
-        // Filled by get_message_body from the DB — sanitization has no say.
+        // Filled by the callers from the DB — sanitization has no say.
         attachments: Vec::new(),
+        auth: None,
+        sender_anomaly: None,
     })
 }
 

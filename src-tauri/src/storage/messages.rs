@@ -570,11 +570,14 @@ pub struct BodyRow {
     /// Cached AuthResults as JSON; None = unknown (no header, or the body
     /// was cached before verdicts were harvested).
     pub auth_results: Option<String>,
+    /// The stored From line ("Name <addr>"), for the sender check.
+    pub from_addr: String,
 }
 
 pub async fn get_body(pool: &SqlitePool, message_id: i64) -> Result<BodyRow, AppError> {
     let row = sqlx::query_as(
-        "SELECT account_id, mailbox, uid, body_text, body_html, attachments_scanned, auth_results
+        "SELECT account_id, mailbox, uid, body_text, body_html, attachments_scanned, auth_results,
+                from_addr
          FROM messages WHERE id = ?",
     )
     .bind(message_id)
