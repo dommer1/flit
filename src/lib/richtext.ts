@@ -23,7 +23,14 @@ const TEXT_BLOCKS = new Set(["paragraph", "heading", "codeBlock"]);
  * fallback (the classic aerion/getText bug).
  */
 export function quotedPlainText(doc: ContentNode): string {
-  return blockLines(doc, 0).join("\n").trim();
+  // Runs of identical empty quoted lines (">", "> >", …) squeeze to one —
+  // expanded newsletter quotes are full of spacer paragraphs. Blank lines
+  // outside a quote are the user's own spacing and stay untouched.
+  const lines = blockLines(doc, 0).filter(
+    (line, index, all) =>
+      line === "" || !/^[>\s]+$/.test(line) || line !== all[index - 1],
+  );
+  return lines.join("\n").trim();
 }
 
 function blockLines(node: ContentNode, depth: number): string[] {

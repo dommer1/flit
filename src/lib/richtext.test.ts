@@ -57,6 +57,28 @@ describe("quotedPlainText", () => {
     expect(quotedPlainText(doc)).toBe("> one\n> two\n>");
   });
 
+  it("collapses runs of empty quoted lines to one", () => {
+    // Empty paragraphs inside an expanded quote (newsletter spacer cells)
+    // must not become "> \n> \n> …" spam; the user's own blank lines at
+    // depth 0 stay untouched.
+    const doc = {
+      type: "doc",
+      content: [
+        p("Thanks!"),
+        p(""),
+        p(""),
+        {
+          type: "blockquote",
+          content: [p(""), p(""), p("Build Week."), p(""), p(""), p("Bye.")],
+        },
+      ],
+    };
+
+    expect(quotedPlainText(doc)).toBe(
+      "Thanks!\n\n\n>\n> Build Week.\n>\n> Bye.",
+    );
+  });
+
   it("walks list containers without prefixing them", () => {
     const doc = {
       type: "doc",
