@@ -2,6 +2,9 @@
 //! untrusted email HTML is rendered. The output of `build_srcdoc` is the ONLY
 //! HTML form a message body may take on its way to the webview, and it is
 //! rendered exclusively inside a fully sandboxed iframe (MessageView.svelte).
+//! The one sanctioned exception is `sanitize_fragment`: the same sanitizer
+//! pass, exposed bare for the reply-quote a compose window carries — it may
+//! enter the compose editor only after an explicit user click (see CLAUDE.md).
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -243,6 +246,16 @@ pub fn build_srcdoc(
     }
 }
 
+/// Sanitize untrusted email HTML into a bare fragment: the same pass as
+/// `build_srcdoc`, but without the srcdoc document wrapper, the viewer's
+/// quote-fold markup, or `<style>`-block re-injection. Remote images are
+/// never resolved here — their refs survive inert, exactly as in an
+/// unloaded viewer render. This is the form a reply embeds as its quoted
+/// original (blockquote content of the outgoing HTML part).
+pub fn sanitize_fragment(untrusted_html: &str, images: &[InlineImage]) -> String {
+    sanitize(untrusted_html, images, &HashMap::new()).0
+}
+
 fn sanitize(
     untrusted_html: &str,
     images: &[InlineImage],
@@ -443,6 +456,33 @@ mod tests {
     /// Most tests care only about the document, not the blocked count.
     fn srcdoc(untrusted_html: &str, images: &[InlineImage]) -> String {
         build_srcdoc(untrusted_html, images, &HashMap::new(), false).html
+    }
+
+    #[test]
+    fn fragment_is_sanitized_but_bare() {
+        let fragment = sanitize_fragment(
+            "<p>hi</p><script>alert(1)</script>\
+             <blockquote><p>&gt; old</p></blockquote>\
+             <img src=\"cid:photo1\">",
+            &[png("photo1")],
+        );
+
+        assert!(!fragment.to_lowercase().contains("<script"));
+        // Bare: no srcdoc document shell, no viewer-only fold markup.
+        assert!(!fragment.contains("<!doctype"));
+        assert!(!fragment.contains("<details"));
+        assert!(fragment.contains("<p>hi</p>"));
+        // cid images resolve to inert data: URIs like in the viewer.
+        assert!(fragment.contains("data:image/png"));
+    }
+
+    #[test]
+    fn fragment_leaves_remote_images_unresolved() {
+        let fragment = sanitize_fragment(r#"<img src="https://t.example/x.png">"#, &[]);
+
+        // The ref survives for the recipient's own client to decide on —
+        // we never fetch it, so quoting adds no network I/O.
+        assert!(fragment.contains("https://t.example/x.png"));
     }
 
     #[test]
