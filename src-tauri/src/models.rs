@@ -517,8 +517,15 @@ pub struct MessageHeader {
     /// Space-joined ancestor Message-IDs — a reply appends `message_id` to
     /// this chain to form its own References header.
     pub references: String,
-    /// Messages in this row's conversation as the thread view shows it —
-    /// all folders of the account except trash/junk/drafts. Always ≥ 1 in
+    /// Whether the message sits in the account's Drafts folder. Only the
+    /// conversation query computes it (badge + click-to-edit routing);
+    /// list queries leave it false — the flat drafts view derives
+    /// draft-ness from the mailbox role instead.
+    #[sqlx(default)]
+    pub is_draft: bool,
+    /// Messages in this row's conversation — all folders of the account
+    /// except trash/junk/drafts (a draft shows in the conversation view
+    /// but is not counted as a message of the exchange). Always ≥ 1 in
     /// threaded lists; 0 in flat queries, which don't compute it.
     #[sqlx(default)]
     pub thread_count: i64,

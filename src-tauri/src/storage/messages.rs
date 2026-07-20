@@ -393,9 +393,10 @@ pub async fn list_threaded(
 }
 
 /// The whole conversation of one message, oldest first, across the folders
-/// the thread view shows (everything but trash/junk/drafts). The anchor
-/// itself is always included — even keyless or sitting in Trash — so the
-/// viewer never comes up empty for the message the user clicked.
+/// the thread view shows (everything but trash/junk; an unsent reply in
+/// Drafts rides along flagged `is_draft`, so the view can badge it). The
+/// anchor itself is always included — even keyless or sitting in Trash —
+/// so the viewer never comes up empty for the message the user clicked.
 ///
 /// why the copy_rank window: one RFC message can be cached from several
 /// folders (Gmail's All Mail lists everything again, some servers alias
@@ -404,7 +405,7 @@ pub async fn list_threaded(
 pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<MessageHeader>, AppError> {
     let rows = sqlx::query_as(
         r#"SELECT id, account_id, mailbox, "from", "to", cc, reply_to, bcc, subject, snippet,
-                  date, read, has_attachments, message_id, "references"
+                  date, read, has_attachments, message_id, "references", is_draft
            FROM (
              SELECT m.id, m.account_id, m.mailbox, m.from_addr AS "from", m.to_addr AS "to",
                     m.cc_addr AS cc, m.reply_to_addr AS reply_to, m.bcc_addr AS bcc,
@@ -412,6 +413,7 @@ pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<Message
                     m.date, m.read, m.has_attachments,
                     COALESCE(m.message_id_hdr, '') AS message_id,
                     m.references_hdr AS "references",
+                    (COALESCE(b.role, '') = 'drafts') AS is_draft,
                     ROW_NUMBER() OVER (
                       PARTITION BY COALESCE(NULLIF(m.message_id_hdr, ''), 'row:' || m.id)
                       ORDER BY (COALESCE(b.role, '') IN ('all', 'archive')), m.id
@@ -421,7 +423,7 @@ pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<Message
              LEFT JOIN mailboxes b ON b.account_id = m.account_id AND b.name = m.mailbox
              WHERE m.id = a.id
                 OR (a.thread_key IS NOT NULL AND m.thread_key = a.thread_key
-                    AND COALESCE(b.role, '') NOT IN ('trash', 'junk', 'drafts'))
+                    AND COALESCE(b.role, '') NOT IN ('trash', 'junk'))
            )
            WHERE copy_rank = 1
            ORDER BY date ASC, id ASC"#,
@@ -1230,6 +1232,50 @@ mod tests {
         let mids: Vec<&str> = thread.iter().map(|m| m.message_id.as_str()).collect();
         // Oldest first, Sent included, Trash excluded.
         assert_eq!(mids, vec!["a@x", "b@x", "c@x"]);
+    }
+
+    #[tokio::test]
+    async fn thread_of_includes_reply_drafts_flagged_as_such() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        upsert_headers(&pool, id, "INBOX", &[threaded(1, "a@x", "", &[])])
+            .await
+            .unwrap();
+        // An unsent reply saved to the server's Drafts folder — it carries
+        // In-Reply-To, so it threads like any reply.
+        upsert_headers(&pool, id, "Drafts", &[threaded(2, "d@x", "a@x", &["a@x"])])
+            .await
+            .unwrap();
+        let anchor = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
+
+        let thread = thread_of(&pool, anchor).await.unwrap();
+
+        let shown: Vec<(&str, bool)> = thread
+            .iter()
+            .map(|m| (m.message_id.as_str(), m.is_draft))
+            .collect();
+        assert_eq!(shown, vec![("a@x", false), ("d@x", true)]);
+    }
+
+    #[tokio::test]
+    async fn thread_counts_leave_drafts_out() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        upsert_headers(&pool, id, "INBOX", &[threaded(1, "a@x", "", &[])])
+            .await
+            .unwrap();
+        upsert_headers(&pool, id, "Drafts", &[threaded(2, "d@x", "a@x", &["a@x"])])
+            .await
+            .unwrap();
+
+        let rows = list_threaded(&pool, Some(id), "INBOX", None).await.unwrap();
+
+        // The draft rides along in the conversation view, but it is not a
+        // message of the exchange yet — the list's count ignores it.
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].thread_count, 1);
     }
 
     #[tokio::test]
