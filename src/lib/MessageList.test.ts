@@ -344,3 +344,25 @@ it("hides the progress line while the server total is unknown", () => {
 
   expect(screen.queryByText(/Syncing older messages/)).toBeNull();
 });
+
+it("renders one date section header where the section changes", () => {
+  const today = new Date().toISOString();
+  renderList({
+    messages: [
+      { ...header(1, "Alice <alice@example.com>", false), date: today },
+      { ...header(2, "Bob <bob@example.com>", true), date: today },
+      { ...header(3, "Carol <carol@example.com>", true), date: "2025-03-10T10:00:00Z" },
+    ],
+  });
+
+  const sections = [...document.querySelectorAll(".section")].map((el) =>
+    el.textContent?.trim(),
+  );
+  expect(sections).toEqual(["Today", "2025"]);
+});
+
+it("renders no section headers for an empty list", () => {
+  renderList({ messages: [] });
+
+  expect(document.querySelector(".section")).toBeNull();
+});

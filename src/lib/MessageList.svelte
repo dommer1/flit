@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatListDate, senderName } from "./format";
+  import { formatListDate, sectionFor, senderName } from "./format";
   import {
     accumulateOffset,
     actionFor,
@@ -183,6 +183,20 @@
       : null,
   );
 
+  // Rows annotated with their date section; a header renders wherever the
+  // section changes (the list is already sorted date-desc). One `now` for
+  // the whole pass so a render can't straddle midnight.
+  let rows = $derived.by(() => {
+    const now = new Date();
+    let prev: string | null = null;
+    return messages.map((message) => {
+      const section = sectionFor(message.date, now);
+      const opens = section !== prev;
+      prev = section;
+      return { message, section, opens };
+    });
+  });
+
   /** How close to the bottom (px) the scroll gets before asking for more. */
   const LOAD_MORE_THRESHOLD = 300;
 
@@ -227,7 +241,7 @@
     {#if messages.length === 0}
       <p class="empty">No Messages</p>
     {:else}
-      {#each messages as message (message.id)}
+      {#each rows as { message, section, opens } (message.id)}
         {@const color = accountColors[message.accountId] ?? null}
         {@const offset = swipeId === message.id ? swipeOffset : 0}
         {@const stripAction =
@@ -236,6 +250,12 @@
             : offset > 0
               ? swipeActions.right
               : "none"}
+        {#if opens}
+          <!-- aria-hidden: every row already carries its date, and a
+               listbox's children must be options — the header is a purely
+               visual landmark. -->
+          <div class="section" aria-hidden="true">{section}</div>
+        {/if}
         <!-- svelte-ignore a11y_no_static_element_interactions
              — the pointer handlers implement the swipe gesture; keyboard
              users act on rows through the buttons and shortcuts instead. -->
@@ -371,6 +391,23 @@
   .empty {
     margin: auto;
     color: var(--text-tertiary);
+  }
+
+  /* Sticky date-section header. z-index lifts it above the rows' relative-
+     positioned buttons, which would otherwise paint over it in DOM order. */
+  .section {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    flex-shrink: 0;
+    padding: 5px 16px 4px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--bg-window);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
   }
 
   /* Backfill progress: a quiet strip pinned under the list, gone once the
