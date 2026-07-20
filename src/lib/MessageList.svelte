@@ -512,8 +512,11 @@
     }
   }
 
-  /* Sticky date-section header. z-index lifts it above the rows' relative-
-     positioned buttons, which would otherwise paint over it in DOM order. */
+  /* Sticky date-section header: a filled full-width band, Apple Mail
+     style. The background must stay opaque (--bg-sidebar, not a
+     translucent tint) or rows would show through while scrolling under
+     it. z-index lifts it above the rows' relative-positioned buttons,
+     which would otherwise paint over it in DOM order. */
   .section {
     position: sticky;
     top: 0;
@@ -521,10 +524,10 @@
     flex-shrink: 0;
     padding: 5px 16px 4px;
     border-bottom: 1px solid var(--hairline);
-    background: var(--bg-window);
+    background: var(--bg-sidebar);
     font-size: 10.5px;
     font-weight: 600;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.07em;
     text-transform: uppercase;
     color: var(--text-secondary);
   }
