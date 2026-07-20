@@ -84,6 +84,10 @@
       .map((method) => method.toUpperCase()),
   );
 
+  // Hides the trust banner for this card instance only — reopening the
+  // message shows it again; a warning is not something to accept forever.
+  let trustDismissed = $state(false);
+
   // Saving pulls the bytes from the server (they are never cached), so the
   // chips lock while a fetch is in flight and errors surface inline.
   let savingAttachments = $state(false);
@@ -205,6 +209,45 @@
 </script>
 
 <section class="card" class:last>
+  {#if expanded && !trustDismissed && (shown?.senderAnomaly || failedChecks.length > 0)}
+    <!-- Full-width strip above the header; .card's overflow:hidden clips it
+         to the rounded corners. Dismissal is per card instance only — the
+         warning returns on the next open, it is not "accept forever". -->
+    <div class="trust-banner" role="alert">
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        aria-hidden="true"
+      >
+        <path d="M10 3 1.8 16.5h16.4L10 3Z" stroke-linejoin="round" />
+        <path d="M10 8.4v3.4" stroke-linecap="round" />
+        <circle cx="10" cy="14.1" r="0.4" fill="currentColor" stroke="none" />
+      </svg>
+      <span class="trust-lines">
+        {#if shown?.senderAnomaly}
+          <span title="Usually writes from {shown.senderAnomaly.usualEmail}">
+            {shown.senderAnomaly.name} does not usually use this email address.
+          </span>
+        {/if}
+        {#if failedChecks.length > 0}
+          <span>
+            This message failed {failedChecks.join(", ")} authentication.
+          </span>
+        {/if}
+      </span>
+      <button
+        class="trust-dismiss"
+        aria-label="Dismiss warning"
+        onclick={() => (trustDismissed = true)}
+      >
+        ×
+      </button>
+    </div>
+  {/if}
   <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events
        — the row is a large toggle target like the design's; keyboard users
        reach the same state through the sender-name button inside it. -->
@@ -251,34 +294,6 @@
 
   {#if expanded}
     <div class="content">
-      {#if shown?.senderAnomaly || failedChecks.length > 0}
-        <div class="trust-banner" role="alert">
-          <svg
-            width="13"
-            height="13"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              d="M10 1.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17Zm-.9 4h1.8v6.2H9.1V5.5Zm.9 9.9a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2Z"
-            />
-          </svg>
-          <span class="trust-lines">
-            {#if shown?.senderAnomaly}
-              <span title="Usually writes from {shown.senderAnomaly.usualEmail}">
-                {shown.senderAnomaly.name} does not usually use this email
-                address.
-              </span>
-            {/if}
-            {#if failedChecks.length > 0}
-              <span>
-                This message failed {failedChecks.join(", ")} authentication.
-              </span>
-            {/if}
-          </span>
-        </div>
-      {/if}
       {#if shown && shown.attachments.length > 0}
         <div class="atts-label">
           <svg
@@ -647,17 +662,17 @@
     color: #d9302c;
   }
 
+  /* Amber, not red: "unusual, look twice", not "confirmed malicious". */
   .trust-banner {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-top: 12px;
-    padding: 6px 12px;
-    border: 1px solid rgba(217, 48, 44, 0.25);
-    border-radius: 8px;
-    background: rgba(217, 48, 44, 0.08);
+    gap: 9px;
+    padding: 8px 14px;
+    background: rgba(178, 134, 14, 0.09);
+    border-bottom: 1px solid rgba(178, 134, 14, 0.28);
     font-size: 12px;
-    color: #d9302c;
+    font-weight: 600;
+    color: #9c7c10;
   }
 
   .trust-banner svg {
@@ -668,6 +683,22 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  .trust-dismiss {
+    margin-left: auto;
+    padding: 0 2px;
+    border: none;
+    background: none;
+    font-size: 15px;
+    line-height: 1;
+    color: inherit;
+    opacity: 0.7;
+    cursor: pointer;
+  }
+
+  .trust-dismiss:hover {
+    opacity: 1;
   }
 
   .remote-banner {

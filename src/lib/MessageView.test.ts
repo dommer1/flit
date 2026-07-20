@@ -466,3 +466,23 @@ it("stays silent on passing or unknown authentication", async () => {
   expect(screen.queryByText(/authentication/)).not.toBeInTheDocument();
   expect(screen.queryByText(/does not usually use/)).not.toBeInTheDocument();
 });
+
+it("dismisses the trust banner via its close button", async () => {
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    1: body({
+      text: "hello",
+      senderAnomaly: { name: "Alice", usualEmail: "alice@example.com" },
+    }),
+  });
+
+  renderView();
+  await screen.findByText(/does not usually use this email address/);
+
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Dismiss warning" }),
+  );
+
+  expect(
+    screen.queryByText(/does not usually use this email address/),
+  ).not.toBeInTheDocument();
+});
