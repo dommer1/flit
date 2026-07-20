@@ -268,6 +268,77 @@ it("dots a read representative whose conversation is unread elsewhere", () => {
   expect(row.querySelector(".dot")).not.toBeNull();
 });
 
+// Pull-to-refresh: upward wheel pulses on the list itself while at the top.
+
+it("starts a refresh once a deep pull at the top settles", async () => {
+  const onRefresh = vi.fn();
+  renderList({ onRefresh });
+  const list = screen.getByRole("listbox");
+
+  await swipe(list, 0, -80);
+  await swipe(list, 0, -80);
+  expect(onRefresh).not.toHaveBeenCalled(); // fingers still down
+
+  vi.advanceTimersByTime(200);
+  expect(onRefresh).toHaveBeenCalledOnce();
+});
+
+it("arms the hint only past the trigger line", async () => {
+  renderList({ onRefresh: vi.fn() });
+  const list = screen.getByRole("listbox");
+
+  expect(screen.queryByText(/refresh/)).toBeNull();
+  await swipe(list, 0, -80); // 40px of pull — short of the trigger
+  expect(screen.getByText("Pull to refresh")).toBeInTheDocument();
+  await swipe(list, 0, -80);
+  expect(screen.getByText("Release to refresh")).toBeInTheDocument();
+  vi.advanceTimersByTime(200); // release, don't leak the timer
+});
+
+it("fires nothing when the pull stops short of the trigger", async () => {
+  const onRefresh = vi.fn();
+  renderList({ onRefresh });
+
+  await swipe(screen.getByRole("listbox"), 0, -80);
+  vi.advanceTimersByTime(200);
+
+  expect(onRefresh).not.toHaveBeenCalled();
+});
+
+it("ignores upward wheels while the list is scrolled down", async () => {
+  const onRefresh = vi.fn();
+  renderList({ onRefresh });
+  const list = screen.getByRole("listbox");
+  list.scrollTop = 100;
+
+  await swipe(list, 0, -300);
+  vi.advanceTimersByTime(200);
+
+  expect(onRefresh).not.toHaveBeenCalled();
+});
+
+it("shows a checking indicator and swallows pulls while refreshing", async () => {
+  const onRefresh = vi.fn();
+  renderList({ onRefresh, refreshing: true });
+
+  expect(screen.getByText(/Checking for new mail/)).toBeInTheDocument();
+
+  await swipe(screen.getByRole("listbox"), 0, -300);
+  vi.advanceTimersByTime(200);
+  expect(onRefresh).not.toHaveBeenCalled();
+});
+
+it("leaves horizontal row swipes out of the pull", async () => {
+  const onRefresh = vi.fn();
+  renderList({ onRefresh, onArchive: vi.fn() });
+
+  // A row swipe bubbles to the list — dominant deltaX must not pull.
+  await swipe(screen.getByRole("option", { name: /Alice/ }), 120, -20);
+  vi.advanceTimersByTime(200);
+
+  expect(onRefresh).not.toHaveBeenCalled();
+});
+
 /** A view status: 500 of 10000 messages cached, 800 rows listable. */
 function status(overrides: Record<string, unknown> = {}) {
   return {

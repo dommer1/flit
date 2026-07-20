@@ -1,5 +1,6 @@
 <script lang="ts">
   import { formatListDate, sectionFor, senderName } from "./format";
+  import { accumulatePull, shouldRefresh } from "./pullRefresh";
   import {
     accumulateOffset,
     actionFor,
@@ -29,6 +30,8 @@
     onReply,
     status = null,
     onLoadMore,
+    onRefresh,
+    refreshing = false,
   }: {
     title: string;
     messages: MessageHeader[];
@@ -51,6 +54,10 @@
     /** Ask the parent to reveal more rows — fired near the list's bottom
      * while more rows exist than are loaded. */
     onLoadMore?: () => void;
+    /** A pull past the top released deep enough — check for new mail. */
+    onRefresh?: () => void;
+    /** The pull's refresh is in flight — pins the indicator open. */
+    refreshing?: boolean;
   } = $props();
 
   /** Strip color + label for each swipe action ("none" never renders). */
@@ -168,6 +175,35 @@
     else if (action === "reply") onReply?.(message.id);
   }
 
+  // Pull-to-refresh: vertical wheel pulses past the top open an indicator
+  // drawer above the list; releasing deep enough asks the parent to sync.
+  let pullDepth = $state(0);
+  let pullTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Drawer height (px) while the refresh runs — one comfortable row. */
+  const REFRESH_HEIGHT = 34;
+
+  function handlePullWheel(event: WheelEvent) {
+    if (!onRefresh || refreshing) return;
+    // Dominantly horizontal pulses belong to the row swipes.
+    if (isHorizontal(event.deltaX, event.deltaY)) return;
+    // Engage only when already at the very top and moving further up; once
+    // engaged, keep the gesture until it settles so it can also ease back.
+    if (pullDepth === 0 && ((listEl?.scrollTop ?? 0) > 0 || event.deltaY >= 0))
+      return;
+    event.preventDefault();
+    pullDepth = accumulatePull(pullDepth, event.deltaY);
+    // Same trick as the row swipes: wheel streams have no end event — a
+    // quiet gap between trackpad pulses means the fingers lifted.
+    clearTimeout(pullTimer);
+    pullTimer = setTimeout(settlePull, 120);
+  }
+
+  function settlePull() {
+    if (shouldRefresh(pullDepth)) onRefresh?.();
+    // Collapse either way — a triggered refresh reopens via `refreshing`.
+    pullDepth = 0;
+  }
+
   let unreadCount = $derived(
     status?.unread ?? messages.filter((m) => !m.read).length,
   );
@@ -231,12 +267,44 @@
     </p>
   </header>
 
+  <!-- Always mounted so the drawer's height can animate open and closed;
+       .pulling turns the transition off to track the fingers with no lag. -->
+  <div
+    class="pull"
+    class:pulling={pullDepth > 0 && !refreshing}
+    style:height={`${refreshing ? REFRESH_HEIGHT : pullDepth}px`}
+    aria-live="polite"
+  >
+    {#if refreshing}
+      <span class="pull-spinner" aria-hidden="true"></span>
+      <span>Checking for new mail…</span>
+    {:else if pullDepth > 0}
+      <svg
+        class="pull-arrow"
+        class:armed={shouldRefresh(pullDepth)}
+        viewBox="0 0 20 20"
+        width="12"
+        height="12"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.7"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M10 4v12m0 0 5-5m-5 5-5-5" />
+      </svg>
+      <span>{shouldRefresh(pullDepth) ? "Release to refresh" : "Pull to refresh"}</span>
+    {/if}
+  </div>
+
   <div
     class="list"
     role="listbox"
     aria-label="Messages"
     bind:this={listEl}
     onscroll={handleScroll}
+    onwheel={handlePullWheel}
   >
     {#if messages.length === 0}
       <p class="empty">No Messages</p>
@@ -391,6 +459,49 @@
   .empty {
     margin: auto;
     color: var(--text-tertiary);
+  }
+
+  /* Pull-to-refresh drawer between the header and the list. */
+  .pull {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    overflow: hidden;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    transition: height 0.18s ease;
+  }
+
+  .pull.pulling {
+    transition: none;
+  }
+
+  /* The arrow flips once the pull is deep enough to fire on release. */
+  .pull-arrow {
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+  }
+
+  .pull-arrow.armed {
+    transform: rotate(180deg);
+  }
+
+  .pull-spinner {
+    flex-shrink: 0;
+    width: 11px;
+    height: 11px;
+    border: 1.5px solid var(--hairline);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: pull-spin 0.7s linear infinite;
+  }
+
+  @keyframes pull-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   /* Sticky date-section header. z-index lifts it above the rows' relative-
