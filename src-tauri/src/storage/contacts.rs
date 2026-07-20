@@ -175,6 +175,18 @@ pub async fn sender_anomaly(
     {
         return Ok(None);
     }
+    // why a global lookup, not scoped to the name: how familiar the ADDRESS
+    // is must not depend on which name it was last stored under — names
+    // drift ("Ann", "Ann Boe", "Ann, Corp s.r.o."), and an address seen
+    // hundreds of times is trusted under any of them.
+    let this_count: i64 = sqlx::query_scalar("SELECT seen_count FROM contacts WHERE email = ?")
+        .bind(&email)
+        .fetch_optional(pool)
+        .await?
+        .unwrap_or(0);
+    if this_count > NEW_MAX {
+        return Ok(None);
+    }
     // Every address this display name has appeared with, busiest first.
     let rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT email, seen_count FROM contacts
@@ -184,17 +196,11 @@ pub async fn sender_anomaly(
     .bind(&name)
     .fetch_all(pool)
     .await?;
-    let this_count = rows
-        .iter()
-        .find(|(e, _)| e.eq_ignore_ascii_case(&email))
-        .map_or(0, |(_, count)| *count);
     match rows.iter().find(|(e, _)| !e.eq_ignore_ascii_case(&email)) {
-        Some((usual_email, count)) if *count >= FAMILIAR_MIN && this_count <= NEW_MAX => {
-            Ok(Some(SenderAnomaly {
-                name,
-                usual_email: usual_email.clone(),
-            }))
-        }
+        Some((usual_email, count)) if *count >= FAMILIAR_MIN => Ok(Some(SenderAnomaly {
+            name,
+            usual_email: usual_email.clone(),
+        })),
         _ => Ok(None),
     }
 }
@@ -454,6 +460,23 @@ mod tests {
             None
         );
         assert_eq!(sender_anomaly(&pool, "", &[]).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn an_established_address_never_warns_even_under_a_stale_name() {
+        let pool = test_pool().await;
+        // A shared company display name is busy on one address…
+        seen(&pool, "Gavaplast s.r.o. <reklamacie@gavaplast.sk>", 5).await;
+        // …while the sender's address is well known too, but stored under
+        // his personal name (older mail carried a different From form).
+        seen(&pool, "Matúš Gašpárek <m.gasparek@gavaplast.sk>", 5).await;
+
+        // How familiar the address is must not depend on the name it was
+        // last stored under — this exact case false-alarmed in the wild.
+        let anomaly = sender_anomaly(&pool, "Gavaplast s.r.o. <m.gasparek@gavaplast.sk>", &[])
+            .await
+            .unwrap();
+        assert_eq!(anomaly, None);
     }
 
     #[tokio::test]
