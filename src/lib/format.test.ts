@@ -3,6 +3,7 @@ import {
   formatFileSize,
   formatFullDate,
   formatListDate,
+  sectionFor,
   senderInitials,
   senderName,
 } from "./format";
@@ -74,6 +75,60 @@ describe("formatListDate", () => {
 
   it("returns the raw string for unparseable dates", () => {
     expect(formatListDate("not a date", now)).toBe("not a date");
+  });
+});
+
+describe("sectionFor", () => {
+  // now is Thursday 9 July 2026 — the current (Monday-start) week began
+  // Mon 6 July, the previous week ran Mon 29 June – Sun 5 July.
+  it("groups today's messages under Today", () => {
+    expect(sectionFor("2026-07-09T00:01:00", now)).toBe("Today");
+  });
+
+  it("puts future-dated messages (clock skew) under Today too", () => {
+    expect(sectionFor("2026-07-10T09:00:00", now)).toBe("Today");
+  });
+
+  it("groups the previous day under Yesterday", () => {
+    expect(sectionFor("2026-07-08T23:59:00", now)).toBe("Yesterday");
+  });
+
+  it("groups earlier days of the current week under This Week", () => {
+    expect(sectionFor("2026-07-06T00:00:00", now)).toBe("This Week");
+    expect(sectionFor("2026-07-07T12:00:00", now)).toBe("This Week");
+  });
+
+  it("groups the previous calendar week under Last Week", () => {
+    expect(sectionFor("2026-07-05T23:59:00", now)).toBe("Last Week");
+    expect(sectionFor("2026-06-29T00:00:00", now)).toBe("Last Week");
+  });
+
+  it("keeps Last Week days that spill into the previous month", () => {
+    expect(sectionFor("2026-06-30T10:00:00", now)).toBe("Last Week");
+  });
+
+  it("groups current-month days older than last week under This Month", () => {
+    // Tuesday 28 July 2026: last week ran 20–26 July, so 10 July is left
+    // for the month bucket.
+    const lateJuly = new Date(2026, 6, 28, 15, 0);
+    expect(sectionFor("2026-07-10T09:00:00", lateJuly)).toBe("This Month");
+  });
+
+  it("labels older months of the current year with month and year", () => {
+    const expected = new Intl.DateTimeFormat(undefined, {
+      month: "long",
+      year: "numeric",
+    }).format(new Date(2026, 4, 8));
+    expect(sectionFor("2026-05-08T19:51:00", now)).toBe(expected);
+  });
+
+  it("labels previous years with the year alone", () => {
+    expect(sectionFor("2025-12-31T23:59:00", now)).toBe("2025");
+    expect(sectionFor("2024-01-05T08:00:00", now)).toBe("2024");
+  });
+
+  it("falls back to Unknown for unparseable dates", () => {
+    expect(sectionFor("not a date", now)).toBe("Unknown");
   });
 });
 
