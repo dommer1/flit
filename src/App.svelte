@@ -12,6 +12,7 @@
     listAliases,
     listMailboxes,
     listMessages,
+    listThread,
     listScheduled,
     moveMessage,
     moveThread,
@@ -223,7 +224,22 @@
 
   function handleSwipeReply(id: number) {
     const message = messages.find((m) => m.id === id);
-    if (message) openDraftWithBody("reply", message);
+    if (message) void openDraftOnLatest("reply", message);
+  }
+
+  // why resolve first: a list row only represents the newest message in the
+  // open folder — after my own reply (filed in Sent) the conversation's true
+  // latest message lives elsewhere, and that's the one a follow-up quotes.
+  // listThread is a local cache hit; on failure the row itself still works.
+  async function openDraftOnLatest(kind: DraftKind, message: MessageHeader) {
+    let target = message;
+    try {
+      const thread = await listThread(message.id);
+      target = thread[thread.length - 1] ?? message;
+    } catch (err) {
+      console.error("failed to resolve the thread's latest message:", err);
+    }
+    openDraftWithBody(kind, target);
   }
 
   // The account's archive folder wire name; Gmail has no \Archive, so its
@@ -423,9 +439,9 @@
     );
   }
 
-  // The toolbar's reply/forward buttons act on the open message.
+  // The toolbar's reply/forward buttons act on the open conversation.
   function openDraftFromSelection(kind: DraftKind) {
-    if (selectedMessage) openDraftWithBody(kind, selectedMessage);
+    if (selectedMessage) void openDraftOnLatest(kind, selectedMessage);
   }
 
   // Move to targets for the toolbar menu: the selection's account folders,

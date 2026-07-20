@@ -293,6 +293,8 @@ beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
   vi.mocked(api.listMailboxes).mockImplementation(defaultListMailboxes);
+  // Same leak-guard: tests override listThread with mockResolvedValue.
+  vi.mocked(api.listThread).mockResolvedValue([]);
 });
 
 it("asks for the first page of rows, not the whole mailbox", async () => {
@@ -482,6 +484,39 @@ it("opens a reply draft from the account the message arrived on", async () => {
       },
     }),
   );
+});
+
+it("toolbar reply acts on the thread's latest message, not the list row", async () => {
+  // The row header only represents the newest message in the open folder —
+  // after my own reply (filed in Sent) the conversation's true latest
+  // message is the sent one, and that's what a follow-up must quote.
+  const ownReply: MessageHeader = {
+    ...allMessages[0],
+    id: 50,
+    mailbox: "[Gmail]/Odoslan&AOk-",
+    from: "domco@example.com",
+    to: "Alice <alice@example.com>",
+    subject: "Re: Weekend plans",
+    messageId: "own-reply@x",
+    date: "2026-07-09T10:00:00Z",
+  };
+  vi.mocked(api.listThread).mockResolvedValue([allMessages[0], ownReply]);
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  await screen.findByRole("heading", { name: "Weekend plans" });
+  await screen.findByText("2 messages");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+  await waitFor(() =>
+    expect(api.openCompose).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "Alice <alice@example.com>",
+        inReplyTo: "own-reply@x",
+      }),
+    ),
+  );
+  expect(api.getMessageQuote).toHaveBeenCalledWith(50);
 });
 
 it("opens a reply-all draft without the receiving account's address", async () => {
