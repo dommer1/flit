@@ -153,16 +153,33 @@ function matchAlias(
 }
 
 /** Reply goes from the account the message arrived on — and from the alias
- * it was addressed to, when one matches — to its sender. */
+ * it was addressed to, when one matches — to its sender. Replying to my own
+ * sent message is a follow-up: it goes to the original recipients (mailing
+ * myself would be useless) and keeps the identity it originally left from. */
 export function replyDraft(
   message: MessageHeader,
   quote: MessageQuote | null,
   aliases: Alias[] = [],
+  ownEmail = "",
 ): OutgoingMessage {
+  const fromAddress = senderAddress(message.from).toLowerCase();
+  const sentFromAlias = aliases.find(
+    (alias) =>
+      alias.accountId === message.accountId &&
+      alias.email.toLowerCase() === fromAddress,
+  );
+  const isOwn =
+    fromAddress === ownEmail.trim().toLowerCase() ||
+    sentFromAlias !== undefined;
   return {
     accountId: message.accountId,
-    aliasId: matchAlias(message, aliases)?.id,
-    to: senderAddress(message.from),
+    aliasId: isOwn ? sentFromAlias?.id : matchAlias(message, aliases)?.id,
+    // why the fallback: an own message with an empty To line would leave the
+    // draft unsendable — degrade to replying to myself, like replyAllDraft.
+    to:
+      isOwn && message.to.trim() !== ""
+        ? message.to
+        : senderAddress(message.from),
     subject: replySubject(message.subject),
     // The editor opens empty; the quote rides separately and is merged
     // into body/bodyHtml at save/send time (composePlainBody/composeHtmlBody).

@@ -414,7 +414,7 @@
       accounts.find((a) => a.id === message.accountId)?.email ?? "";
     const draft =
       kind === "reply"
-        ? replyDraft(message, quote, aliases)
+        ? replyDraft(message, quote, aliases, ownEmail)
         : kind === "reply-all"
           ? replyAllDraft(message, quote, ownEmail, aliases)
           : forwardDraft(message, bodyText, aliases);

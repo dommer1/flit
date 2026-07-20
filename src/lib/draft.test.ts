@@ -145,6 +145,43 @@ describe("replyDraft", () => {
   });
 });
 
+describe("reply to own message", () => {
+  // A follow-up on my own sent mail: account 2's address is hello@vocalio.sk.
+  const own = {
+    ...message,
+    from: "Me <hello@vocalio.sk>",
+    to: "Alice Doe <alice@example.com>, bob@example.com",
+  };
+
+  it("addresses the original recipients instead of myself", () => {
+    const draft = replyDraft(own, null, [], "hello@vocalio.sk");
+    expect(draft.to).toBe("Alice Doe <alice@example.com>, bob@example.com");
+  });
+
+  it("compares my address case-insensitively", () => {
+    const draft = replyDraft(own, null, [], "HELLO@vocalio.sk");
+    expect(draft.to).toBe("Alice Doe <alice@example.com>, bob@example.com");
+  });
+
+  it("treats mail sent from my alias as my own and keeps that identity", () => {
+    const fromAlias = { ...own, from: "Igor <igor@vocalio.sk>" };
+    const draft = replyDraft(fromAlias, null, aliases, "hello@vocalio.sk");
+    expect(draft.to).toBe("Alice Doe <alice@example.com>, bob@example.com");
+    expect(draft.aliasId).toBe(10);
+  });
+
+  it("ignores another account's alias when judging ownership", () => {
+    const foreign = { ...own, from: "other@example.com" };
+    const draft = replyDraft(foreign, null, aliases, "hello@vocalio.sk");
+    expect(draft.to).toBe("other@example.com");
+  });
+
+  it("falls back to the sender when my message had no recipients", () => {
+    const draft = replyDraft({ ...own, to: "" }, null, [], "hello@vocalio.sk");
+    expect(draft.to).toBe("hello@vocalio.sk");
+  });
+});
+
 describe("replyAllDraft", () => {
   const group: MessageHeader = {
     ...message,
