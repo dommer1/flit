@@ -920,6 +920,41 @@ it("restores the message when trashing fails on the server", async () => {
   );
 });
 
+it("keeps an evicted row out of the list while the server move is pending", async () => {
+  // The archive hangs server-side (TLS + LOGIN + MOVE can take seconds).
+  let finishArchive!: () => void;
+  vi.mocked(api.archiveMessage).mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finishArchive = resolve;
+      }),
+  );
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  await screen.findByRole("heading", { name: "Weekend plans" });
+
+  await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+  expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
+
+  // A background sync lands mid-move while the cache still holds the row.
+  // The new arrival proves the refresh completed — the evicted row must
+  // not ride back in with it.
+  currentMessages = [
+    ...allMessages,
+    { ...allMessages[0], id: 3, subject: "Brand new" },
+  ];
+  messagesChanged?.();
+  await screen.findByText("Brand new");
+  expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
+
+  // Server confirms: the backend drops the cached row, the follow-up
+  // refresh keeps the list in its final state.
+  currentMessages = currentMessages.filter((m) => m.id !== 1);
+  finishArchive();
+  await screen.findByText("Brand new");
+  expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
+});
+
 it("trashes a row when the left swipe is configured to trash", async () => {
   currentSwipeActions = { left: "trash", right: "reply" };
   render(App);

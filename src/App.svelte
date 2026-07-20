@@ -140,9 +140,14 @@
     );
   }
 
-  // Move to Trash, then step the selection to the neighbour the removed
-  // message leaves behind (like Apple Mail). The backend emits
-  // messages-changed once the server confirms, dropping the row from the list.
+  // Rows optimistically dropped whose server move is still in flight. The
+  // backend deletes a cached row only after the server confirms the move,
+  // so a background messages-changed landing mid-move would resurrect the
+  // row via refreshMessages — the filter there keeps it out until the
+  // action settles. Plain Set, not $state: nothing renders from it, it is
+  // only read inside refreshMessages, which runs after every mutation.
+  const pendingEvictions = new Set<number>();
+
   // Optimistically drop a message from the list and run `action` (trash /
   // archive) on the server, so it feels instant. Selection steps to the
   // neighbour it leaves behind; a server failure re-queries to bring the
@@ -152,13 +157,22 @@
       messages.map((m) => m.id),
       id,
     );
+    pendingEvictions.add(id);
     messages = messages.filter((m) => m.id !== id);
     if (next === null) selectedMessageId = null;
     else selectMessage(next);
-    void action(id).catch((err: unknown) => {
-      console.error("message action failed:", err);
-      void refreshMessages();
-    });
+    void action(id).then(
+      // Success needs no refresh of its own: the backend deleted the row
+      // before resolving and emits messages-changed, which refreshes.
+      () => pendingEvictions.delete(id),
+      (err: unknown) => {
+        console.error("message action failed:", err);
+        // why: un-pend before the refresh — the row is still cached after
+        // a failure and must come back into the list.
+        pendingEvictions.delete(id);
+        void refreshMessages();
+      },
+    );
   }
 
   // Thread rows (a grouped conversation) act on every member in the
@@ -487,10 +501,17 @@
   // search active, "the current view" is the result list (across all folders,
   // like Gmail), so a sync landing mid-search refreshes the hits instead of
   // yanking the full list back.
+  // why filter at assignment (after the await): a refresh already in
+  // flight when an eviction starts still applies the filter when it lands,
+  // so even a stale query cannot bring the row back.
+  function withoutPending(list: MessageHeader[]): MessageHeader[] {
+    return list.filter((m) => !pendingEvictions.has(m.id));
+  }
+
   async function refreshMessages() {
     const query = searchQuery.trim();
     if (query) {
-      messages = await searchMessages(selectedAccountId, query);
+      messages = withoutPending(await searchMessages(selectedAccountId, query));
       // Search results are their own universe — whole-view totals and the
       // load-more trigger don't apply to them.
       listStatus = null;
@@ -500,7 +521,7 @@
       listMessages(selectedAccountId, selectedMailbox, visibleLimit),
       viewStatus(selectedAccountId, selectedMailbox),
     ]);
-    messages = list;
+    messages = withoutPending(list);
     listStatus = status;
   }
 
