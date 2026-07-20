@@ -66,7 +66,7 @@
   let aliases = $state<Alias[]>([]);
   let lastError = $state<string | null>(null);
   let tab = $state<
-    "accounts" | "signatures" | "notifications" | "swipes" | "privacy"
+    "general" | "accounts" | "signatures" | "notifications" | "swipes" | "privacy"
   >("accounts");
   let policy = $state<RemoteImagePolicy>("ask");
   let swipes = $state<SwipeActions>(DEFAULT_SWIPE_ACTIONS);
@@ -230,6 +230,13 @@
   <header>
     <button
       class="tab"
+      class:active={tab === "general"}
+      onclick={() => (tab = "general")}
+    >
+      General
+    </button>
+    <button
+      class="tab"
       class:active={tab === "accounts"}
       onclick={() => (tab = "accounts")}
     >
@@ -265,7 +272,28 @@
     </button>
   </header>
 
-  {#if tab === "accounts"}
+  {#if tab === "general"}
+    <section class="content">
+      <div class="section-label">Conversations</div>
+      <div class="group">
+        <div class="row">
+          <label class="row-label" for="thread-order">Message order</label>
+          <select
+            id="thread-order"
+            value={threadOrder}
+            onchange={(e) =>
+              void selectThreadOrder(e.currentTarget.value as ThreadOrder)}
+          >
+            <option value="newestLast">Newest at the bottom</option>
+            <option value="newestFirst">Newest on top</option>
+          </select>
+        </div>
+      </div>
+      <p class="explain">
+        How messages inside a conversation are ordered when you open it.
+      </p>
+    </section>
+  {:else if tab === "accounts"}
     <AccountsPane
       {accounts}
       {aliases}
@@ -303,21 +331,6 @@
             </select>
           </div>
         {/each}
-      </div>
-      <div class="section-label">Conversations</div>
-      <div class="group">
-        <div class="row">
-          <label class="row-label" for="thread-order">Message order</label>
-          <select
-            id="thread-order"
-            value={threadOrder}
-            onchange={(e) =>
-              void selectThreadOrder(e.currentTarget.value as ThreadOrder)}
-          >
-            <option value="newestLast">Newest at the bottom</option>
-            <option value="newestFirst">Newest on top</option>
-          </select>
-        </div>
       </div>
       <p class="explain">
         What a two-finger swipe on a message row does. Pick None to turn a

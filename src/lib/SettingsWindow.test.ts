@@ -224,6 +224,8 @@ it("shows the stored swipe actions on the swipes tab", async () => {
 
   expect(await screen.findByLabelText("Swipe left")).toHaveValue("trash");
   expect(screen.getByLabelText("Swipe right")).toHaveValue("reply");
+  // conversation order lives on the General tab, not here
+  expect(screen.queryByLabelText("Message order")).not.toBeInTheDocument();
 });
 
 it("saves a swipe action change", async () => {
@@ -239,9 +241,9 @@ it("saves a swipe action change", async () => {
   });
 });
 
-it("saves the conversation order change", async () => {
+it("saves the conversation order change on the General tab", async () => {
   render(SettingsWindow);
-  await fireEvent.click(screen.getByRole("button", { name: "Swipes" }));
+  await fireEvent.click(screen.getByRole("button", { name: "General" }));
   const order = await screen.findByLabelText("Message order");
   expect(order).toHaveValue("newestLast");
 
