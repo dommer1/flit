@@ -385,6 +385,14 @@
                       />
                     </svg>
                   {/if}
+                  {#if message.threadCount > 1}
+                    <span
+                      class="thread-count"
+                      title="{message.threadCount} messages in conversation"
+                    >
+                      {message.threadCount}
+                    </span>
+                  {/if}
                   {#if color}
                     <span
                       class="account-dot"
@@ -692,6 +700,22 @@
   }
 
   .selected .end .clip {
+    color: var(--accent-text);
+  }
+
+  /* Conversation size badge, e.g. "3" — a quiet outline, per the design. */
+  .thread-count {
+    flex-shrink: 0;
+    padding: 0 5px;
+    border: 1px solid currentColor;
+    border-radius: 9px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 14px;
+    color: var(--text-secondary);
+  }
+
+  .selected .thread-count {
     color: var(--accent-text);
   }
 

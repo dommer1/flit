@@ -253,6 +253,21 @@ it("shows a paperclip on rows whose conversation has attachments", () => {
   expect(without.querySelector(".clip")).toBeNull();
 });
 
+it("badges a conversation row with its message count", () => {
+  renderList({
+    messages: [
+      { ...header(1, "Alice <alice@example.com>", true), threadCount: 3 },
+      header(2, "Bob <bob@example.com>", true),
+    ],
+  });
+
+  const thread = screen.getByRole("option", { name: /Alice/ });
+  expect(thread.textContent).toContain("3");
+  // A single message shows no count badge.
+  const single = screen.getByRole("option", { name: /Bob/ });
+  expect(single.querySelector(".thread-count")).toBeNull();
+});
+
 it("dots a read representative whose conversation is unread elsewhere", () => {
   renderList({
     messages: [
