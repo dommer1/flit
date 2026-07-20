@@ -16,6 +16,7 @@ const message: MessageHeader = {
   references: "",
   threadCount: 1,
   threadUnread: false,
+  isDraft: false,
   subject: "Weekend plans",
   snippet: "Hey",
   date: "2026-07-07T09:15:00Z",

@@ -110,14 +110,19 @@
     Object.fromEntries(accounts.map((a) => [a.id, a.email])),
   );
 
+  // A message living in a Drafts folder is unfinished work — opening it
+  // resumes editing in a compose window instead of a reading view. Used by
+  // the list (drafts folder rows) and the conversation view (draft cards).
+  function editDraft(id: number) {
+    void openServerDraft(id).catch((err: unknown) =>
+      console.error("failed to open draft:", err),
+    );
+  }
+
   function selectMessage(id: number) {
     const message = messages.find((m) => m.id === id);
-    // A message living in a Drafts folder is unfinished work — clicking it
-    // resumes editing in a compose window instead of opening the viewer.
     if (message && isDraft(message)) {
-      void openServerDraft(id).catch((err: unknown) =>
-        console.error("failed to open draft:", err),
-      );
+      editDraft(id);
       return;
     }
     selectedMessageId = id;
@@ -756,6 +761,7 @@
         {accountColors}
         {threadOrder}
         onDraft={openDraftWithBody}
+        onEditDraft={editDraft}
       />
     </section>
   </main>

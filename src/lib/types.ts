@@ -296,8 +296,13 @@ export interface MessageHeader {
   /** Space-joined ancestor Message-IDs — a reply appends messageId to this
    * chain to form its own References header. */
   references: string;
+  /** Whether the message sits in the account's Drafts folder. Only the
+   * conversation query sets it (Draft badge + click-to-edit); list views
+   * derive draft-ness from the mailbox role instead. */
+  isDraft: boolean;
   /** Messages in this row's conversation (all folders except trash, junk
-   * and drafts). Always ≥ 1 in threaded lists; 0 in flat views. */
+   * and drafts — a draft shows in the conversation but is not counted).
+   * Always ≥ 1 in threaded lists; 0 in flat views. */
   threadCount: number;
   /** Whether any message of the conversation is unread. */
   threadUnread: boolean;

@@ -275,7 +275,11 @@
         >
           {senderName(message.from)}
         </button>
-        {#if own}<span class="me">me</span>{/if}
+        {#if message.isDraft}
+          <span class="draft-badge">Draft</span>
+        {:else if own}
+          <span class="me">me</span>
+        {/if}
       </span>
       {#if !expanded}
         <span class="preview">{message.snippet}</span>
@@ -528,6 +532,17 @@
     flex-shrink: 0;
     font-size: 10.5px;
     color: var(--text-secondary);
+  }
+
+  /* Same amber family as the trust banner: "unfinished", not an error. */
+  .draft-badge {
+    flex-shrink: 0;
+    padding: 1px 7px;
+    border-radius: 9px;
+    background: rgba(178, 134, 14, 0.12);
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #9c7c10;
   }
 
   .preview,

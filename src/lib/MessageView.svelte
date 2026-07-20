@@ -10,6 +10,7 @@
     accountColors = {},
     threadOrder = "newestLast",
     onDraft,
+    onEditDraft,
   }: {
     message: MessageHeader | null;
     /** accountId → address; marks a card's sender as "me". */
@@ -20,6 +21,8 @@
     threadOrder?: ThreadOrder;
     /** Per-message reply actions in card footers. */
     onDraft?: (kind: DraftKind, message: MessageHeader) => void;
+    /** A clicked draft card resumes editing in a compose window. */
+    onEditDraft?: (id: number) => void;
   } = $props();
 
   // The whole conversation of the selected row, oldest first. Falls back to
@@ -55,7 +58,7 @@
           // A fresh selection: open the newest message, load all bodies.
           anchorId = id;
           bodies = {};
-          openMessage(thread[thread.length - 1]);
+          openMessage(newestMessage(thread));
           fetchBodies(id);
         } else if (thread.some((entry) => !(entry.id in bodies))) {
           // Same conversation refreshed and grew (a reply just synced in) —
@@ -106,16 +109,35 @@
     );
   }
 
+  /** The newest real message — a trailing draft never auto-opens (it is
+   * edited in a compose window, never read inline). Falls back to the last
+   * entry so a draft-only thread still highlights something. */
+  function newestMessage(entries: MessageHeader[]): MessageHeader {
+    return (
+      [...entries].reverse().find((entry) => !entry.isDraft) ??
+      entries[entries.length - 1]
+    );
+  }
+
   // Display order only — `thread` stays oldest-first everywhere else
   // (newest lookup, default-open logic).
   let displayThread = $derived(
     threadOrder === "newestFirst" ? [...thread].reverse() : thread,
   );
   let newestId = $derived(
-    thread.length > 0 ? thread[thread.length - 1].id : null,
+    thread.length > 0 ? newestMessage(thread).id : null,
+  );
+  // What the header counts: sent/received messages; a draft is not one yet.
+  let messageCount = $derived(
+    thread.filter((entry) => !entry.isDraft).length,
   );
 
   function toggle(entry: MessageHeader) {
+    // Drafts have no reading view — the click resumes editing instead.
+    if (entry.isDraft) {
+      onEditDraft?.(entry.id);
+      return;
+    }
     const next = new Set(expandedIds);
     if (next.has(entry.id)) {
       next.delete(entry.id);
@@ -136,8 +158,8 @@
         <div class="thread-head">
           <h2 class="subject">{message.subject}</h2>
           <span class="count">
-            {thread.length}
-            {thread.length === 1 ? "message" : "messages"}
+            {messageCount}
+            {messageCount === 1 ? "message" : "messages"}
           </span>
         </div>
         {#each displayThread as entry (entry.id)}

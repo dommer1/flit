@@ -54,6 +54,7 @@ const message: MessageHeader = {
   references: "",
   threadCount: 1,
   threadUnread: false,
+  isDraft: false,
   subject: "Weekend plans",
   snippet: "Hey",
   date: "2026-07-07T09:15:00Z",
@@ -418,6 +419,60 @@ it("opens a reply draft for the message whose card action was clicked", async ()
     "reply-all",
     expect.objectContaining({ id: 3 }),
   );
+});
+
+// ── Drafts in the conversation ─────────────────────────────────────────
+
+const conversationWithDraft: MessageHeader[] = [
+  { ...message, id: 1, snippet: "the original", read: true },
+  {
+    ...message,
+    id: 9,
+    from: "Me <me@example.com>",
+    mailbox: "Drafts",
+    snippet: "half-written answer",
+    read: true,
+    isDraft: true,
+  },
+];
+
+const draftBodies = {
+  1: body({ text: "the original in full" }),
+  9: body({ text: "half-written answer in full" }),
+};
+
+it("badges a saved draft and keeps the newest real message open", async () => {
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversationWithDraft);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(draftBodies);
+
+  renderView({ message: { ...message, id: 1 } });
+
+  expect(await screen.findByText("Draft")).toBeInTheDocument();
+  // The newest entry is the draft, but the newest real message auto-opens —
+  // a draft never expands inline, it belongs to the compose editor.
+  expect(screen.getByText("the original in full")).toBeInTheDocument();
+  expect(screen.getByText("half-written answer")).toBeInTheDocument();
+  expect(
+    screen.queryByText("half-written answer in full"),
+  ).not.toBeInTheDocument();
+  // The header counts real messages only — the draft is not sent yet.
+  expect(screen.getByText("1 message")).toBeInTheDocument();
+});
+
+it("opens a clicked draft in the editor instead of expanding its card", async () => {
+  const onEditDraft = vi.fn();
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversationWithDraft);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(draftBodies);
+
+  renderView({ message: { ...message, id: 1 }, onEditDraft });
+  await screen.findByText("half-written answer");
+
+  await fireEvent.click(screen.getByText("half-written answer"));
+
+  expect(onEditDraft).toHaveBeenCalledWith(9);
+  expect(
+    screen.queryByText("half-written answer in full"),
+  ).not.toBeInTheDocument();
 });
 
 it("warns when a familiar sender writes from an unusual address", async () => {
