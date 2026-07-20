@@ -334,7 +334,10 @@
     flex: 1;
     min-width: 0;
     padding: 0 10px;
-    overflow: hidden;
+    /* why clip-x only: overflow: hidden also clipped the Move dropdown, which
+     * hangs below this row; clip the button row horizontally, keep y visible. */
+    overflow-x: clip;
+    overflow-y: visible;
   }
 
   .action {
