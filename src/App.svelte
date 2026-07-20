@@ -501,6 +501,30 @@
     );
   }
 
+  // Pull-to-refresh: the same re-sync, but awaited (unlike startSync) so the
+  // list's drawer can stay open until every account's sync lands.
+  let pullRefreshing = $state(false);
+
+  async function handlePullRefresh() {
+    if (pullRefreshing) return;
+    pullRefreshing = true;
+    const ids =
+      selectedAccountId === null
+        ? accounts.map((a) => a.id)
+        : [selectedAccountId];
+    // why allSettled: one account's dead server must neither hide the other
+    // syncs' results nor leave the drawer spinning forever.
+    const results = await Promise.allSettled(ids.map((id) => syncAccount(id)));
+    results.forEach((result, i) => {
+      if (result.status === "rejected")
+        console.error(
+          `account sync failed for account ${ids[i]}:`,
+          result.reason,
+        );
+    });
+    pullRefreshing = false;
+  }
+
   function handleOpenSettings() {
     void openSettings().catch((err: unknown) =>
       console.error("failed to open settings:", err),
@@ -730,6 +754,8 @@
         onReply={handleSwipeReply}
         status={listStatus}
         onLoadMore={handleLoadMore}
+        onRefresh={handlePullRefresh}
+        refreshing={pullRefreshing}
       />
       <Outbox entries={outbox} onUndo={handleUndo} />
     </section>

@@ -602,6 +602,38 @@ it("syncs accounts in parallel, not one after another", async () => {
   releaseSyncs();
 });
 
+it("pull-to-refresh re-syncs the view and pins the drawer until syncs land", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+  vi.mocked(api.syncAccount).mockClear();
+
+  let releaseSyncs!: () => void;
+  const gate = new Promise<void>((resolve) => (releaseSyncs = resolve));
+  // why mockImplementationOnce: consumed by this pull's two calls, so later
+  // tests fall back to the factory's instantly-resolving sync.
+  const gatedSync = async () => {
+    await gate;
+  };
+  vi.mocked(api.syncAccount)
+    .mockImplementationOnce(gatedSync)
+    .mockImplementationOnce(gatedSync);
+
+  // Two upward pulses past the trigger; the quiet gap after is the release.
+  const list = screen.getByRole("listbox", { name: "Messages" });
+  await fireEvent.wheel(list, { deltaY: -80 });
+  await fireEvent.wheel(list, { deltaY: -80 });
+
+  // The unified inbox is visible — the pull re-syncs every account.
+  await screen.findByText(/Checking for new mail/);
+  expect(api.syncAccount).toHaveBeenCalledWith(1);
+  expect(api.syncAccount).toHaveBeenCalledWith(2);
+
+  releaseSyncs();
+  await waitFor(() =>
+    expect(screen.queryByText(/Checking for new mail/)).toBeNull(),
+  );
+});
+
 it("refreshes the list on messages-changed and keeps the selection", async () => {
   render(App);
   await fireEvent.click(await screen.findByText("Weekend plans"));
