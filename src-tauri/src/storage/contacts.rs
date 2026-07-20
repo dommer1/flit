@@ -12,21 +12,37 @@ use crate::models::{Contact, SenderAnomaly};
 ///
 /// why hand-rolled: the strings were formatted by mail::parse::format_addr
 /// (names never quoted), so splitting on commas is right except when a NAME
-/// contains a comma — then its leading fragment has no '@' and is dropped,
-/// which only costs part of the display name, never the address.
+/// contains a comma ("Novák, Ján <j@x>"). Such a fragment has no address of
+/// its own, so it is held back and rejoined into the name that follows —
+/// names must survive whole, the sender check compares them literally.
 pub fn split_address_list(list: &str) -> Vec<(String, String)> {
-    list.split(',')
-        .filter_map(|segment| {
-            let segment = segment.trim();
-            if let Some((name, rest)) = segment.split_once('<') {
-                let email = rest.trim_end_matches('>').trim();
-                is_plausible_email(email)
-                    .then(|| (name.trim().trim_matches('"').to_string(), email.to_string()))
-            } else {
-                is_plausible_email(segment).then(|| (String::new(), segment.to_string()))
+    let mut out = Vec::new();
+    let mut pending = String::new();
+    for segment in list.split(',') {
+        let segment = segment.trim();
+        if let Some((name, rest)) = segment.split_once('<') {
+            let email = rest.trim_end_matches('>').trim();
+            if is_plausible_email(email) {
+                let name = name.trim().trim_matches('"');
+                let full = if pending.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{pending}, {name}")
+                };
+                out.push((full, email.to_string()));
             }
-        })
-        .collect()
+            pending.clear();
+        } else if is_plausible_email(segment) {
+            out.push((String::new(), segment.to_string()));
+            pending.clear();
+        } else if !segment.is_empty() {
+            if !pending.is_empty() {
+                pending.push_str(", ");
+            }
+            pending.push_str(segment);
+        }
+    }
+    out
 }
 
 /// Loose sanity check — this guards a suggestion list, not delivery.
@@ -197,10 +213,24 @@ mod tests {
                 (String::new(), "bob@example.com".to_string()),
             ]
         );
-        // A comma inside the display name costs its leading fragment only.
+        // Commas inside a display name stay part of it — "surname, firstname"
+        // and "person, company" forms must survive whole, or the sender
+        // check compares half a name (a real false-positive we hit).
         assert_eq!(
             split_address_list("Novák, Ján <jan@example.sk>"),
-            vec![("Ján".to_string(), "jan@example.sk".to_string())]
+            vec![("Novák, Ján".to_string(), "jan@example.sk".to_string())]
+        );
+        assert_eq!(
+            split_address_list(
+                "bob@example.com, Matúš Gašpárek, Gavaplast s.r.o. <m.gasparek@gavaplast.sk>"
+            ),
+            vec![
+                (String::new(), "bob@example.com".to_string()),
+                (
+                    "Matúš Gašpárek, Gavaplast s.r.o.".to_string(),
+                    "m.gasparek@gavaplast.sk".to_string()
+                ),
+            ]
         );
         assert_eq!(split_address_list(""), Vec::new());
         assert_eq!(split_address_list("not an address"), Vec::new());
