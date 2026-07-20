@@ -506,6 +506,9 @@
     /* Snap-back after release; .swiping turns it off so the row follows
        the fingers with no lag. */
     transition: transform 0.18s ease;
+    /* why: keyboard navigation scrollIntoViews the selected row — leave
+       room for the sticky section header (~23px) it would hide under. */
+    scroll-margin-top: 24px;
   }
 
   .swipe-row button.swiping {
