@@ -507,7 +507,11 @@ it("toolbar reply acts on the thread's latest message, not the list row", async 
   render(App);
   await fireEvent.click(await screen.findByText("Weekend plans"));
   await screen.findByRole("heading", { name: "Weekend plans" });
-  await screen.findByText("2 messages");
+  // Wait for the whole thread to load — the older message's preview row
+  // appears only once both messages are in, so Reply targets the newest.
+  await screen.findByText("Are we still on for Saturday?", {
+    selector: ".preview",
+  });
 
   await fireEvent.click(screen.getByRole("button", { name: "Reply" }));
 

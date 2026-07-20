@@ -343,11 +343,11 @@ it("opens the newest message and collapses older ones to preview rows", async ()
   expect(screen.getByText("the original")).toBeInTheDocument();
   expect(screen.getByText("my reply")).toBeInTheDocument();
   expect(screen.queryByText("the original in full")).not.toBeInTheDocument();
-  // Thread header: subject plus the message count.
+  // Thread header shows the subject only — no message-count label.
   expect(
     screen.getByRole("heading", { name: "Weekend plans" }),
   ).toBeInTheDocument();
-  expect(screen.getByText("3 messages")).toBeInTheDocument();
+  expect(screen.queryByText("3 messages")).not.toBeInTheDocument();
   // One bulk call fetched everything; no per-card body fetches.
   expect(api.threadBodies).toHaveBeenCalledWith(3);
   expect(api.getMessageBody).not.toHaveBeenCalled();
@@ -455,8 +455,6 @@ it("badges a saved draft and keeps the newest real message open", async () => {
   expect(
     screen.queryByText("half-written answer in full"),
   ).not.toBeInTheDocument();
-  // The header counts real messages only — the draft is not sent yet.
-  expect(screen.getByText("1 message")).toBeInTheDocument();
 });
 
 it("opens a clicked draft in the editor instead of expanding its card", async () => {

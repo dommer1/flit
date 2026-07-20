@@ -127,10 +127,6 @@
   let newestId = $derived(
     thread.length > 0 ? newestMessage(thread).id : null,
   );
-  // What the header counts: sent/received messages; a draft is not one yet.
-  let messageCount = $derived(
-    thread.filter((entry) => !entry.isDraft).length,
-  );
 
   function toggle(entry: MessageHeader) {
     // Drafts have no reading view — the click resumes editing instead.
@@ -157,10 +153,6 @@
       <div class="stack">
         <div class="thread-head">
           <h2 class="subject">{message.subject}</h2>
-          <span class="count">
-            {messageCount}
-            {messageCount === 1 ? "message" : "messages"}
-          </span>
         </div>
         {#each displayThread as entry (entry.id)}
           <MessageCard
@@ -230,11 +222,5 @@
     color: var(--text-primary);
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .count {
-    flex-shrink: 0;
-    font-size: 12px;
-    color: var(--text-secondary);
   }
 </style>
