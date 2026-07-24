@@ -57,6 +57,18 @@ fn is_plausible_email(value: &str) -> bool {
 /// Record one sighting of every address in `lists` (each a comma-separated
 /// display string) on a message dated `seen_at` (RFC3339, may be empty).
 pub async fn harvest(pool: &SqlitePool, lists: &[&str], seen_at: &str) -> Result<(), AppError> {
+    let mut conn = pool.acquire().await?;
+    harvest_on(&mut conn, lists, seen_at).await
+}
+
+/// why a connection, not the pool: the header upsert calls this inside its
+/// per-batch transaction, so the sightings must ride on that connection and
+/// commit (or roll back) with the batch.
+pub(crate) async fn harvest_on(
+    conn: &mut sqlx::SqliteConnection,
+    lists: &[&str],
+    seen_at: &str,
+) -> Result<(), AppError> {
     for list in lists {
         for (name, email) in split_address_list(list) {
             // why MAX(): sync order is not message order — an old folder
@@ -73,7 +85,7 @@ pub async fn harvest(pool: &SqlitePool, lists: &[&str], seen_at: &str) -> Result
             .bind(&email)
             .bind(&name)
             .bind(seen_at)
-            .execute(pool)
+            .execute(&mut *conn)
             .await?;
         }
     }

@@ -54,8 +54,13 @@ pub async fn upsert_headers(
     mailbox: &str,
     headers: &[FetchedHeader],
 ) -> Result<(), AppError> {
+    // why one transaction: a backfill batch is 500 headers and each header
+    // runs several statements (key lookup, insert, contact sightings).
+    // Autocommit would WAL-sync every single one; one commit per batch is
+    // far cheaper and makes the batch land atomically.
+    let mut tx = pool.begin().await?;
     for header in headers {
-        let thread_key = assign_thread_key(pool, account_id, header).await?;
+        let thread_key = assign_thread_key(&mut tx, account_id, header).await?;
         sqlx::query(
             "INSERT INTO messages
                (account_id, mailbox, uid, uid_validity, from_addr, to_addr, cc_addr, reply_to_addr, bcc_addr, subject, date, snippet, read, has_attachments,
@@ -81,12 +86,12 @@ pub async fn upsert_headers(
         .bind(&header.in_reply_to)
         .bind(header.references.join(" "))
         .bind(&thread_key)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
         // why here: every sync path funnels through this upsert, so one hook
         // keeps the contacts book fed no matter how headers arrive.
-        crate::storage::contacts::harvest(
-            pool,
+        crate::storage::contacts::harvest_on(
+            &mut tx,
             &[
                 &header.from,
                 &header.to,
@@ -98,6 +103,7 @@ pub async fn upsert_headers(
         )
         .await?;
     }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -112,7 +118,7 @@ pub async fn upsert_headers(
 /// catch two replies whose common parent never arrived, but that edge is rare
 /// (Gmail misses it too) and not worth a table scan on every insert.
 pub(crate) async fn assign_thread_key(
-    pool: &SqlitePool,
+    conn: &mut sqlx::SqliteConnection,
     account_id: i64,
     header: &FetchedHeader,
 ) -> Result<Option<String>, AppError> {
@@ -142,7 +148,7 @@ pub(crate) async fn assign_thread_key(
         .bind(reference)
         .bind(account_id)
         .bind(reference)
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await?;
         for key in found {
             if !keys.contains(&key) {
@@ -159,7 +165,7 @@ pub(crate) async fn assign_thread_key(
             .bind(adopted)
             .bind(account_id)
             .bind(other)
-            .execute(pool)
+            .execute(&mut *conn)
             .await?;
     }
     Ok(Some(adopted.clone()))
@@ -193,7 +199,11 @@ pub async fn backfill_threading(
     row_id: i64,
     header: &FetchedHeader,
 ) -> Result<(), AppError> {
-    let thread_key = assign_thread_key(pool, account_id, header).await?;
+    // why acquire: the key lookup runs on a plain connection now that the
+    // batch upsert hands it its transaction — this one-row repair path just
+    // borrows a connection from the pool instead.
+    let mut conn = pool.acquire().await?;
+    let thread_key = assign_thread_key(&mut conn, account_id, header).await?;
     sqlx::query(
         "UPDATE messages
          SET message_id_hdr = ?, in_reply_to_hdr = ?, references_hdr = ?, thread_key = ?
@@ -204,7 +214,7 @@ pub async fn backfill_threading(
     .bind(header.references.join(" "))
     .bind(&thread_key)
     .bind(row_id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
