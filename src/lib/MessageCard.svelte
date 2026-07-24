@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getMessageBody, saveAllAttachments, saveAttachment } from "./api";
   import { extColor, fileExt } from "./attachments";
+  import { interceptBodyLinks } from "./bodyLinks";
   import { formatFileSize, formatFullDate, senderName } from "./format";
   import type {
     MessageAttachment,
@@ -390,7 +391,10 @@
              nothing else: it lets the parent read the document's height
              (autoSize) so whole conversations can be open at once.
              allow-scripts must NEVER be added — scripts stay blocked by the
-             sandbox flag, by the sanitizer, and by the srcdoc's own CSP. -->
+             sandbox flag, by the sanitizer, and by the srcdoc's own CSP.
+             Navigation stays blocked too (no allow-popups /
+             allow-top-navigation): link clicks are intercepted parent-side
+             by interceptBodyLinks and handed to the default browser. -->
         <iframe
           class="body-frame"
           title="Message body"
@@ -398,6 +402,7 @@
           srcdoc={shown.html}
           referrerpolicy="no-referrer"
           use:autoSize
+          use:interceptBodyLinks
         ></iframe>
       {:else if shown?.text}
         <pre class="body">{shown.text}</pre>
