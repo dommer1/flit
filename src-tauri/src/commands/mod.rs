@@ -1373,6 +1373,46 @@ pub async fn open_draft(
     message_id: i64,
 ) -> Result<(), AppError> {
     let loc = storage::messages::location(&state.pool, message_id).await?;
+
+    // Fast path: a fully-cached draft (body present, no attachments) opens
+    // straight from SQLite — no TLS connect, no server round-trip. The save
+    // path caches the body it appends, so every draft written by this app
+    // hits here; foreign or attachment-carrying drafts fall through to the
+    // server fetch below.
+    if let Some(cached) = storage::messages::cached_draft(&state.pool, message_id).await? {
+        let from_email = storage::contacts::split_address_list(&cached.from_addr)
+            .into_iter()
+            .next()
+            .map(|(_, email)| email);
+        let alias = match from_email {
+            Some(email) => {
+                storage::aliases::find_by_email(&state.pool, loc.account_id, &email).await?
+            }
+            None => None,
+        };
+        let none_if_empty = |s: String| (!s.is_empty()).then_some(s);
+        return open_compose_window(
+            &app,
+            OutgoingMessage {
+                account_id: loc.account_id,
+                alias_id: alias.map(|a| a.id),
+                to: cached.to,
+                cc: cached.cc,
+                bcc: cached.bcc,
+                subject: cached.subject,
+                body: cached.body,
+                body_html: None,
+                attachments: Vec::new(),
+                draft_message_id: none_if_empty(cached.message_id),
+                in_reply_to: none_if_empty(cached.in_reply_to),
+                references: none_if_empty(cached.references),
+                // A server draft already merged its quote into the body text.
+                quote: None,
+            },
+        )
+        .await;
+    }
+
     let account = storage::accounts::get(&state.pool, loc.account_id).await?;
     let password = state.password(loc.account_id).await?;
 

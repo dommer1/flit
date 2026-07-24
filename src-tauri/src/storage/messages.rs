@@ -791,6 +791,45 @@ pub async fn find_by_message_id(
     .await?)
 }
 
+/// The compose fields of a cached draft — what reopening a draft needs,
+/// mirroring `mail::parse::parse_draft`'s output shape (bare Message-IDs,
+/// space-joined references, empty string = absent).
+#[derive(Debug, sqlx::FromRow)]
+pub struct CachedDraft {
+    pub to: String,
+    pub cc: String,
+    pub bcc: String,
+    pub subject: String,
+    pub body: String,
+    /// The stored From line ("Name <addr>"), for alias matching.
+    pub from_addr: String,
+    pub message_id: String,
+    pub in_reply_to: String,
+    pub references: String,
+}
+
+/// A draft the cache can serve whole: body cached and provably no
+/// attachments. Attachment bytes are never cached, and an unscanned body
+/// could hide some — both cases return None and reopen via the server.
+pub async fn cached_draft(
+    pool: &SqlitePool,
+    message_id: i64,
+) -> Result<Option<CachedDraft>, AppError> {
+    Ok(sqlx::query_as(
+        r#"SELECT to_addr AS "to", cc_addr AS cc, bcc_addr AS bcc, subject,
+                  body_text AS body, from_addr,
+                  COALESCE(message_id_hdr, '') AS message_id,
+                  COALESCE(in_reply_to_hdr, '') AS in_reply_to,
+                  COALESCE(references_hdr, '') AS "references"
+           FROM messages m
+           WHERE id = ? AND body_text IS NOT NULL AND attachments_scanned = 1
+             AND NOT EXISTS (SELECT 1 FROM message_attachments a WHERE a.message_id = m.id)"#,
+    )
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
 /// Remove one cached message (it vanished from the folder server-side).
 pub async fn delete_by_id(pool: &SqlitePool, message_id: i64) -> Result<(), AppError> {
     sqlx::query("DELETE FROM messages WHERE id = ?")
@@ -1286,6 +1325,74 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn cached_draft_serves_a_bodied_attachment_free_draft() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        let mut draft = threaded(1, "d@x", "root@x", &["root@x"]);
+        draft.from = "Me <me@example.com>".to_string();
+        draft.to = "Alice <alice@example.com>".to_string();
+        draft.subject = "Re: plans".to_string();
+        upsert_headers(&pool, id, "Drafts", &[draft]).await.unwrap();
+        let row_id = list(&pool, Some(id), "Drafts", None).await.unwrap()[0].id;
+
+        // Body not cached yet — the cache cannot serve the draft whole.
+        assert!(cached_draft(&pool, row_id).await.unwrap().is_none());
+
+        set_body(
+            &pool,
+            row_id,
+            Some("hi there"),
+            None,
+            "hi there",
+            &[],
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+
+        let cached = cached_draft(&pool, row_id).await.unwrap().unwrap();
+        assert_eq!(cached.to, "Alice <alice@example.com>");
+        assert_eq!(cached.subject, "Re: plans");
+        assert_eq!(cached.body, "hi there");
+        assert_eq!(cached.from_addr, "Me <me@example.com>");
+        assert_eq!(cached.message_id, "d@x");
+        assert_eq!(cached.in_reply_to, "root@x");
+        assert_eq!(cached.references, "root@x");
+    }
+
+    #[tokio::test]
+    async fn cached_draft_refuses_drafts_with_attachments() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(&pool, id, "Drafts", &[threaded(1, "d@x", "", &[])])
+            .await
+            .unwrap();
+        let row_id = list(&pool, Some(id), "Drafts", None).await.unwrap()[0].id;
+        let file = AttachmentMeta {
+            part_index: 1,
+            filename: "cv.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            size: 100,
+        };
+        set_body(
+            &pool,
+            row_id,
+            Some("see cv"),
+            None,
+            "see cv",
+            &[],
+            &[file],
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Attachment bytes are never cached — the server path owns this one.
+        assert!(cached_draft(&pool, row_id).await.unwrap().is_none());
     }
 
     #[tokio::test]
