@@ -532,6 +532,10 @@ pub struct MessageHeader {
     /// Whether any message of the conversation is unread.
     #[sqlx(default)]
     pub thread_unread: bool,
+    /// Whether an unsent draft is saved for this conversation — the list
+    /// row's "Draft" pill. Computed by threaded lists only.
+    #[sqlx(default)]
+    pub thread_has_draft: bool,
 }
 
 /// Counts for one list view (a folder, or a mailbox name across all
