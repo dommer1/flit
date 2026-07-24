@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use lettre::message::header::ContentType;
-use lettre::message::{Attachment, Mailbox, Mailboxes, MultiPart, SinglePart};
+use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
@@ -70,15 +70,34 @@ pub(crate) fn ensure_attachment_budget(total: usize) -> Result<(), AppError> {
 }
 
 /// Parse one comma-separated address list; empty input is an empty list.
+// why not `list.parse::<Mailboxes>()`: a reply prefills recipients from the
+// displayed header, where a display name may carry an unquoted comma
+// ("Obchod, Gavaplast s.r.o. <o@x>") — the strict RFC parser reads that as
+// two mailboxes and rejects the send. Split with the compose window's own
+// heuristic instead, then let lettre encode each name safely.
 fn parse_recipients(list: &str, field: &str) -> Result<Vec<Mailbox>, AppError> {
-    if list.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    Ok(list
-        .parse::<Mailboxes>()
-        .map_err(|e| AppError::Smtp(format!("invalid {field} recipient: {e}")))?
+    crate::mail::recipients::split(list)
         .into_iter()
-        .collect())
+        .map(|piece| {
+            parse_mailbox(&piece)
+                .map_err(|e| AppError::Smtp(format!("invalid {field} recipient: {e}")))
+        })
+        .collect()
+}
+
+/// One typed recipient: `Name <addr>` splits into display name + address —
+/// `Mailbox::new` then RFC-2047-encodes any specials in the name, so it can
+/// never corrupt the header. Anything else must parse as a bare mailbox.
+fn parse_mailbox(piece: &str) -> Result<Mailbox, lettre::address::AddressError> {
+    if let Some((name, rest)) = piece.rsplit_once('<') {
+        if let Some(addr) = rest.strip_suffix('>') {
+            let address: Address = addr.trim().parse()?;
+            let name = name.trim().trim_matches('"').trim();
+            let mailbox = Mailbox::new((!name.is_empty()).then(|| name.to_string()), address);
+            return Ok(mailbox);
+        }
+    }
+    piece.parse()
 }
 
 /// Build the MIME message for an outgoing mail. `to`/`cc`/`bcc` accept
@@ -422,6 +441,52 @@ mod tests {
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(raw.contains("alice@example.com"));
         assert!(raw.contains("bob@example.com"));
+    }
+
+    #[tokio::test]
+    async fn accepts_a_recipient_display_name_with_a_comma() {
+        // A reply prefills To from the displayed header, where a legal-name
+        // sender reads "Obchod, Gavaplast s.r.o. <obchod@gavaplast.sk>" —
+        // the comma must not split it into two (invalid) recipients.
+        let message = build_message(
+            "",
+            "domco@example.com",
+            &outgoing("Obchod, Gavaplast s.r.o. <obchod@gavaplast.sk>, bob@example.com"),
+        )
+        .await
+        .unwrap();
+
+        let envelope: Vec<String> = message
+            .envelope()
+            .to()
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        assert_eq!(envelope, vec!["obchod@gavaplast.sk", "bob@example.com"]);
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        // The comma-bearing name travels RFC-2047-encoded, never raw —
+        // raw it would read as an extra empty recipient on the wire.
+        assert!(!raw.contains("Obchod, Gavaplast"));
+        assert!(raw.contains("<obchod@gavaplast.sk>"));
+    }
+
+    #[tokio::test]
+    async fn strips_quotes_around_a_quoted_display_name() {
+        let message = build_message(
+            "",
+            "domco@example.com",
+            &outgoing("\"Novák, Ján\" <jan@example.com>"),
+        )
+        .await
+        .unwrap();
+
+        let envelope: Vec<String> = message
+            .envelope()
+            .to()
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        assert_eq!(envelope, vec!["jan@example.com"]);
     }
 
     #[tokio::test]
