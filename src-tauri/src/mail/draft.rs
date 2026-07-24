@@ -182,6 +182,11 @@ pub fn split_saved_quote(text: &str, html: &str) -> Option<SavedQuote> {
     }
     let quote_html = block[inner_start..inner_end].to_string();
 
+    // why normalize: the bodies come back from the MIME round trip with
+    // \r\n line endings — matching against the \n-joined compose format
+    // would quietly fail and flatten the quote to its text rendering.
+    let text = text.replace("\r\n", "\n");
+
     // The plain body mirrors the same structure: own text, a blank line,
     // the attribution, then "> " lines (composePlainBody). Both must parse,
     // or a reopened draft would duplicate its quote on the next save.
@@ -311,6 +316,21 @@ mod tests {
         // One "> " level stripped — resaving quotes it again, so levels
         // never stack into "> > >".
         assert_eq!(split.quote_text, "ahoj\n\nčau");
+    }
+
+    #[test]
+    fn split_saved_quote_survives_crlf_round_trips() {
+        // A draft read back from the server (or the body cache fed by the
+        // raw MIME) carries \r\n endings — the rich quote must still split,
+        // or the reopen silently degrades to the flat text fallback.
+        let text = "bbbbb\r\n\r\nOn Jul 24, Peter wrote:\r\n> ahoj\r\n";
+        let html = compose_quoted_html("<p>bbbbb</p>", "On Jul 24, Peter wrote:", "<p>ahoj</p>");
+
+        let split = split_saved_quote(text, &html).unwrap();
+
+        assert_eq!(split.own_text, "bbbbb");
+        assert_eq!(split.quote_html, "<p>ahoj</p>");
+        assert_eq!(split.quote_text, "ahoj");
     }
 
     #[test]
