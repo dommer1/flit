@@ -760,9 +760,10 @@ async fn deliver(app: &AppHandle, message: &OutgoingMessage) -> Result<(), AppEr
     Ok(())
 }
 
-/// Remove one autosaved draft version from the account's server Drafts
-/// folder — after a send (so it stops looking like unfinished work) or on
-/// an explicit "Don't Save".
+/// Remove one autosaved draft version after a send, so it stops looking
+/// like unfinished work: local cache immediately, then the server copy
+/// (behind the account's draft-push FIFO lock — the version might still be
+/// mid-append).
 async fn delete_sent_draft(
     app: &AppHandle,
     state: &AppState,
@@ -774,26 +775,11 @@ async fn delete_sent_draft(
     else {
         return Ok(()); // no drafts folder, nothing to clean up
     };
-    let mut session = mail::imap::connect(
-        &account.imap_host,
-        account.imap_port,
-        &account.username,
-        password,
-    )
-    .await?;
-    let result = delete_draft_version(&mut session, &drafts, draft_id).await;
-    if result.is_ok() {
-        // Reconcile the cache over the same session, so the draft card
-        // leaves its conversation now, not on the next full sync.
-        match mail::sync::sync_mailbox(&state.pool, account.id, &mut session, &drafts).await {
-            Ok(_) => {
-                let _ = app.emit("messages-changed", account.id);
-            }
-            Err(err) => eprintln!("drafts sync after delete failed: {err}"),
-        }
-    }
-    let _ = session.logout().await;
-    result
+    storage::messages::delete_by_message_id(&state.pool, account.id, &drafts, draft_id).await?;
+    let _ = app.emit("messages-changed", account.id);
+    let lock = state.draft_push_lock(account.id);
+    let _guard = lock.lock().await;
+    delete_draft_on_server(app, &state.pool, account, password, &drafts, draft_id).await
 }
 
 /// Mirror a delivered message into the account's IMAP Sent folder so other
@@ -847,53 +833,120 @@ pub async fn save_draft(
     let (from_name, from_email) = storage::aliases::sender(&state.pool, &message).await?;
     let raw = mail::draft::build_draft(&from_name, &from_email, &message, &message_id).await?;
 
+    // LOCAL-FIRST: mirror the new version into the cache and notify the UI
+    // before touching the network — typing, closing and the conversation
+    // view must never wait on the server. The provisional row carries a
+    // negative uid (invisible to sync bookkeeping); the background push
+    // below replaces it with the mirrored server row.
+    let mut header = mail::sync::to_provisional_header(
+        &raw,
+        -provisional_uid(),
+        !message.attachments.is_empty(),
+    );
+    let parsed = mail::parse::parse_body(&raw);
+    header.snippet = parsed.snippet.clone();
+    storage::messages::upsert_headers(&state.pool, account.id, &drafts, &[header]).await?;
+    if let Some(row_id) =
+        storage::messages::find_by_message_id(&state.pool, account.id, &drafts, &message_id).await?
+    {
+        storage::messages::set_body(
+            &state.pool,
+            row_id,
+            parsed.text.as_deref(),
+            parsed.html.as_deref(),
+            &parsed.snippet,
+            &parsed.images,
+            &parsed.attachments,
+            parsed.auth.as_ref(),
+        )
+        .await?;
+    }
+    // The replaced version leaves the cache with the same immediacy.
+    if let Some(old_id) = &previous_draft_id {
+        storage::messages::delete_by_message_id(&state.pool, account.id, &drafts, old_id).await?;
+    }
+    let _ = app.emit("messages-changed", account.id);
+
+    // Server push in the background, serialized per account (FIFO lock) so
+    // an autosave burst appends and deletes in save order.
     let password = state.password(message.account_id).await?;
+    let lock = state.draft_push_lock(account.id);
+    let pool = state.pool.clone();
+    let app = app.clone();
+    let pushed_id = message_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let _guard = lock.lock().await;
+        if let Err(err) = push_draft(
+            &app,
+            &pool,
+            &account,
+            &password,
+            &drafts,
+            &raw,
+            &pushed_id,
+            previous_draft_id.as_deref(),
+        )
+        .await
+        {
+            // The draft is safe in the local cache and reopens from it; the
+            // next save (same window or after reopen) pushes again.
+            eprintln!("draft push for account {} failed: {err}", account.id);
+        }
+    });
+    Ok(message_id)
+}
+
+/// One provisional-row uid magnitude: epoch nanos, unique for any two saves
+/// this side of a clock jump backwards within the same nanosecond.
+fn provisional_uid() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(1)
+}
+
+/// Server side of a draft save: APPEND the new version, drop the previous
+/// one, mirror the folder, then retire the provisional local row. Runs
+/// under the account's draft-push lock.
+#[allow(clippy::too_many_arguments)]
+async fn push_draft(
+    app: &AppHandle,
+    pool: &sqlx::SqlitePool,
+    account: &Account,
+    password: &str,
+    drafts: &str,
+    raw: &[u8],
+    message_id: &str,
+    previous_draft_id: Option<&str>,
+) -> Result<(), AppError> {
     let mut session = mail::imap::connect(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        &password,
+        password,
     )
     .await?;
     // why \Seen: the user wrote this text — it must not light up unread
     // badges here or in other clients.
-    let appended = mail::imap::append(&mut session, &drafts, "(\\Draft \\Seen)", &raw).await;
+    let appended = mail::imap::append(&mut session, drafts, "(\\Draft \\Seen)", raw).await;
     if appended.is_ok() {
         // why best effort: the new version is safely on the server; a
         // leftover old version is a cosmetic duplicate the user can delete,
         // never lost text. The next save also retries it via its own id.
-        if let Some(old_id) = &previous_draft_id {
-            if let Err(err) = delete_draft_version(&mut session, &drafts, old_id).await {
+        if let Some(old_id) = previous_draft_id {
+            if let Err(err) = delete_draft_version(&mut session, drafts, old_id).await {
                 eprintln!("could not delete draft version {old_id}: {err}");
             }
         }
-        // Mirror the folder into the cache right away (same open session),
-        // so the draft shows in its conversation without waiting for the
-        // next full sync. Best effort: the draft is safe on the server.
-        match mail::sync::sync_mailbox(&state.pool, account.id, &mut session, &drafts).await {
+        match mail::sync::sync_mailbox(pool, account.id, &mut session, drafts).await {
             Ok(_) => {
-                // The body is in hand — cache it now so reopening the draft
-                // (and the conversation card) never re-downloads it.
-                if let Some(row_id) = storage::messages::find_by_message_id(
-                    &state.pool,
-                    account.id,
-                    &drafts,
-                    &message_id,
-                )
-                .await?
+                // The server copy is mirrored — swap it in for the
+                // provisional row, keeping the cached body.
+                if let Err(err) =
+                    storage::messages::adopt_provisional_draft(pool, account.id, drafts, message_id)
+                        .await
                 {
-                    let parsed = mail::parse::parse_body(&raw);
-                    storage::messages::set_body(
-                        &state.pool,
-                        row_id,
-                        parsed.text.as_deref(),
-                        parsed.html.as_deref(),
-                        &parsed.snippet,
-                        &parsed.images,
-                        &parsed.attachments,
-                        parsed.auth.as_ref(),
-                    )
-                    .await?;
+                    eprintln!("could not adopt provisional draft {message_id}: {err}");
                 }
                 let _ = app.emit("messages-changed", account.id);
             }
@@ -901,13 +954,13 @@ pub async fn save_draft(
         }
     }
     let _ = session.logout().await;
-    appended?;
-    Ok(message_id)
+    appended
 }
 
-/// "Don't Save" on compose close: remove the autosaved draft version from
-/// the account's server Drafts folder. A missing folder or version is fine —
-/// the state the user asked for (no draft) already holds.
+/// "Don't Save" on compose close, and the draft card's Delete: remove the
+/// draft locally right away, then from the server in the background. A
+/// missing folder or version is fine — the state the user asked for (no
+/// draft) already holds.
 #[tauri::command]
 pub async fn discard_draft(
     app: AppHandle,
@@ -916,8 +969,61 @@ pub async fn discard_draft(
     draft_message_id: String,
 ) -> Result<(), AppError> {
     let account = storage::accounts::get(&state.pool, account_id).await?;
+    let Some(drafts) = storage::mailboxes::name_for_role(&state.pool, account_id, "drafts").await?
+    else {
+        return Ok(()); // no drafts folder, nothing to clean up
+    };
+    // LOCAL-FIRST: the card leaves the conversation and the list now.
+    storage::messages::delete_by_message_id(&state.pool, account_id, &drafts, &draft_message_id)
+        .await?;
+    let _ = app.emit("messages-changed", account_id);
+
+    // Behind the same FIFO lock as saves — a discard must never overtake
+    // the push that is still appending the version it deletes.
     let password = state.password(account_id).await?;
-    delete_sent_draft(&app, &state, &account, &password, &draft_message_id).await
+    let lock = state.draft_push_lock(account_id);
+    let pool = state.pool.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _guard = lock.lock().await;
+        if let Err(err) =
+            delete_draft_on_server(&app, &pool, &account, &password, &drafts, &draft_message_id)
+                .await
+        {
+            eprintln!("draft delete for account {} failed: {err}", account.id);
+        }
+    });
+    Ok(())
+}
+
+/// Connect, delete one draft version, and reconcile the folder mirror.
+/// Callers hold the account's draft-push lock.
+async fn delete_draft_on_server(
+    app: &AppHandle,
+    pool: &sqlx::SqlitePool,
+    account: &Account,
+    password: &str,
+    drafts: &str,
+    draft_id: &str,
+) -> Result<(), AppError> {
+    let mut session = mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        password,
+    )
+    .await?;
+    let result = delete_draft_version(&mut session, drafts, draft_id).await;
+    if result.is_ok() {
+        match mail::sync::sync_mailbox(pool, account.id, &mut session, drafts).await {
+            Ok(_) => {
+                let _ = app.emit("messages-changed", account.id);
+            }
+            Err(err) => eprintln!("drafts sync after delete failed: {err}"),
+        }
+    }
+    let _ = session.logout().await;
+    result
 }
 
 /// Delete one draft version by Message-ID from `drafts`, if it still exists.

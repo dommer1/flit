@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use sqlx::SqlitePool;
 
@@ -31,6 +31,11 @@ pub struct AppState {
     /// `syncing`: a backfill runs for minutes and must never block the
     /// regular sync (or vice versa).
     backfilling: Mutex<HashSet<i64>>,
+    /// Per-account queue for background draft pushes (append / delete /
+    /// folder sync). tokio's Mutex hands the lock out in FIFO order, so
+    /// pushes run in save order — a later save can never reach the server
+    /// before the version it is meant to replace.
+    draft_pushes: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// Proof of holding an account's sync slot. Dropping it releases the slot —
@@ -69,6 +74,7 @@ impl AppState {
             passwords: PasswordCache::default(),
             syncing: Mutex::new(HashSet::new()),
             backfilling: Mutex::new(HashSet::new()),
+            draft_pushes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -108,6 +114,17 @@ impl AppState {
         self.passwords
             .get_or_fetch(account_id, || auth::get_password(account_id))
             .await
+    }
+
+    /// The account's draft-push queue lock — hold it across the whole
+    /// server conversation of one push or discard.
+    pub fn draft_push_lock(&self, account_id: i64) -> Arc<tokio::sync::Mutex<()>> {
+        self.draft_pushes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(account_id)
+            .or_default()
+            .clone()
     }
 
     /// Park a draft for the compose window `label` to pick up after it loads.

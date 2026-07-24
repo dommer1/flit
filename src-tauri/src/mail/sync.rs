@@ -436,6 +436,32 @@ async fn initial_fetch(
     }
 }
 
+/// A header row for a draft that exists only locally so far, parsed from
+/// the raw bytes the save just built. `uid` is the caller's provisional
+/// (negative) id; validity 0 is never consulted (see storage's uid > 0
+/// guards). The snippet is filled by the caller from the parsed body.
+pub(crate) fn to_provisional_header(raw: &[u8], uid: i64, has_attachments: bool) -> FetchedHeader {
+    let parsed = parse::parse_header(raw);
+    FetchedHeader {
+        uid,
+        uid_validity: 0,
+        from: parsed.from,
+        to: parsed.to,
+        cc: parsed.cc,
+        reply_to: parsed.reply_to,
+        bcc: parsed.bcc,
+        has_attachments,
+        subject: parsed.subject,
+        date: parsed.date,
+        snippet: String::new(),
+        // The user wrote this text — it must never look unread.
+        read: true,
+        message_id: parsed.message_id,
+        in_reply_to: parsed.in_reply_to,
+        references: parsed.references,
+    }
+}
+
 fn to_fetched(raw: &imap::RawHeader, uid_validity: i64) -> FetchedHeader {
     let parsed = parse::parse_header(&raw.header);
     FetchedHeader {
