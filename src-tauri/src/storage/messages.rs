@@ -479,7 +479,7 @@ pub async fn thread_rows_in_mailbox(
 
 /// Highest cached UID for incremental sync; `None` when nothing is cached.
 ///
-/// why uid > 0 (here and in min_uid/uid_flags/stored_uid_validity): a draft
+/// why uid > 0 (here and in uid_set/uid_flags/stored_uid_validity): a draft
 /// saved locally-first sits in the cache as a provisional row with a
 /// NEGATIVE uid until its background push lands. Sync bookkeeping must only
 /// ever see real server rows — a negative uid would break incremental
@@ -558,22 +558,22 @@ pub async fn view_status(
     })
 }
 
-/// Lowest cached UID — where the header backfill continues downwards from;
-/// `None` when nothing is cached. Provisional local rows (uid < 0) are
-/// invisible here — see max_uid.
-pub async fn min_uid(
+/// Every cached UID of the folder — what the header backfill diffs the
+/// server's list against. Provisional local rows (uid < 0) are invisible
+/// here — they exist only locally, so no server list can contain them.
+pub async fn uid_set(
     pool: &SqlitePool,
     account_id: i64,
     mailbox: &str,
-) -> Result<Option<i64>, AppError> {
-    let uid = sqlx::query_scalar(
-        "SELECT MIN(uid) FROM messages WHERE account_id = ? AND mailbox = ? AND uid > 0",
+) -> Result<std::collections::HashSet<i64>, AppError> {
+    let uids: Vec<i64> = sqlx::query_scalar(
+        "SELECT uid FROM messages WHERE account_id = ? AND mailbox = ? AND uid > 0",
     )
     .bind(account_id)
     .bind(mailbox)
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await?;
-    Ok(uid)
+    Ok(uids.into_iter().collect())
 }
 
 /// UIDVALIDITY the cache was built against; `None` when nothing is cached.
@@ -1432,7 +1432,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(max_uid(&pool, id, "Drafts").await.unwrap(), Some(5));
-        assert_eq!(min_uid(&pool, id, "Drafts").await.unwrap(), Some(5));
+        assert_eq!(
+            uid_set(&pool, id, "Drafts").await.unwrap(),
+            std::collections::HashSet::from([5])
+        );
         let uids: Vec<i64> = uid_flags(&pool, id, "Drafts")
             .await
             .unwrap()
@@ -2358,11 +2361,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn min_uid_reflects_the_cache() {
+    async fn uid_set_reflects_the_cache() {
         let pool = test_pool().await;
         let id = account(&pool, "Personal").await;
 
-        assert_eq!(min_uid(&pool, id, "INBOX").await.unwrap(), None);
+        assert!(uid_set(&pool, id, "INBOX").await.unwrap().is_empty());
 
         upsert_headers(
             &pool,
@@ -2376,9 +2379,12 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(min_uid(&pool, id, "INBOX").await.unwrap(), Some(3));
-        // Other folders don't leak into the minimum.
-        assert_eq!(min_uid(&pool, id, "Archive").await.unwrap(), None);
+        assert_eq!(
+            uid_set(&pool, id, "INBOX").await.unwrap(),
+            std::collections::HashSet::from([3, 9])
+        );
+        // Other folders don't leak into the set.
+        assert!(uid_set(&pool, id, "Archive").await.unwrap().is_empty());
     }
 
     #[tokio::test]

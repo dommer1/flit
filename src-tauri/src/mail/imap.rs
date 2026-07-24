@@ -354,17 +354,11 @@ pub fn initial_seq_range(exists: u32, count: u32) -> Option<String> {
     Some(format!("{start}:*"))
 }
 
-/// UIDs the selected folder holds below `uid` — the not-yet-cached older
-/// part of the mailbox. Numbers only (UID SEARCH), no headers; the caller
-/// pages through the result with `older_uid_page`.
-pub async fn search_uids_below(session: &mut ImapSession, uid: i64) -> Result<Vec<i64>, AppError> {
-    if uid <= 1 {
-        return Ok(Vec::new());
-    }
-    let uids = session
-        .uid_search(format!("UID 1:{}", uid - 1))
-        .await
-        .map_err(imap_err)?;
+/// Every UID the selected folder holds. Numbers only (UID SEARCH), no
+/// headers; the backfill diffs this against the cache and pages through the
+/// difference with `older_uid_page`.
+pub async fn search_all_uids(session: &mut ImapSession) -> Result<Vec<i64>, AppError> {
+    let uids = session.uid_search("ALL").await.map_err(imap_err)?;
     Ok(uids.into_iter().map(i64::from).collect())
 }
 

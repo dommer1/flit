@@ -216,6 +216,15 @@ fn reconcile_plan(cached: &[(i64, i64, bool)], server: &[(i64, bool)]) -> Reconc
     plan
 }
 
+/// The backfill work list: every UID the server lists that the cache lacks —
+/// holes inside the cached range included, not just the tail below it.
+fn missing_uids(on_server: Vec<i64>, cached: &std::collections::HashSet<i64>) -> Vec<i64> {
+    on_server
+        .into_iter()
+        .filter(|uid| !cached.contains(uid))
+        .collect()
+}
+
 /// Cross the prefetch work-list with the sizes the server reported: keep
 /// only messages known to be small enough. No size reported → skipped —
 /// never download blind.
@@ -333,8 +342,15 @@ pub async fn backfill_headers(
     Ok(total)
 }
 
-/// Backfill one folder: one UID SEARCH for everything below the cached
-/// window, then page through it newest-first, upserting batch by batch.
+/// Backfill one folder: one UID SEARCH for the server's full list, diffed
+/// against the cache, then page through the missing part newest-first,
+/// upserting batch by batch.
+///
+/// why the full list and not just "below the oldest cached UID": holes can
+/// sit inside the cached range too (builds before the batches were atomic
+/// could lose arbitrary rows when a run was interrupted), and a below-only
+/// sweep never revisits them — the progress strip then hangs short of the
+/// server total forever.
 async fn backfill_mailbox(
     pool: &SqlitePool,
     account_id: i64,
@@ -356,10 +372,11 @@ async fn backfill_mailbox(
     .await?;
 
     // Nothing cached yet — the regular sync owns a folder's first fetch.
-    let Some(oldest) = messages::min_uid(pool, account_id, mailbox).await? else {
+    let cached = messages::uid_set(pool, account_id, mailbox).await?;
+    if cached.is_empty() {
         return Ok(0);
-    };
-    let mut remaining = imap::search_uids_below(session, oldest).await?;
+    }
+    let mut remaining = missing_uids(imap::search_all_uids(session).await?, &cached);
     let mut total = 0;
     while !remaining.is_empty() {
         let page = imap::older_uid_page(remaining.clone(), BACKFILL_BATCH);
@@ -524,6 +541,17 @@ mod tests {
 
         assert_eq!(plan.delete, vec![2]);
         assert_eq!(plan.flag, vec![(1, true)]);
+    }
+
+    #[test]
+    fn missing_uids_finds_holes_anywhere_not_just_below_the_oldest() {
+        let cached = std::collections::HashSet::from([2, 3, 9]);
+        // 5 sits inside the cached range, 1 below it, 12 above — all three
+        // are absent from the cache and all three must be mirrored.
+        assert_eq!(
+            missing_uids(vec![1, 2, 3, 5, 9, 12], &cached),
+            vec![1, 5, 12]
+        );
     }
 
     #[test]
