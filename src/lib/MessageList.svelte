@@ -368,6 +368,9 @@
                 {/if}
                 <span class="from">{senderName(message.from)}</span>
                 <span class="end">
+                  {#if message.threadHasDraft}
+                    <span class="draft-pill">Draft</span>
+                  {/if}
                   {#if message.hasAttachments}
                     <svg
                       class="clip"
@@ -695,6 +698,24 @@
     height: 7px;
     flex-shrink: 0;
     border-radius: 50%;
+  }
+
+  /* Same amber family as the conversation's Draft badge. */
+  .draft-pill {
+    flex-shrink: 0;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: rgba(178, 134, 14, 0.12);
+    font-size: 10px;
+    font-weight: 600;
+    color: #9c7c10;
+  }
+
+  /* On the accent-filled selected row the amber pill would vanish —
+     switch to the row's own text color on a translucent chip. */
+  .selected .draft-pill {
+    background: rgb(255 255 255 / 20%);
+    color: var(--accent-text);
   }
 
   .end .clip {

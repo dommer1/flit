@@ -18,6 +18,7 @@ function header(id: number, from: string, read: boolean): MessageHeader {
     threadCount: 1,
     threadUnread: false,
     isDraft: false,
+    threadHasDraft: false,
     subject: `Subject ${id}`,
     snippet: "…",
     date: "2026-07-07T09:15:00Z",
@@ -266,6 +267,20 @@ it("badges a conversation row with its message count", () => {
   // A single message shows no count badge.
   const single = screen.getByRole("option", { name: /Bob/ });
   expect(single.querySelector(".thread-count")).toBeNull();
+});
+
+it("pins a Draft pill on rows whose conversation holds a draft", () => {
+  renderList({
+    messages: [
+      { ...header(1, "Alice <alice@example.com>", true), threadHasDraft: true },
+      header(2, "Bob <bob@example.com>", true),
+    ],
+  });
+
+  const withDraft = screen.getByRole("option", { name: /Alice/ });
+  expect(withDraft).toHaveTextContent("Draft");
+  const without = screen.getByRole("option", { name: /Bob/ });
+  expect(without).not.toHaveTextContent("Draft");
 });
 
 it("dots a read representative whose conversation is unread elsewhere", () => {

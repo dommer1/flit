@@ -306,4 +306,7 @@ export interface MessageHeader {
   threadCount: number;
   /** Whether any message of the conversation is unread. */
   threadUnread: boolean;
+  /** Whether an unsent draft is saved for this conversation — the list
+   * row's "Draft" pill. Computed by threaded lists only. */
+  threadHasDraft: boolean;
 }
