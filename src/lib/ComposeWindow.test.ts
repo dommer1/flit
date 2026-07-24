@@ -995,3 +995,46 @@ it("splits a reopened draft's composed quote back out of the editor", async () =
   expect(box).toHaveTextContent("Thanks!");
   expect(box).not.toHaveTextContent("Build Week");
 });
+
+it("carries the reply threading headers into saves and sends", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    accountId: 1,
+    to: "alice@example.com",
+    subject: "Re: plans",
+    body: "on my way",
+    inReplyTo: "parent@x",
+    references: "root@x parent@x",
+  });
+  render(ComposeWindow);
+  await waitFor(() => expect(screen.getByLabelText("From")).toHaveValue("1"));
+
+  // The autosaved draft must thread like the reply it is — without
+  // In-Reply-To/References it starts its own conversation on the server.
+  vi.useFakeTimers();
+  try {
+    await fireEvent.input(screen.getByLabelText("Subject"), {
+      target: { value: "Re: plans!" },
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+  } finally {
+    vi.useRealTimers();
+  }
+  expect(api.saveDraft).toHaveBeenCalledWith(
+    expect.objectContaining({
+      inReplyTo: "parent@x",
+      references: "root@x parent@x",
+    }),
+    null,
+  );
+
+  // The sent message threads the same way.
+  await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inReplyTo: "parent@x",
+        references: "root@x parent@x",
+      }),
+    ),
+  );
+});

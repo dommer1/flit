@@ -141,6 +141,12 @@
   // previous version is replaced on each save.
   const AUTOSAVE_MS = 30_000;
   let draftMessageId: string | null = null;
+  // The reply's threading identity (bare Message-IDs), fixed at open time.
+  // Every save and the final send must carry it — without In-Reply-To and
+  // References the message starts its own conversation on the server
+  // instead of joining the one it answers.
+  let inReplyTo: string | null = null;
+  let references: string | null = null;
   let saveError = $state<string | null>(null);
   // why watching, not `loaded`: the editor mounts on `loaded`, so its
   // initial bind-backs still look like edits — only changes after the whole
@@ -205,6 +211,8 @@
       subject = draft?.subject ?? "";
       initialBody = draft?.body ?? "";
       body = initialBody;
+      inReplyTo = draft?.inReplyTo ?? null;
+      references = draft?.references ?? null;
       // A draft handed back by undo/failed-send keeps replacing the same
       // server version. Mark it dirty so closing this window re-saves it —
       // its newest text may never have been autosaved.
@@ -424,6 +432,8 @@
       // why: rides along into queue_send so the backend can clear the
       // autosaved server draft once the send succeeds.
       draftMessageId: draftMessageId ?? undefined,
+      inReplyTo: inReplyTo ?? undefined,
+      references: references ?? undefined,
     };
   }
 
