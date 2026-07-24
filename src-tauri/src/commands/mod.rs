@@ -1363,6 +1363,37 @@ async fn sanitized_body(
     })
 }
 
+/// Park a reopened draft's quote back behind the compose ••• toggle:
+/// `(editor text, composed bodyHtml, parked quote)`. A draft whose bodies
+/// don't carry (or no longer match) the compose quote marker reopens as
+/// plain text, exactly as before — never guess at foreign drafts.
+///
+/// SECURITY (hard rule): the recovered HTML comes from the server, where
+/// another client may have rewritten the draft — both the user's own part
+/// and the quote pass mail::sanitize::sanitize_fragment before any of it
+/// may reach the compose editor. The returned bodyHtml is rebuilt from the
+/// sanitized parts, never the stored markup.
+fn park_draft_quote(
+    body: String,
+    body_html: Option<&str>,
+) -> (String, Option<String>, Option<crate::models::DraftQuote>) {
+    let Some(split) = body_html.and_then(|html| mail::draft::split_saved_quote(&body, html)) else {
+        return (body, None, None);
+    };
+    let own_html = mail::sanitize::sanitize_fragment(&split.own_html, &[]);
+    let quote_html = mail::sanitize::sanitize_fragment(&split.quote_html, &[]);
+    let rebuilt = mail::draft::compose_quoted_html(&own_html, &split.attribution, &quote_html);
+    (
+        split.own_text,
+        Some(rebuilt),
+        Some(crate::models::DraftQuote {
+            attribution: split.attribution,
+            html: quote_html,
+            text: split.quote_text,
+        }),
+    )
+}
+
 /// Reopen a message from a Drafts folder for editing: fetch the raw draft,
 /// parse it back into compose fields, and open a compose window that keeps
 /// replacing this server version (via its Message-ID) on every save.
@@ -1391,6 +1422,7 @@ pub async fn open_draft(
             None => None,
         };
         let none_if_empty = |s: String| (!s.is_empty()).then_some(s);
+        let (body, body_html, quote) = park_draft_quote(cached.body, cached.body_html.as_deref());
         return open_compose_window(
             &app,
             OutgoingMessage {
@@ -1400,14 +1432,13 @@ pub async fn open_draft(
                 cc: cached.cc,
                 bcc: cached.bcc,
                 subject: cached.subject,
-                body: cached.body,
-                body_html: None,
+                body,
+                body_html,
                 attachments: Vec::new(),
                 draft_message_id: none_if_empty(cached.message_id),
                 in_reply_to: none_if_empty(cached.in_reply_to),
                 references: none_if_empty(cached.references),
-                // A server draft already merged its quote into the body text.
-                quote: None,
+                quote,
             },
         )
         .await;
@@ -1443,6 +1474,7 @@ pub async fn open_draft(
         None => None,
     };
     let attachments = stash_draft_attachments(message_id, parsed.attachments).await?;
+    let (body, body_html, quote) = park_draft_quote(parsed.body, parsed.body_html.as_deref());
     open_compose_window(
         &app,
         OutgoingMessage {
@@ -1452,16 +1484,13 @@ pub async fn open_draft(
             cc: parsed.cc,
             bcc: parsed.bcc,
             subject: parsed.subject,
-            body: parsed.body,
-            // The compose editor takes plain text; a draft's HTML part is
-            // regenerated from it on the next save.
-            body_html: None,
+            body,
+            body_html,
             attachments,
             draft_message_id: parsed.message_id,
             in_reply_to: parsed.in_reply_to,
             references: parsed.references,
-            // A server draft already merged its quote into the body text.
-            quote: None,
+            quote,
         },
     )
     .await

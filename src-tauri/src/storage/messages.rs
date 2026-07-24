@@ -801,6 +801,9 @@ pub struct CachedDraft {
     pub bcc: String,
     pub subject: String,
     pub body: String,
+    /// The draft's HTML part when it had one — carries the compose quote
+    /// marker for drafts saved by this app.
+    pub body_html: Option<String>,
     /// The stored From line ("Name <addr>"), for alias matching.
     pub from_addr: String,
     pub message_id: String,
@@ -817,7 +820,7 @@ pub async fn cached_draft(
 ) -> Result<Option<CachedDraft>, AppError> {
     Ok(sqlx::query_as(
         r#"SELECT to_addr AS "to", cc_addr AS cc, bcc_addr AS bcc, subject,
-                  body_text AS body, from_addr,
+                  body_text AS body, body_html, from_addr,
                   COALESCE(message_id_hdr, '') AS message_id,
                   COALESCE(in_reply_to_hdr, '') AS in_reply_to,
                   COALESCE(references_hdr, '') AS "references"
@@ -1345,7 +1348,7 @@ mod tests {
             &pool,
             row_id,
             Some("hi there"),
-            None,
+            Some("<p>hi there</p>"),
             "hi there",
             &[],
             &[],
@@ -1358,6 +1361,7 @@ mod tests {
         assert_eq!(cached.to, "Alice <alice@example.com>");
         assert_eq!(cached.subject, "Re: plans");
         assert_eq!(cached.body, "hi there");
+        assert_eq!(cached.body_html.as_deref(), Some("<p>hi there</p>"));
         assert_eq!(cached.from_addr, "Me <me@example.com>");
         assert_eq!(cached.message_id, "d@x");
         assert_eq!(cached.in_reply_to, "root@x");

@@ -137,6 +137,101 @@ fn recipient_piece(piece: String) -> Address<'static> {
     Address::new_address(None::<String>, piece)
 }
 
+/// The wrapper the compose window puts around a draft's quote block in the
+/// HTML body — MUST stay in sync with QUOTE_MARKER in src/lib/draft.ts.
+const QUOTE_MARKER: &str = r#"<div class="flit-draft-quote">"#;
+
+/// Inline style of the rebuilt quote block — mirrors QUOTE_BLOCK_STYLE in
+/// src/lib/draft.ts, so a reopened-then-resaved draft looks unchanged.
+const QUOTE_BLOCK_STYLE: &str = "margin:0 0 0 0.8ex;border-left:2px solid #c8ccd4;padding-left:1ex";
+
+/// The parts of a saved draft recovered for the compose window: the user's
+/// own content and the quote block parked back behind the ••• toggle.
+#[derive(Debug, PartialEq)]
+pub struct SavedQuote {
+    /// Plain text of the draft with the quote (attribution + "> " lines)
+    /// stripped — what the editor reopens with.
+    pub own_text: String,
+    /// HTML before the marker — the user's own rich-text content.
+    /// UNTRUSTED like quote_html: sanitize before it reaches the editor.
+    pub own_html: String,
+    /// The attribution line ("On …, X wrote:"), HTML entities decoded.
+    pub attribution: String,
+    /// Inner HTML of the quote block. UNTRUSTED — it comes from the server
+    /// and MUST pass mail::sanitize::sanitize_fragment before it may reach
+    /// the compose editor (hard rule).
+    pub quote_html: String,
+    /// The quoted plain text with one "> " level stripped — what the next
+    /// save re-quotes, so levels never stack.
+    pub quote_text: String,
+}
+
+/// Recover the quote block a saved draft carries, splitting both bodies at
+/// the marker `composeHtmlBody` wrote. `None` (draft not composed by this
+/// app, or bodies edited apart) means "reopen as-is" — never guess.
+pub fn split_saved_quote(text: &str, html: &str) -> Option<SavedQuote> {
+    let marker_at = html.find(QUOTE_MARKER)?;
+    let block = &html[marker_at + QUOTE_MARKER.len()..];
+    let attribution = unescape_html(block.strip_prefix("<p>")?.split("</p>").next()?);
+
+    let bq_at = block.find("<blockquote")?;
+    let inner_start = bq_at + block[bq_at..].find('>')? + 1;
+    let inner_end = block.rfind("</blockquote>")?;
+    if inner_end < inner_start {
+        return None;
+    }
+    let quote_html = block[inner_start..inner_end].to_string();
+
+    // The plain body mirrors the same structure: own text, a blank line,
+    // the attribution, then "> " lines (composePlainBody). Both must parse,
+    // or a reopened draft would duplicate its quote on the next save.
+    let split_token = format!("\n\n{attribution}\n");
+    let at = text.rfind(&split_token)?;
+    let quote_text = text[at + split_token.len()..]
+        .lines()
+        .map(|line| {
+            line.strip_prefix("> ")
+                .or(line.strip_prefix(">"))
+                .unwrap_or(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string();
+    Some(SavedQuote {
+        own_text: text[..at].to_string(),
+        own_html: html[..marker_at].to_string(),
+        attribution,
+        quote_html,
+        quote_text,
+    })
+}
+
+/// Rebuild the composed HTML body from (sanitized) parts — the exact shape
+/// `composeHtmlBody` in src/lib/draft.ts writes, so the compose window's
+/// splitComposedHtml finds the marker again on reopen.
+pub fn compose_quoted_html(own_html: &str, attribution: &str, quote_html: &str) -> String {
+    format!(
+        "{own_html}{QUOTE_MARKER}<p>{}</p>\
+         <blockquote type=\"cite\" style=\"{QUOTE_BLOCK_STYLE}\">{quote_html}</blockquote></div>",
+        escape_html(attribution)
+    )
+}
+
+/// Mirrors escapeHtml in src/lib/richtext.ts.
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Reverse of escape_html; &amp; last so "&amp;lt;" cannot double-decode.
+fn unescape_html(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
 /// Read one attachment from disk, keeping the running size total honest
 /// against the same budget the send path enforces.
 async fn load_attachment(
@@ -159,6 +254,40 @@ async fn load_attachment(
 mod tests {
     use super::*;
     use mail_parser::{MessageParser, MimeHeaders};
+
+    #[test]
+    fn split_saved_quote_round_trips_the_compose_format() {
+        // Exactly what composePlainBody/composeHtmlBody write on save.
+        let text = "bbbbb\n\nOn Jul 24, 2026, Peter <p@x> wrote:\n> ahoj\n>\n> čau\n";
+        let html = compose_quoted_html(
+            "<p>bbbbb</p>",
+            "On Jul 24, 2026, Peter <p@x> wrote:",
+            "<p>ahoj</p><p>čau</p>",
+        );
+
+        let split = split_saved_quote(text, &html).unwrap();
+
+        assert_eq!(split.own_text, "bbbbb");
+        assert_eq!(split.own_html, "<p>bbbbb</p>");
+        assert_eq!(split.attribution, "On Jul 24, 2026, Peter <p@x> wrote:");
+        assert_eq!(split.quote_html, "<p>ahoj</p><p>čau</p>");
+        // One "> " level stripped — resaving quotes it again, so levels
+        // never stack into "> > >".
+        assert_eq!(split.quote_text, "ahoj\n\nčau");
+    }
+
+    #[test]
+    fn split_saved_quote_refuses_foreign_or_mismatched_drafts() {
+        // No marker (a draft saved by another client).
+        assert_eq!(
+            split_saved_quote("hi\n> old", "<p>hi</p><blockquote>old</blockquote>"),
+            None
+        );
+        // Marker present but the plain body no longer mirrors it (edited
+        // apart) — reopening as-is beats duplicating the quote.
+        let html = compose_quoted_html("<p>hi</p>", "On X, Y wrote:", "<p>q</p>");
+        assert_eq!(split_saved_quote("something else entirely", &html), None);
+    }
 
     fn outgoing() -> OutgoingMessage {
         OutgoingMessage {

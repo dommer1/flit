@@ -251,6 +251,9 @@ pub struct ParsedDraft {
     pub bcc: String,
     pub subject: String,
     pub body: String,
+    /// The draft's HTML rendering (mail-parser synthesizes one for
+    /// text-only drafts — harmless, the quote-marker check gates its use).
+    pub body_html: Option<String>,
     /// Message-ID without angle brackets — the handle under which the next
     /// save replaces this server version.
     pub message_id: Option<String>,
@@ -283,6 +286,7 @@ pub fn parse_draft(raw: &[u8]) -> ParsedDraft {
             .body_text(0)
             .map(|t| t.into_owned())
             .unwrap_or_default(),
+        body_html: message.body_html(0).map(|t| t.into_owned()),
         message_id: message.message_id().map(str::to_string),
         in_reply_to: id_list(message.in_reply_to()).into_iter().next(),
         references: {
