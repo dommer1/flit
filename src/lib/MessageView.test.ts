@@ -472,8 +472,11 @@ it("opens a clicked draft in the editor", async () => {
 
   // Clicking the draft's header row resumes editing in a compose window.
   await fireEvent.click(badge.closest(".head") as HTMLElement);
-
   expect(onEditDraft).toHaveBeenCalledWith(9);
+
+  // The body area is the same click-to-edit surface — the whole card is.
+  await fireEvent.click(screen.getByText("half-written answer in full"));
+  expect(onEditDraft).toHaveBeenCalledTimes(2);
 });
 
 it("warns when a familiar sender writes from an unusual address", async () => {

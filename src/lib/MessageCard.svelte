@@ -297,7 +297,14 @@
   </div>
 
   {#if expanded}
-    <div class="content">
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events
+         — on a draft the whole card is one click-to-edit surface (the head
+         above routes the same way); keyboard users reach the editor through
+         the card's Edit button. -->
+    <div
+      class="content"
+      onclick={message.isDraft ? onToggle : undefined}
+    >
       {#if shown && shown.attachments.length > 0}
         <div class="atts-label">
           <svg
