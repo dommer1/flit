@@ -11,6 +11,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
  * ever navigate anything inside the app.
  */
 export function hookBodyLinks(doc: Document, open: (url: string) => void) {
+  // Anti-phishing: the tooltip always shows where a link really goes,
+  // overwriting any title the sender chose ("Your bank" on an evil URL).
+  for (const anchor of Array.from(doc.querySelectorAll("a[href]"))) {
+    anchor.setAttribute("title", (anchor.getAttribute("href") ?? "").trim());
+  }
   doc.addEventListener("click", (event) => {
     const anchor = (event.target as Element | null)?.closest?.("a[href]");
     if (!anchor) return;

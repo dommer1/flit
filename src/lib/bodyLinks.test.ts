@@ -58,6 +58,15 @@ describe("hookBodyLinks", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
+  it("reveals each link's real target as its hover tooltip", () => {
+    const doc = bodyDoc(
+      '<a href="https://evil.example/login" title="Your bank">bank</a>',
+    );
+    hookBodyLinks(doc, vi.fn());
+
+    expect(doc.querySelector("a")!.title).toBe("https://evil.example/login");
+  });
+
   it("swallows non-http links without opening anything", () => {
     const open = vi.fn();
     const doc = bodyDoc(
