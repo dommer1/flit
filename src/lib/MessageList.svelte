@@ -465,6 +465,11 @@
     /* why: overflow-y auto alone computes overflow-x to auto — the list
        must clip sideways, never scroll (swipes translate rows, not panes). */
     overflow-x: hidden;
+    /* why: without a stacking context here, the sticky section header's
+       z-index escapes to the pane and paints over the overlay scrollbar
+       thumb (WebKit draws a scroller's overlay scrollbars above its own
+       stacking context, not above z-indexed escapees). */
+    isolation: isolate;
   }
 
   .empty {
