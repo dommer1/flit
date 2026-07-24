@@ -674,6 +674,32 @@ it("refreshes the list on messages-changed and keeps the selection", async () =>
   ).toBeInTheDocument();
 });
 
+it("collapses a burst of messages-changed events into one refresh", async () => {
+  render(App);
+  await screen.findByText("Weekend plans");
+
+  currentMessages = [
+    ...allMessages,
+    { ...allMessages[0], id: 3, subject: "Brand new" },
+  ];
+  vi.mocked(api.listMessages).mockClear();
+  vi.mocked(api.listMailboxes).mockClear();
+  // A backfilling account fires messages-changed once per cached batch —
+  // three quick events must cost one list query, not three.
+  // why fake timers mid-test: the initial load must run on real timers
+  // (findBy* polls with them), only the debounce window itself is faked.
+  vi.useFakeTimers();
+  messagesChanged?.();
+  messagesChanged?.();
+  messagesChanged?.();
+  await vi.advanceTimersByTimeAsync(250);
+  vi.useRealTimers();
+
+  expect(api.listMessages).toHaveBeenCalledTimes(1);
+  expect(api.listMailboxes).toHaveBeenCalledTimes(currentAccounts.length);
+  expect(await screen.findByText("Brand new")).toBeInTheDocument();
+});
+
 // why fake timers mid-test: the initial load must run on real timers
 // (findBy* polls with them), only the debounce window itself is faked.
 async function typeIntoSearch(value: string) {

@@ -595,6 +595,16 @@
   // enough that results still feel live (search is a local SQLite hit).
   const refreshDebounced = debounce(() => void refreshMessages(), 200);
 
+  // why debounce: a backfilling account emits messages-changed after every
+  // cached batch, and several accounts sync at once — refreshing per event
+  // would rerun the thread-grouping list query and the sidebar fetches
+  // nonstop for the whole sync. One trailing refresh per burst is enough;
+  // 250ms is imperceptible next to a click.
+  const refreshOnMessagesChanged = debounce(() => {
+    void refreshMessages();
+    void refreshMailboxes();
+  }, 250);
+
   function handleSearch(query: string) {
     searchQuery = query;
     refreshDebounced();
@@ -668,10 +678,7 @@
     // why: account CRUD lives in the settings window (its own JS context) —
     // this window finds out through the backend's accounts-changed event.
     const unlistenAccounts = onAccountsChanged(() => void refreshAccounts());
-    const unlistenMessages = onMessagesChanged(() => {
-      void refreshMessages();
-      void refreshMailboxes();
-    });
+    const unlistenMessages = onMessagesChanged(refreshOnMessagesChanged);
     // why: compose windows queue sends in the backend; this window only
     // mirrors the send-* events into badges.
     const unlistenQueued = onSendQueued((e) =>
