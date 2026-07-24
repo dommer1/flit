@@ -64,3 +64,4 @@ mail-builder = "0.4"
 # why: native new-mail notifications, sent from the Rust sync path only —
 # the webview never gets the notification IPC permission.
 tauri-plugin-notification = "2.3.3"
+tauri-plugin-opener = "2.5.4"
