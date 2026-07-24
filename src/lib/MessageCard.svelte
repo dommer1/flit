@@ -410,6 +410,9 @@
       {:else if error}
         <p class="error" role="alert">{error}</p>
       {/if}
+      <!-- No reply actions on a draft — its only action is resuming the
+           edit (a click anywhere on the header). -->
+      {#if !message.isDraft}
       <div class="actions">
         <button
           class="action"
@@ -451,6 +454,7 @@
           </svg>
         </button>
       </div>
+      {/if}
     </div>
   {/if}
 </section>

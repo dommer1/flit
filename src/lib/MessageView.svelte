@@ -160,7 +160,7 @@
             body={bodies[entry.id] ?? null}
             loading={bodiesLoading}
             error={bodiesError}
-            expanded={expandedIds.has(entry.id)}
+            expanded={entry.isDraft || expandedIds.has(entry.id)}
             last={entry.id === newestId}
             ownEmail={accountEmails[entry.accountId] ?? null}
             accountColor={accountColors[entry.accountId] ?? null}

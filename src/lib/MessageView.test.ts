@@ -442,36 +442,38 @@ const draftBodies = {
   9: body({ text: "half-written answer in full" }),
 };
 
-it("badges a saved draft and keeps the newest real message open", async () => {
+it("badges a saved draft and shows its full text without a click", async () => {
   vi.mocked(api.listThread).mockResolvedValueOnce(conversationWithDraft);
   vi.mocked(api.threadBodies).mockResolvedValueOnce(draftBodies);
 
   renderView({ message: { ...message, id: 1 } });
 
   expect(await screen.findByText("Draft")).toBeInTheDocument();
-  // The newest entry is the draft, but the newest real message auto-opens —
-  // a draft never expands inline, it belongs to the compose editor.
-  expect(screen.getByText("the original in full")).toBeInTheDocument();
-  expect(screen.getByText("half-written answer")).toBeInTheDocument();
+  // The draft card starts expanded — unfinished text is what the user came
+  // to see — and the newest real message opens alongside it as usual.
   expect(
-    screen.queryByText("half-written answer in full"),
-  ).not.toBeInTheDocument();
+    await screen.findByText("half-written answer in full"),
+  ).toBeInTheDocument();
+  expect(screen.getByText("the original in full")).toBeInTheDocument();
+  // No reply actions on a draft: replying to your own unfinished reply
+  // makes no sense — its only action is resuming the edit.
+  expect(
+    screen.getAllByRole("button", { name: "Reply to this message" }),
+  ).toHaveLength(1);
 });
 
-it("opens a clicked draft in the editor instead of expanding its card", async () => {
+it("opens a clicked draft in the editor", async () => {
   const onEditDraft = vi.fn();
   vi.mocked(api.listThread).mockResolvedValueOnce(conversationWithDraft);
   vi.mocked(api.threadBodies).mockResolvedValueOnce(draftBodies);
 
   renderView({ message: { ...message, id: 1 }, onEditDraft });
-  await screen.findByText("half-written answer");
+  const badge = await screen.findByText("Draft");
 
-  await fireEvent.click(screen.getByText("half-written answer"));
+  // Clicking the draft's header row resumes editing in a compose window.
+  await fireEvent.click(badge.closest(".head") as HTMLElement);
 
   expect(onEditDraft).toHaveBeenCalledWith(9);
-  expect(
-    screen.queryByText("half-written answer in full"),
-  ).not.toBeInTheDocument();
 });
 
 it("warns when a familiar sender writes from an unusual address", async () => {
