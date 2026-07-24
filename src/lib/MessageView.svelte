@@ -11,6 +11,7 @@
     threadOrder = "newestLast",
     onDraft,
     onEditDraft,
+    onDeleteDraft,
   }: {
     message: MessageHeader | null;
     /** accountId → address; marks a card's sender as "me". */
@@ -23,6 +24,8 @@
     onDraft?: (kind: DraftKind, message: MessageHeader) => void;
     /** A clicked draft card resumes editing in a compose window. */
     onEditDraft?: (id: number) => void;
+    /** The draft card's Delete action — removes the server draft. */
+    onDeleteDraft?: (message: MessageHeader) => void;
   } = $props();
 
   // The whole conversation of the selected row, oldest first. Falls back to
@@ -166,6 +169,7 @@
             accountColor={accountColors[entry.accountId] ?? null}
             onToggle={() => toggle(entry)}
             onDraft={(kind) => onDraft?.(kind, entry)}
+            onDelete={entry.isDraft ? () => onDeleteDraft?.(entry) : undefined}
           />
         {/each}
       </div>

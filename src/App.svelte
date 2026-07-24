@@ -4,6 +4,7 @@
     archiveMessage,
     archiveThread,
     cancelScheduled,
+    discardDraft,
     getMessageBody,
     getMessageQuote,
     getSwipeActions,
@@ -116,6 +117,15 @@
   function editDraft(id: number) {
     void openServerDraft(id).catch((err: unknown) =>
       console.error("failed to open draft:", err),
+    );
+  }
+
+  // The draft card's Delete action. The backend removes the server version,
+  // re-syncs the Drafts folder and emits messages-changed — the card
+  // disappears on that refresh, no optimistic bookkeeping needed.
+  function deleteDraft(message: MessageHeader) {
+    void discardDraft(message.accountId, message.messageId).catch(
+      (err: unknown) => console.error("failed to delete draft:", err),
     );
   }
 
@@ -788,6 +798,7 @@
         {threadOrder}
         onDraft={openDraftWithBody}
         onEditDraft={editDraft}
+        onDeleteDraft={deleteDraft}
       />
     </section>
   </main>

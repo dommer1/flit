@@ -19,6 +19,7 @@
     accountColor,
     onToggle,
     onDraft,
+    onDelete,
   }: {
     message: MessageHeader;
     /** This message's body from the conversation's bulk load; null while
@@ -36,6 +37,8 @@
     onToggle: () => void;
     /** Per-message reply actions in the card footer. */
     onDraft: (kind: "reply" | "reply-all") => void;
+    /** Draft cards only: remove the draft from the server. */
+    onDelete?: () => void;
   } = $props();
 
   /** Bare address out of `Name <addr>`; a plain address passes through. */
@@ -417,9 +420,56 @@
       {:else if error}
         <p class="error" role="alert">{error}</p>
       {/if}
-      <!-- No reply actions on a draft — its only action is resuming the
-           edit (a click anywhere on the header). -->
-      {#if !message.isDraft}
+      {#if message.isDraft}
+        <!-- Draft actions: resume editing (same as clicking the card) or
+             delete the server draft. stopPropagation keeps both clicks out
+             of the card's click-to-edit surface. -->
+        <div class="actions">
+          <button
+            class="action"
+            title="Edit"
+            aria-label="Edit draft"
+            onclick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              aria-hidden="true"
+            >
+              <path d="m13.6 3.9 2.5 2.5L7 15.5l-3.2.7.7-3.2 9.1-9.1Z" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button
+            class="action"
+            title="Delete draft"
+            aria-label="Delete draft"
+            onclick={(e) => {
+              e.stopPropagation();
+              onDelete?.();
+            }}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              aria-hidden="true"
+            >
+              <path d="M4 6h12M8.5 6V4.5h3V6M6 6l.8 9.5h6.4L14 6" stroke-linejoin="round" />
+              <path d="M8.5 8.8v4.4M11.5 8.8v4.4" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
+      {:else}
       <div class="actions">
         <button
           class="action"

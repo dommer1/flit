@@ -479,6 +479,26 @@ it("opens a clicked draft in the editor", async () => {
   expect(onEditDraft).toHaveBeenCalledTimes(2);
 });
 
+it("offers Edit and Delete actions on a draft card", async () => {
+  const onEditDraft = vi.fn();
+  const onDeleteDraft = vi.fn();
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversationWithDraft);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(draftBodies);
+
+  renderView({ message: { ...message, id: 1 }, onEditDraft, onDeleteDraft });
+  await screen.findByText("Draft");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Edit draft" }));
+  expect(onEditDraft).toHaveBeenCalledWith(9);
+
+  await fireEvent.click(screen.getByRole("button", { name: "Delete draft" }));
+  expect(onDeleteDraft).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 9 }),
+  );
+  // Delete must not ALSO bubble into the card's click-to-edit surface.
+  expect(onEditDraft).toHaveBeenCalledTimes(1);
+});
+
 it("warns when a familiar sender writes from an unusual address", async () => {
   vi.mocked(api.threadBodies).mockResolvedValueOnce({
     1: body({
