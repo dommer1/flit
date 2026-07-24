@@ -207,6 +207,43 @@ pub fn split_saved_quote(text: &str, html: &str) -> Option<SavedQuote> {
     })
 }
 
+/// Fallback for drafts without the HTML marker (saves by older builds,
+/// other clients): split the plain body at the quoted-history boundary the
+/// viewer already recognizes. Parks only when the boundary line can serve
+/// as the attribution — a bare ">" wall has nothing to label the block
+/// with. own_html stays empty; the editor rebuilds HTML from the text.
+pub fn split_plain_quote(text: &str) -> Option<SavedQuote> {
+    let (own_text, Some(quoted)) = crate::mail::quote::split_text_quote(text) else {
+        return None;
+    };
+    let mut lines = quoted.lines();
+    let attribution = lines.next()?.trim().to_string();
+    if attribution.starts_with('>') {
+        return None;
+    }
+    let quote_text = lines
+        .map(|line| {
+            line.strip_prefix("> ")
+                .or(line.strip_prefix(">"))
+                .unwrap_or(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    if quote_text.is_empty() {
+        return None;
+    }
+    let quote_html = crate::mail::quote::text_to_quote_html(&quote_text);
+    Some(SavedQuote {
+        own_text,
+        own_html: String::new(),
+        attribution,
+        quote_html,
+        quote_text,
+    })
+}
+
 /// Rebuild the composed HTML body from (sanitized) parts — the exact shape
 /// `composeHtmlBody` in src/lib/draft.ts writes, so the compose window's
 /// splitComposedHtml finds the marker again on reopen.
@@ -274,6 +311,33 @@ mod tests {
         // One "> " level stripped — resaving quotes it again, so levels
         // never stack into "> > >".
         assert_eq!(split.quote_text, "ahoj\n\nčau");
+    }
+
+    #[test]
+    fn split_plain_quote_rescues_a_markerless_draft() {
+        // A draft flattened by an older build: quote merged into the plain
+        // text, no HTML marker to split on.
+        let text = "flit test\n\nOn July 24, 2026 at 2:20 PM, Obchod wrote:\n> Ahoj Dominik,\n>\n> poprosím ťa o zmeny\n";
+
+        let split = split_plain_quote(text).unwrap();
+
+        assert_eq!(split.own_text, "flit test");
+        assert_eq!(split.own_html, "");
+        assert_eq!(
+            split.attribution,
+            "On July 24, 2026 at 2:20 PM, Obchod wrote:"
+        );
+        assert_eq!(split.quote_text, "Ahoj Dominik,\n\npoprosím ťa o zmeny");
+        assert!(split.quote_html.contains("poprosím ťa o zmeny"));
+    }
+
+    #[test]
+    fn split_plain_quote_leaves_unlabelled_quotes_alone() {
+        // A ">" wall with no attribution line — nothing to label the
+        // parked block with, so the draft reopens as-is.
+        assert_eq!(split_plain_quote("hi\n\n> one\n> two\n> three"), None);
+        // No quote at all.
+        assert_eq!(split_plain_quote("just text"), None);
     }
 
     #[test]

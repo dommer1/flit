@@ -1483,15 +1483,24 @@ fn park_draft_quote(
     body: String,
     body_html: Option<&str>,
 ) -> (String, Option<String>, Option<crate::models::DraftQuote>) {
-    let Some(split) = body_html.and_then(|html| mail::draft::split_saved_quote(&body, html)) else {
+    // Marker split first (drafts saved by this app); plain-text fallback
+    // for flattened or foreign drafts whose quoted history is recognizable.
+    let split = body_html
+        .and_then(|html| mail::draft::split_saved_quote(&body, html))
+        .or_else(|| mail::draft::split_plain_quote(&body));
+    let Some(split) = split else {
         return (body, None, None);
     };
-    let own_html = mail::sanitize::sanitize_fragment(&split.own_html, &[]);
     let quote_html = mail::sanitize::sanitize_fragment(&split.quote_html, &[]);
-    let rebuilt = mail::draft::compose_quoted_html(&own_html, &split.attribution, &quote_html);
+    // A text-only split carries no own HTML — the editor rebuilds it from
+    // the plain text, exactly like a fresh reply.
+    let body_html = (!split.own_html.is_empty()).then(|| {
+        let own_html = mail::sanitize::sanitize_fragment(&split.own_html, &[]);
+        mail::draft::compose_quoted_html(&own_html, &split.attribution, &quote_html)
+    });
     (
         split.own_text,
-        Some(rebuilt),
+        body_html,
         Some(crate::models::DraftQuote {
             attribution: split.attribution,
             html: quote_html,
