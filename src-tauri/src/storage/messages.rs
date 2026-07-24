@@ -805,18 +805,19 @@ pub async fn find_by_message_id(
     .await?)
 }
 
-/// Remove every cached copy of one Message-ID in one folder — a draft
-/// version being replaced or discarded can exist twice for a moment
-/// (provisional local row + mirrored server row).
+/// Remove every cached copy of one Message-ID across the whole account —
+/// a draft version being replaced or discarded can exist several times at
+/// once: provisional local row, mirrored server row, and server-side
+/// mirror folders (Gmail lists drafts in All Mail too). Leaving any copy
+/// behind would show the dead draft as an ordinary message until the next
+/// full sync reconciles its folder.
 pub async fn delete_by_message_id(
     pool: &SqlitePool,
     account_id: i64,
-    mailbox: &str,
     message_id: &str,
 ) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM messages WHERE account_id = ? AND mailbox = ? AND message_id_hdr = ?")
+    sqlx::query("DELETE FROM messages WHERE account_id = ? AND message_id_hdr = ?")
         .bind(account_id)
-        .bind(mailbox)
         .bind(message_id)
         .execute(pool)
         .await?;
@@ -1427,9 +1428,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_by_message_id_removes_every_copy() {
+    async fn delete_by_message_id_removes_every_copy_in_every_folder() {
         let pool = test_pool().await;
         let id = account(&pool, "Personal").await;
+        let other = account(&pool, "Work").await;
         upsert_headers(
             &pool,
             id,
@@ -1442,14 +1444,38 @@ mod tests {
         )
         .await
         .unwrap();
-
-        delete_by_message_id(&pool, id, "Drafts", "v1@x")
+        // Gmail mirrors every draft into All Mail — deleting the Drafts
+        // copy alone left this one behind, showing up in the conversation
+        // as an ordinary message until the next full sync.
+        upsert_headers(
+            &pool,
+            id,
+            "[Gmail]/All Mail",
+            &[threaded(9, "v1@x", "", &[])],
+        )
+        .await
+        .unwrap();
+        // Another account's message with the same id must survive.
+        upsert_headers(&pool, other, "Drafts", &[threaded(1, "v1@x", "", &[])])
             .await
             .unwrap();
 
-        let left = list(&pool, Some(id), "Drafts", None).await.unwrap();
-        assert_eq!(left.len(), 1);
-        assert_eq!(left[0].message_id, "other@x");
+        delete_by_message_id(&pool, id, "v1@x").await.unwrap();
+
+        let drafts = list(&pool, Some(id), "Drafts", None).await.unwrap();
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].message_id, "other@x");
+        assert!(list(&pool, Some(id), "[Gmail]/All Mail", None)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            list(&pool, Some(other), "Drafts", None)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

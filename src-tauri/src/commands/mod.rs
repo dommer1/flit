@@ -775,7 +775,7 @@ async fn delete_sent_draft(
     else {
         return Ok(()); // no drafts folder, nothing to clean up
     };
-    storage::messages::delete_by_message_id(&state.pool, account.id, &drafts, draft_id).await?;
+    storage::messages::delete_by_message_id(&state.pool, account.id, draft_id).await?;
     let _ = app.emit("messages-changed", account.id);
     let lock = state.draft_push_lock(account.id);
     let _guard = lock.lock().await;
@@ -863,7 +863,7 @@ pub async fn save_draft(
     }
     // The replaced version leaves the cache with the same immediacy.
     if let Some(old_id) = &previous_draft_id {
-        storage::messages::delete_by_message_id(&state.pool, account.id, &drafts, old_id).await?;
+        storage::messages::delete_by_message_id(&state.pool, account.id, old_id).await?;
     }
     let _ = app.emit("messages-changed", account.id);
 
@@ -974,8 +974,7 @@ pub async fn discard_draft(
         return Ok(()); // no drafts folder, nothing to clean up
     };
     // LOCAL-FIRST: the card leaves the conversation and the list now.
-    storage::messages::delete_by_message_id(&state.pool, account_id, &drafts, &draft_message_id)
-        .await?;
+    storage::messages::delete_by_message_id(&state.pool, account_id, &draft_message_id).await?;
     let _ = app.emit("messages-changed", account_id);
 
     // Behind the same FIFO lock as saves — a discard must never overtake
