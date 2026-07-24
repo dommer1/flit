@@ -664,6 +664,23 @@ it("inserts the From account's default signature into a new message", async () =
   );
 });
 
+it("never re-applies a default signature to a reopened draft", async () => {
+  // The draft's own text already ends with whatever signature it had —
+  // appending the default again would stack one per reopen+save cycle.
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    accountId: 1,
+    to: "alice@example.com",
+    subject: "Re: Weekend plans",
+    body: "rozpísaný text\n\n— Dominik",
+    draftMessageId: "flit-draft-1@flit.local",
+  });
+  const box = await renderWithSignatures();
+
+  expect(box).toHaveTextContent("rozpísaný text");
+  const matches = box.textContent?.match(/— Dominik/g) ?? [];
+  expect(matches).toHaveLength(1);
+});
+
 it("swaps the inserted block when another signature is picked", async () => {
   const box = await renderWithSignatures();
 

@@ -234,7 +234,9 @@
         signatureTouched = true;
       } else {
         quote = draft?.quote ?? null;
-        const sig = defaultSignatureFor(accountId);
+        // A reopened server draft already contains whatever signature it
+        // had — re-applying the default would stack one per reopen+save.
+        const sig = draftMessageId ? null : defaultSignatureFor(accountId);
         signatureId = sig?.id ?? null;
         appliedSigBody = sig?.body ?? "";
         const bodyPart = textToHtml(initialBody) || "<p></p>";
