@@ -4,6 +4,7 @@ pub mod draft;
 pub mod imap;
 pub mod parse;
 pub mod quote;
+pub mod recipients;
 pub mod remote;
 pub mod sanitize;
 pub mod smtp;

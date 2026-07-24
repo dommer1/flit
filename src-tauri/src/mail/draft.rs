@@ -96,25 +96,9 @@ pub async fn build_draft(
 }
 
 /// Split one comma-separated recipient field into addresses, preserving the
-/// typed text; `None` when the field is empty. A piece without an `@` after
-/// the first entry belongs to a display name containing a comma
-/// (`"Novák, Ján" <jan@x>`), so it is glued back onto the previous piece —
-/// the same heuristic the compose window uses in draft.ts.
+/// typed text; `None` when the field is empty.
 fn recipient_list(field: &str) -> Option<Address<'_>> {
-    let mut pieces: Vec<String> = Vec::new();
-    for piece in field.split(',') {
-        let trimmed = piece.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        match pieces.last_mut() {
-            Some(last) if !last.contains('@') => {
-                last.push_str(", ");
-                last.push_str(trimmed);
-            }
-            _ => pieces.push(trimmed.to_string()),
-        }
-    }
+    let pieces = crate::mail::recipients::split(field);
     if pieces.is_empty() {
         return None;
     }
