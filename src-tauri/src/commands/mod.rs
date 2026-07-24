@@ -566,7 +566,7 @@ pub async fn queue_send(
         let Some(message) = app.state::<AppState>().take_send(id) else {
             return;
         };
-        let error = deliver(&app.state::<AppState>(), &message).await.err();
+        let error = deliver(&app, &message).await.err();
         if let Some(err) = &error {
             eprintln!("queued send {id} failed: {err}");
             // why: a failed send must never destroy mail — the draft comes
@@ -704,7 +704,7 @@ pub(crate) async fn deliver_scheduled(app: &AppHandle, message: OutgoingMessage)
             undo_ms: 0,
         },
     );
-    let error = deliver(&app.state::<AppState>(), &message).await.err();
+    let error = deliver(app, &message).await.err();
     if let Some(err) = &error {
         eprintln!("scheduled send {id} failed: {err}");
         // why: a failed send must never destroy mail — same contract as the
@@ -725,7 +725,9 @@ pub(crate) async fn deliver_scheduled(app: &AppHandle, message: OutgoingMessage)
 }
 
 /// The one SMTP delivery path: account row → MIME → session cache → send.
-async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppError> {
+async fn deliver(app: &AppHandle, message: &OutgoingMessage) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
+    let state = &*state;
     let account = storage::accounts::get(&state.pool, message.account_id).await?;
     let (from_name, from_email) = storage::aliases::sender(&state.pool, message).await?;
     let mime = mail::smtp::build_message(&from_name, &from_email, message).await?;
@@ -751,7 +753,7 @@ async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppE
     // Same rule for the draft cleanup: a leftover draft is cosmetic, the
     // next save/sync can deal with it.
     if let Some(draft_id) = &message.draft_message_id {
-        if let Err(err) = delete_sent_draft(state, &account, &password, draft_id).await {
+        if let Err(err) = delete_sent_draft(app, state, &account, &password, draft_id).await {
             eprintln!("could not delete draft {draft_id} after send: {err}");
         }
     }
@@ -762,6 +764,7 @@ async fn deliver(state: &AppState, message: &OutgoingMessage) -> Result<(), AppE
 /// folder — after a send (so it stops looking like unfinished work) or on
 /// an explicit "Don't Save".
 async fn delete_sent_draft(
+    app: &AppHandle,
     state: &AppState,
     account: &Account,
     password: &str,
@@ -779,6 +782,16 @@ async fn delete_sent_draft(
     )
     .await?;
     let result = delete_draft_version(&mut session, &drafts, draft_id).await;
+    if result.is_ok() {
+        // Reconcile the cache over the same session, so the draft card
+        // leaves its conversation now, not on the next full sync.
+        match mail::sync::sync_mailbox(&state.pool, account.id, &mut session, &drafts).await {
+            Ok(_) => {
+                let _ = app.emit("messages-changed", account.id);
+            }
+            Err(err) => eprintln!("drafts sync after delete failed: {err}"),
+        }
+    }
     let _ = session.logout().await;
     result
 }
@@ -817,6 +830,7 @@ async fn save_sent_copy(
 /// the previous one (`previous_draft_id`).
 #[tauri::command]
 pub async fn save_draft(
+    app: AppHandle,
     state: State<'_, AppState>,
     message: OutgoingMessage,
     previous_draft_id: Option<String>,
@@ -853,6 +867,38 @@ pub async fn save_draft(
                 eprintln!("could not delete draft version {old_id}: {err}");
             }
         }
+        // Mirror the folder into the cache right away (same open session),
+        // so the draft shows in its conversation without waiting for the
+        // next full sync. Best effort: the draft is safe on the server.
+        match mail::sync::sync_mailbox(&state.pool, account.id, &mut session, &drafts).await {
+            Ok(_) => {
+                // The body is in hand — cache it now so reopening the draft
+                // (and the conversation card) never re-downloads it.
+                if let Some(row_id) = storage::messages::find_by_message_id(
+                    &state.pool,
+                    account.id,
+                    &drafts,
+                    &message_id,
+                )
+                .await?
+                {
+                    let parsed = mail::parse::parse_body(&raw);
+                    storage::messages::set_body(
+                        &state.pool,
+                        row_id,
+                        parsed.text.as_deref(),
+                        parsed.html.as_deref(),
+                        &parsed.snippet,
+                        &parsed.images,
+                        &parsed.attachments,
+                        parsed.auth.as_ref(),
+                    )
+                    .await?;
+                }
+                let _ = app.emit("messages-changed", account.id);
+            }
+            Err(err) => eprintln!("drafts sync after save failed: {err}"),
+        }
     }
     let _ = session.logout().await;
     appended?;
@@ -864,13 +910,14 @@ pub async fn save_draft(
 /// the state the user asked for (no draft) already holds.
 #[tauri::command]
 pub async fn discard_draft(
+    app: AppHandle,
     state: State<'_, AppState>,
     account_id: i64,
     draft_message_id: String,
 ) -> Result<(), AppError> {
     let account = storage::accounts::get(&state.pool, account_id).await?;
     let password = state.password(account_id).await?;
-    delete_sent_draft(&state, &account, &password, &draft_message_id).await
+    delete_sent_draft(&app, &state, &account, &password, &draft_message_id).await
 }
 
 /// Delete one draft version by Message-ID from `drafts`, if it still exists.

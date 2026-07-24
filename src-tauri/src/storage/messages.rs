@@ -772,6 +772,25 @@ pub async fn uid_flags(
     Ok(rows)
 }
 
+/// Row id of one folder's cached message by Message-ID header — how a
+/// just-appended draft is found again after its folder syncs.
+pub async fn find_by_message_id(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+    message_id: &str,
+) -> Result<Option<i64>, AppError> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM messages
+         WHERE account_id = ? AND mailbox = ? AND message_id_hdr = ?",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
 /// Remove one cached message (it vanished from the folder server-side).
 pub async fn delete_by_id(pool: &SqlitePool, message_id: i64) -> Result<(), AppError> {
     sqlx::query("DELETE FROM messages WHERE id = ?")
@@ -1236,6 +1255,37 @@ mod tests {
         let mids: Vec<&str> = thread.iter().map(|m| m.message_id.as_str()).collect();
         // Oldest first, Sent included, Trash excluded.
         assert_eq!(mids, vec!["a@x", "b@x", "c@x"]);
+    }
+
+    #[tokio::test]
+    async fn find_by_message_id_scopes_to_account_and_mailbox() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(&pool, id, "Drafts", &[threaded(1, "d@x", "", &[])])
+            .await
+            .unwrap();
+        upsert_headers(&pool, id, "INBOX", &[threaded(1, "a@x", "", &[])])
+            .await
+            .unwrap();
+
+        let found = find_by_message_id(&pool, id, "Drafts", "d@x")
+            .await
+            .unwrap();
+        assert!(found.is_some());
+
+        // Wrong folder, unknown id, wrong account: all misses.
+        assert!(find_by_message_id(&pool, id, "INBOX", "d@x")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(find_by_message_id(&pool, id, "Drafts", "nope@x")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(find_by_message_id(&pool, 999, "Drafts", "d@x")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

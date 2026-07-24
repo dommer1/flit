@@ -96,7 +96,11 @@ fn notifiable(headers: &[FetchedHeader]) -> Vec<NewMail> {
 /// Returns the fetched headers when the plan was incremental — exactly the
 /// messages that were not cached before; other plans return nothing (their
 /// fetches mostly re-cover mail the user has already seen).
-async fn sync_mailbox(
+///
+/// pub(crate): the draft commands run this for the Drafts folder right
+/// after an APPEND/delete, so the cache (and the conversation view) shows
+/// the change without waiting for the next full account sync.
+pub(crate) async fn sync_mailbox(
     pool: &SqlitePool,
     account_id: i64,
     session: &mut imap::ImapSession,
