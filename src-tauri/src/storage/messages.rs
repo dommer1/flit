@@ -458,17 +458,26 @@ pub async fn thread_rows_in_mailbox(
 }
 
 /// Highest cached UID for incremental sync; `None` when nothing is cached.
+///
+/// why uid > 0 (here and in min_uid/uid_flags/stored_uid_validity): a draft
+/// saved locally-first sits in the cache as a provisional row with a
+/// NEGATIVE uid until its background push lands. Sync bookkeeping must only
+/// ever see real server rows — a negative uid would break incremental
+/// ranges and backfill paging, reconcile would delete the row as "gone from
+/// the server", and its placeholder validity would fake a UIDVALIDITY
+/// change and wipe the folder's cache.
 pub async fn max_uid(
     pool: &SqlitePool,
     account_id: i64,
     mailbox: &str,
 ) -> Result<Option<i64>, AppError> {
-    let uid =
-        sqlx::query_scalar("SELECT MAX(uid) FROM messages WHERE account_id = ? AND mailbox = ?")
-            .bind(account_id)
-            .bind(mailbox)
-            .fetch_one(pool)
-            .await?;
+    let uid = sqlx::query_scalar(
+        "SELECT MAX(uid) FROM messages WHERE account_id = ? AND mailbox = ? AND uid > 0",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .fetch_one(pool)
+    .await?;
     Ok(uid)
 }
 
@@ -530,29 +539,33 @@ pub async fn view_status(
 }
 
 /// Lowest cached UID — where the header backfill continues downwards from;
-/// `None` when nothing is cached.
+/// `None` when nothing is cached. Provisional local rows (uid < 0) are
+/// invisible here — see max_uid.
 pub async fn min_uid(
     pool: &SqlitePool,
     account_id: i64,
     mailbox: &str,
 ) -> Result<Option<i64>, AppError> {
-    let uid =
-        sqlx::query_scalar("SELECT MIN(uid) FROM messages WHERE account_id = ? AND mailbox = ?")
-            .bind(account_id)
-            .bind(mailbox)
-            .fetch_one(pool)
-            .await?;
+    let uid = sqlx::query_scalar(
+        "SELECT MIN(uid) FROM messages WHERE account_id = ? AND mailbox = ? AND uid > 0",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .fetch_one(pool)
+    .await?;
     Ok(uid)
 }
 
 /// UIDVALIDITY the cache was built against; `None` when nothing is cached.
+/// Provisional local rows (uid < 0) are invisible here — see max_uid.
 pub async fn stored_uid_validity(
     pool: &SqlitePool,
     account_id: i64,
     mailbox: &str,
 ) -> Result<Option<i64>, AppError> {
     let validity = sqlx::query_scalar(
-        "SELECT uid_validity FROM messages WHERE account_id = ? AND mailbox = ? LIMIT 1",
+        "SELECT uid_validity FROM messages
+         WHERE account_id = ? AND mailbox = ? AND uid > 0 LIMIT 1",
     )
     .bind(account_id)
     .bind(mailbox)
@@ -755,7 +768,8 @@ pub async fn has_missing_bodies(pool: &SqlitePool, account_id: i64) -> Result<bo
 }
 
 /// `(id, uid, read)` of every cached row in one folder, uid order — the
-/// local side of reconciliation.
+/// local side of reconciliation. Provisional local rows (uid < 0) are
+/// invisible here — see max_uid.
 pub async fn uid_flags(
     pool: &SqlitePool,
     account_id: i64,
@@ -763,7 +777,7 @@ pub async fn uid_flags(
 ) -> Result<Vec<(i64, i64, bool)>, AppError> {
     let rows = sqlx::query_as(
         "SELECT id, uid, read FROM messages
-         WHERE account_id = ? AND mailbox = ? ORDER BY uid",
+         WHERE account_id = ? AND mailbox = ? AND uid > 0 ORDER BY uid",
     )
     .bind(account_id)
     .bind(mailbox)
@@ -789,6 +803,75 @@ pub async fn find_by_message_id(
     .bind(message_id)
     .fetch_optional(pool)
     .await?)
+}
+
+/// Remove every cached copy of one Message-ID in one folder — a draft
+/// version being replaced or discarded can exist twice for a moment
+/// (provisional local row + mirrored server row).
+pub async fn delete_by_message_id(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+    message_id: &str,
+) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM messages WHERE account_id = ? AND mailbox = ? AND message_id_hdr = ?")
+        .bind(account_id)
+        .bind(mailbox)
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Retire a draft's provisional local row once its server copy is mirrored:
+/// the cached body (and attachment metadata) moves onto the server row, so
+/// the swap is invisible — no refetch, no empty card. A no-op while the
+/// server copy has not arrived yet (append failed or still in flight).
+pub async fn adopt_provisional_draft(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+    message_id: &str,
+) -> Result<(), AppError> {
+    let ids: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT id, uid FROM messages
+         WHERE account_id = ? AND mailbox = ? AND message_id_hdr = ?",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .bind(message_id)
+    .fetch_all(pool)
+    .await?;
+    let local = ids.iter().find(|(_, uid)| *uid < 0).map(|(id, _)| *id);
+    let server = ids.iter().find(|(_, uid)| *uid > 0).map(|(id, _)| *id);
+    let (Some(local), Some(server)) = (local, server) else {
+        return Ok(());
+    };
+    sqlx::query(
+        "UPDATE messages SET
+           body_text = (SELECT body_text FROM messages WHERE id = ?1),
+           body_html = (SELECT body_html FROM messages WHERE id = ?1),
+           snippet = (SELECT snippet FROM messages WHERE id = ?1),
+           has_attachments = (SELECT has_attachments FROM messages WHERE id = ?1),
+           attachments_scanned = (SELECT attachments_scanned FROM messages WHERE id = ?1)
+         WHERE id = ?2",
+    )
+    .bind(local)
+    .bind(server)
+    .execute(pool)
+    .await?;
+    // Attachment metadata and inline images follow the body they belong to.
+    sqlx::query("UPDATE message_attachments SET message_id = ? WHERE message_id = ?")
+        .bind(server)
+        .bind(local)
+        .execute(pool)
+        .await?;
+    sqlx::query("UPDATE message_images SET message_id = ? WHERE message_id = ?")
+        .bind(server)
+        .bind(local)
+        .execute(pool)
+        .await?;
+    delete_by_id(pool, local).await
 }
 
 /// The compose fields of a cached draft — what reopening a draft needs,
@@ -1297,6 +1380,129 @@ mod tests {
         let mids: Vec<&str> = thread.iter().map(|m| m.message_id.as_str()).collect();
         // Oldest first, Sent included, Trash excluded.
         assert_eq!(mids, vec!["a@x", "b@x", "c@x"]);
+    }
+
+    /// A provisional local draft row: negative uid, not yet on the server.
+    fn provisional(uid: i64, message_id: &str) -> FetchedHeader {
+        FetchedHeader {
+            uid,
+            uid_validity: 0,
+            date: "2026-07-24T14:00:00Z".to_string(),
+            message_id: message_id.to_string(),
+            read: true,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn provisional_rows_stay_out_of_sync_bookkeeping() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "Drafts",
+            &[
+                threaded(5, "server@x", "", &[]),
+                provisional(-99, "local@x"),
+            ],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(max_uid(&pool, id, "Drafts").await.unwrap(), Some(5));
+        assert_eq!(min_uid(&pool, id, "Drafts").await.unwrap(), Some(5));
+        let uids: Vec<i64> = uid_flags(&pool, id, "Drafts")
+            .await
+            .unwrap()
+            .iter()
+            .map(|(_, uid, _)| *uid)
+            .collect();
+        assert_eq!(uids, vec![5]);
+        // threaded() stores validity 7; the provisional 0 must never win.
+        assert_eq!(
+            stored_uid_validity(&pool, id, "Drafts").await.unwrap(),
+            Some(7)
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_by_message_id_removes_every_copy() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "Drafts",
+            &[
+                threaded(5, "v1@x", "", &[]),
+                provisional(-99, "v1@x"),
+                threaded(6, "other@x", "", &[]),
+            ],
+        )
+        .await
+        .unwrap();
+
+        delete_by_message_id(&pool, id, "Drafts", "v1@x")
+            .await
+            .unwrap();
+
+        let left = list(&pool, Some(id), "Drafts", None).await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].message_id, "other@x");
+    }
+
+    #[tokio::test]
+    async fn adopt_provisional_draft_moves_the_body_onto_the_server_row() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(&pool, id, "Drafts", &[provisional(-99, "d@x")])
+            .await
+            .unwrap();
+        let local = find_by_message_id(&pool, id, "Drafts", "d@x")
+            .await
+            .unwrap()
+            .unwrap();
+        set_body(
+            &pool,
+            local,
+            Some("hi"),
+            Some("<p>hi</p>"),
+            "hi",
+            &[],
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+        // The folder sync mirrored the server's copy of the same draft.
+        upsert_headers(&pool, id, "Drafts", &[threaded(7, "d@x", "", &[])])
+            .await
+            .unwrap();
+
+        adopt_provisional_draft(&pool, id, "Drafts", "d@x")
+            .await
+            .unwrap();
+
+        // One row left — the server one — and it kept the cached body.
+        let rows = list(&pool, Some(id), "Drafts", None).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        let body = get_body(&pool, rows[0].id).await.unwrap();
+        assert_eq!(body.uid, 7);
+        assert_eq!(body.body_text.as_deref(), Some("hi"));
+        assert_eq!(body.body_html.as_deref(), Some("<p>hi</p>"));
+
+        // Without a server copy (append still in flight), nothing changes.
+        upsert_headers(&pool, id, "Drafts", &[provisional(-98, "solo@x")])
+            .await
+            .unwrap();
+        adopt_provisional_draft(&pool, id, "Drafts", "solo@x")
+            .await
+            .unwrap();
+        assert!(find_by_message_id(&pool, id, "Drafts", "solo@x")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
