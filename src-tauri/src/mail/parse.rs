@@ -251,8 +251,9 @@ pub struct ParsedDraft {
     pub bcc: String,
     pub subject: String,
     pub body: String,
-    /// The draft's HTML rendering (mail-parser synthesizes one for
-    /// text-only drafts — harmless, the quote-marker check gates its use).
+    /// The draft's HTML part; None when the draft has no real one —
+    /// body_html(0) would synthesize HTML from the text, and a reopen
+    /// must not mistake that conversion for authored content.
     pub body_html: Option<String>,
     /// Message-ID without angle brackets — the handle under which the next
     /// save replaces this server version.
@@ -286,7 +287,13 @@ pub fn parse_draft(raw: &[u8]) -> ParsedDraft {
             .body_text(0)
             .map(|t| t.into_owned())
             .unwrap_or_default(),
-        body_html: message.body_html(0).map(|t| t.into_owned()),
+        // why the part check: html_part(0) also serves converted text
+        // parts — only a genuine text/html part counts as authored HTML.
+        body_html: message
+            .html_part(0)
+            .is_some_and(|part| part.is_text_html())
+            .then(|| message.body_html(0).map(|t| t.into_owned()))
+            .flatten(),
         message_id: message.message_id().map(str::to_string),
         in_reply_to: id_list(message.in_reply_to()).into_iter().next(),
         references: {
@@ -461,6 +468,18 @@ fn is_url_token(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_draft_reports_html_only_when_a_real_part_exists() {
+        // Text-only draft: mail-parser would happily synthesize HTML from
+        // the text — a reopen must not mistake that for authored content.
+        let text_only = b"Subject: t\r\nContent-Type: text/plain\r\n\r\nhi\r\n";
+        assert_eq!(parse_draft(text_only).body_html, None);
+
+        let with_html = b"Subject: t\r\nContent-Type: text/html\r\n\r\n<p>hi</p>\r\n";
+        let parsed = parse_draft(with_html);
+        assert!(parsed.body_html.unwrap().contains("<p>hi</p>"));
+    }
 
     #[test]
     fn parses_plain_headers() {

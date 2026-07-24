@@ -846,6 +846,14 @@ pub async fn save_draft(
     let parsed = mail::parse::parse_body(&raw);
     header.snippet = parsed.snippet.clone();
     storage::messages::upsert_headers(&state.pool, account.id, &drafts, &[header]).await?;
+    // why the gate: a text-only draft must not cache mail-parser's
+    // synthesized HTML — the reopen path would mistake the conversion
+    // for authored content.
+    let authored_html = message
+        .body_html
+        .is_some()
+        .then_some(parsed.html.as_deref())
+        .flatten();
     if let Some(row_id) =
         storage::messages::find_by_message_id(&state.pool, account.id, &drafts, &message_id).await?
     {
@@ -853,7 +861,7 @@ pub async fn save_draft(
             &state.pool,
             row_id,
             parsed.text.as_deref(),
-            parsed.html.as_deref(),
+            authored_html,
             &parsed.snippet,
             &parsed.images,
             &parsed.attachments,
@@ -1468,38 +1476,54 @@ async fn sanitized_body(
     })
 }
 
-/// Park a reopened draft's quote back behind the compose ••• toggle:
-/// `(editor text, composed bodyHtml, parked quote)`. A draft whose bodies
-/// don't carry (or no longer match) the compose quote marker reopens as
-/// plain text, exactly as before — never guess at foreign drafts.
+/// Decide how a reopened draft enters the compose window:
+/// `(editor text, bodyHtml, parked quote)`.
 ///
-/// SECURITY (hard rule): the recovered HTML comes from the server, where
-/// another client may have rewritten the draft — both the user's own part
-/// and the quote pass mail::sanitize::sanitize_fragment before any of it
-/// may reach the compose editor. The returned bodyHtml is rebuilt from the
-/// sanitized parts, never the stored markup.
+/// 1. Saved with the quote still parked (compose marker present and both
+///    bodies match): the quote rides parked behind ••• again, rich.
+/// 2. Any other HTML draft — the user expanded the quote into the editor
+///    before saving, or another client wrote it: reopen exactly what was
+///    saved, the whole HTML as editor content. Re-guessing a quote out of
+///    it would downgrade formatting the editor already owns.
+/// 3. Text-only drafts: park the recognizable quoted tail (flat, the text
+///    rendering is all there is).
+///
+/// SECURITY (hard rule): every piece of server-held HTML on this path —
+/// marker parts and whole bodies alike — passes
+/// mail::sanitize::sanitize_fragment before it may reach the compose
+/// editor; bodyHtml is rebuilt from (or replaced by) the sanitized form.
 fn park_draft_quote(
     body: String,
     body_html: Option<&str>,
 ) -> (String, Option<String>, Option<crate::models::DraftQuote>) {
-    // Marker split first (drafts saved by this app); plain-text fallback
-    // for flattened or foreign drafts whose quoted history is recognizable.
-    let split = body_html
-        .and_then(|html| mail::draft::split_saved_quote(&body, html))
-        .or_else(|| mail::draft::split_plain_quote(&body));
-    let Some(split) = split else {
+    if let Some(split) = body_html.and_then(|html| mail::draft::split_saved_quote(&body, html)) {
+        let quote_html = mail::sanitize::sanitize_fragment(&split.quote_html, &[]);
+        let own_html = mail::sanitize::sanitize_fragment(&split.own_html, &[]);
+        let rebuilt = mail::draft::compose_quoted_html(&own_html, &split.attribution, &quote_html);
+        return (
+            split.own_text,
+            Some(rebuilt),
+            Some(crate::models::DraftQuote {
+                attribution: split.attribution,
+                html: quote_html,
+                text: split.quote_text,
+            }),
+        );
+    }
+    if let Some(html) = body_html.filter(|h| !h.trim().is_empty()) {
+        return (
+            body,
+            Some(mail::sanitize::sanitize_fragment(html, &[])),
+            None,
+        );
+    }
+    let Some(split) = mail::draft::split_plain_quote(&body) else {
         return (body, None, None);
     };
     let quote_html = mail::sanitize::sanitize_fragment(&split.quote_html, &[]);
-    // A text-only split carries no own HTML — the editor rebuilds it from
-    // the plain text, exactly like a fresh reply.
-    let body_html = (!split.own_html.is_empty()).then(|| {
-        let own_html = mail::sanitize::sanitize_fragment(&split.own_html, &[]);
-        mail::draft::compose_quoted_html(&own_html, &split.attribution, &quote_html)
-    });
     (
         split.own_text,
-        body_html,
+        None,
         Some(crate::models::DraftQuote {
             attribution: split.attribution,
             html: quote_html,
