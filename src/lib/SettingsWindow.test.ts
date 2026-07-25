@@ -65,6 +65,8 @@ vi.mock("./api", () => ({
   setSwipeActions: vi.fn(async () => undefined),
   getThreadOrder: vi.fn(async () => "newestLast"),
   setThreadOrder: vi.fn(async () => undefined),
+  getDateTimeFormat: vi.fn(async () => ({ date: "system", time: "system" })),
+  setDateTimeFormat: vi.fn(async () => undefined),
   getNotificationSettings: vi.fn(async () => ({
     enabled: true,
     sound: "default",
@@ -75,6 +77,7 @@ vi.mock("./api", () => ({
 }));
 
 import * as api from "./api";
+import { formatFullDate } from "./format";
 import SettingsWindow from "./SettingsWindow.svelte";
 
 // why: every field is `required` and jsdom enforces constraint validation —
@@ -250,6 +253,49 @@ it("saves the conversation order change on the General tab", async () => {
   await fireEvent.change(order, { target: { value: "newestFirst" } });
 
   expect(api.setThreadOrder).toHaveBeenCalledWith("newestFirst");
+});
+
+it("saves each half of the date and time format on its own", async () => {
+  render(SettingsWindow);
+  await fireEvent.click(screen.getByRole("button", { name: "General" }));
+  const dateFormat = await screen.findByLabelText("Date");
+  expect(dateFormat).toHaveValue("system");
+
+  await fireEvent.change(dateFormat, { target: { value: "dd.mm.yyyy" } });
+
+  expect(api.setDateTimeFormat).toHaveBeenCalledWith({
+    date: "dd.mm.yyyy",
+    time: "system",
+  });
+
+  // Picking a clock keeps the date pattern just chosen.
+  await fireEvent.change(screen.getByLabelText("Time"), {
+    target: { value: "24h" },
+  });
+
+  expect(api.setDateTimeFormat).toHaveBeenCalledWith({
+    date: "dd.mm.yyyy",
+    time: "24h",
+  });
+});
+
+it("previews the format the pickers are set to", async () => {
+  vi.mocked(api.getDateTimeFormat).mockResolvedValueOnce({
+    date: "yyyy-mm-dd",
+    time: "24h",
+  });
+  render(SettingsWindow);
+  await fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+  // The sample is today at a fixed 14:30, so it never reads as stale and
+  // the expected text stays computable here.
+  const sample = new Date();
+  sample.setHours(14, 30, 0, 0);
+  const expected = formatFullDate(sample.toISOString(), {
+    date: "yyyy-mm-dd",
+    time: "24h",
+  });
+  expect(await screen.findByText(`Dates show as ${expected}.`)).toBeVisible();
 });
 
 it("shows per-account rows on the notifications tab", async () => {

@@ -10,26 +10,33 @@
     updateAlias,
     confirmAccountDeletion,
     deleteAccount,
+    getDateTimeFormat,
     getRemoteImagePolicy,
     getSwipeActions,
     getThreadOrder,
     listAccounts,
     onAccountsChanged,
     setAccountColor,
+    setDateTimeFormat,
     setRemoteImagePolicy,
     setSwipeActions,
     setThreadOrder,
     testConnection,
   } from "./api";
+  import { formatFullDate } from "./format";
   import { DEFAULT_SWIPE_ACTIONS } from "./swipe";
-  import type {
-    Account,
-    Alias,
-    NewAccount,
-    RemoteImagePolicy,
-    SwipeAction,
-    SwipeActions,
-    ThreadOrder,
+  import {
+    SYSTEM_DATE_TIME_FORMAT,
+    type Account,
+    type Alias,
+    type DateFormat,
+    type DateTimeFormat,
+    type NewAccount,
+    type RemoteImagePolicy,
+    type SwipeAction,
+    type SwipeActions,
+    type ThreadOrder,
+    type TimeFormat,
   } from "./types";
   import AccountsPane from "./AccountsPane.svelte";
   import NotificationsPane from "./NotificationsPane.svelte";
@@ -71,6 +78,13 @@
   let policy = $state<RemoteImagePolicy>("ask");
   let swipes = $state<SwipeActions>(DEFAULT_SWIPE_ACTIONS);
   let threadOrder = $state<ThreadOrder>("newestLast");
+  let dateTime = $state<DateTimeFormat>(SYSTEM_DATE_TIME_FORMAT);
+
+  // The sample the pickers preview: today at a fixed 14:30, so it shows the
+  // clock difference without ever reading as a stale example.
+  const sample = new Date();
+  sample.setHours(14, 30, 0, 0);
+  let preview = $derived(formatFullDate(sample.toISOString(), dateTime));
 
   async function refresh() {
     accounts = await listAccounts();
@@ -206,6 +220,19 @@
     }
   }
 
+  async function selectDateTime(next: DateTimeFormat) {
+    lastError = null;
+    const previous = dateTime;
+    dateTime = next;
+    try {
+      await setDateTimeFormat(next);
+    } catch (err) {
+      // why: the select must not lie — a failed save rolls the value back.
+      dateTime = previous;
+      lastError = String(err);
+    }
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") void closeSettings();
   }
@@ -215,6 +242,7 @@
     void getRemoteImagePolicy().then((stored) => (policy = stored));
     void getSwipeActions().then((stored) => (swipes = stored));
     void getThreadOrder().then((stored) => (threadOrder = stored));
+    void getDateTimeFormat().then((stored) => (dateTime = stored));
     // why: refreshes also cover changes made elsewhere (a future main-window
     // action, another settings session) — the backend broadcasts the event.
     const unlisten = onAccountsChanged(() => void refresh());
@@ -292,6 +320,46 @@
       <p class="explain">
         How messages inside a conversation are ordered when you open it.
       </p>
+      <div class="section-label">Date &amp; time</div>
+      <div class="group">
+        <div class="row">
+          <label class="row-label" for="date-format">Date</label>
+          <select
+            id="date-format"
+            value={dateTime.date}
+            onchange={(e) =>
+              void selectDateTime({
+                ...dateTime,
+                date: e.currentTarget.value as DateFormat,
+              })}
+          >
+            <option value="system">System</option>
+            <option value="dd.mm.yyyy">dd.mm.yyyy</option>
+            <option value="dd.mm.yy">dd.mm.yy</option>
+            <option value="dd/mm/yyyy">dd/mm/yyyy</option>
+            <option value="mm/dd/yyyy">mm/dd/yyyy</option>
+            <option value="yyyy-mm-dd">yyyy-mm-dd</option>
+            <option value="yyyy/mm/dd">yyyy/mm/dd</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="row-label" for="time-format">Time</label>
+          <select
+            id="time-format"
+            value={dateTime.time}
+            onchange={(e) =>
+              void selectDateTime({
+                ...dateTime,
+                time: e.currentTarget.value as TimeFormat,
+              })}
+          >
+            <option value="system">System</option>
+            <option value="24h">24-hour (14:30)</option>
+            <option value="12h">12-hour (2:30 PM)</option>
+          </select>
+        </div>
+      </div>
+      <p class="explain">Dates show as {preview}.</p>
     </section>
   {:else if tab === "accounts"}
     <AccountsPane
