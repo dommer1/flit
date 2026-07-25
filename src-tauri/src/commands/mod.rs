@@ -2,8 +2,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::models::{
-    Account, Alias, AuthResults, Mailbox, MessageBody, MessageHeader, MessageQuote, NewAccount,
-    NotificationSettings, OutgoingMessage, RemoteImagePolicy, Signature, SwipeActions, ThreadOrder,
+    Account, Alias, AuthResults, DateTimeFormat, Mailbox, MessageBody, MessageHeader, MessageQuote,
+    NewAccount, NotificationSettings, OutgoingMessage, RemoteImagePolicy, Signature, SwipeActions,
+    ThreadOrder,
 };
 use crate::state::AppState;
 use crate::{auth, mail, storage};
@@ -1773,6 +1774,24 @@ pub async fn set_thread_order(
     storage::settings::set_thread_order(&state.pool, order).await?;
     // why: the settings window mutates, the main window's conversation view
     // listens and re-reads the order.
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_date_time_format(state: State<'_, AppState>) -> Result<DateTimeFormat, AppError> {
+    storage::settings::date_time_format(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_date_time_format(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    format: DateTimeFormat,
+) -> Result<(), AppError> {
+    storage::settings::set_date_time_format(&state.pool, format).await?;
+    // why: every window writes dates — the list, the conversation and the
+    // compose window's reply attribution all re-read on this event.
     app.emit("settings-changed", ())?;
     Ok(())
 }

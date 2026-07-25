@@ -181,6 +181,32 @@ export interface SwipeActions {
   right: SwipeAction;
 }
 
+/** How dates are written. Every value but "system" (the OS locale's own
+ * format) is the pattern it produces, so it doubles as the menu label. */
+export type DateFormat =
+  | "system"
+  | "dd.mm.yyyy"
+  | "dd.mm.yy"
+  | "dd/mm/yyyy"
+  | "mm/dd/yyyy"
+  | "yyyy-mm-dd"
+  | "yyyy/mm/dd";
+
+/** Whether clock times read as 14:30 or 2:30 PM. */
+export type TimeFormat = "system" | "24h" | "12h";
+
+/** How the UI writes dates and clock times; the halves are independent. */
+export interface DateTimeFormat {
+  date: DateFormat;
+  time: TimeFormat;
+}
+
+/** What the app falls back to before the stored preference has loaded. */
+export const SYSTEM_DATE_TIME_FORMAT: DateTimeFormat = {
+  date: "system",
+  time: "system",
+};
+
 /** `html`, when present, is a full sanitized srcdoc document from the backend. */
 export interface MessageBody {
   html: string | null;

@@ -124,6 +124,8 @@ pub fn run() {
             commands::set_swipe_actions,
             commands::get_thread_order,
             commands::set_thread_order,
+            commands::get_date_time_format,
+            commands::set_date_time_format,
             commands::list_signatures,
             commands::create_signature,
             commands::update_signature,

@@ -7,6 +7,7 @@ import type {
   Alias,
   AttachmentInfo,
   Contact,
+  DateTimeFormat,
   Mailbox,
   MessageAttachment,
   MessageBody,
@@ -444,6 +445,15 @@ export function getThreadOrder(): Promise<ThreadOrder> {
 
 export function setThreadOrder(order: ThreadOrder): Promise<void> {
   return invoke<void>("set_thread_order", { order });
+}
+
+/** How the UI writes dates and times (the OS locale until changed). */
+export function getDateTimeFormat(): Promise<DateTimeFormat> {
+  return invoke<DateTimeFormat>("get_date_time_format");
+}
+
+export function setDateTimeFormat(format: DateTimeFormat): Promise<void> {
+  return invoke<void>("set_date_time_format", { format });
 }
 
 /** Fires whenever any window changes an app-wide setting. */
