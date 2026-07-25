@@ -20,9 +20,9 @@ pub struct SearchQuery {
     pub subject: Option<String>,
     /// `is:read` → `Some(true)`, `is:unread` → `Some(false)`.
     pub read: Option<bool>,
-    /// YYYY-MM-DD, inclusive lower bound on the message date.
+    /// YYYY-MM-DD, inclusive lower bound: from that local day's midnight on.
     pub after: Option<String>,
-    /// YYYY-MM-DD, exclusive upper bound on the message date.
+    /// YYYY-MM-DD, exclusive upper bound: everything before that local day.
     pub before: Option<String>,
     /// `in:archive` — folder name, matched case-insensitively. Without it a
     /// search spans every folder (like Gmail's All Mail).
@@ -102,6 +102,11 @@ pub async fn search(
     // why: one static SQL with `(? IS NULL OR …)` per filter instead of
     // building the string at runtime — sqlx 0.9 rejects runtime-built SQL
     // (SqlSafeStr), and a single shape keeps the query plan cached.
+    //
+    // why strftime(…, 'utc') around the date bounds: the column stores UTC,
+    // but "after:2026-07-10" means the user's own day. SQLite reads the bare
+    // date as local time and shifts it to the UTC instant that day begins at,
+    // using the OS zone rules for THAT date — so the boundary follows DST.
     let rows = sqlx::query_as(
         r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
                   reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read, has_attachments,
@@ -114,8 +119,8 @@ pub async fn search(
                             OR cc_addr LIKE '%' || ?3 || '%' ESCAPE '\')
              AND (?4 IS NULL OR subject LIKE '%' || ?4 || '%' ESCAPE '\')
              AND (?5 IS NULL OR read = ?5)
-             AND (?6 IS NULL OR date >= ?6)
-             AND (?7 IS NULL OR date < ?7)
+             AND (?6 IS NULL OR date >= strftime('%Y-%m-%dT%H:%M:%SZ', ?6, 'utc'))
+             AND (?7 IS NULL OR date < strftime('%Y-%m-%dT%H:%M:%SZ', ?7, 'utc'))
              AND (?8 IS NULL OR mailbox = ?8 COLLATE NOCASE)
              AND (?9 IS NULL OR id IN
                   (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?9))
@@ -168,8 +173,8 @@ fn escape_like(value: &str) -> String {
         .replace('_', "\\_")
 }
 
-/// Strictly YYYY-MM-DD. The date column is RFC3339 text, so a well-formed
-/// prefix compares correctly as a plain string — no date parsing needed.
+/// Strictly YYYY-MM-DD — the shape SQLite turns into that local day's
+/// midnight when the query converts the bound to UTC.
 fn is_iso_date(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 10
@@ -393,6 +398,50 @@ mod tests {
         assert_eq!(
             subjects_for(&pool, None, "before:2026-07-01").await,
             vec!["Stará neprečítaná"]
+        );
+    }
+
+    #[tokio::test]
+    async fn date_bounds_are_the_users_own_midnight_not_utcs() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Personal").await;
+        // The instant the local day starts, as the cache stores it: in a
+        // +02:00 summer zone that is 2026-07-09T22:00:00Z. Asked from SQLite
+        // so the test states the rule instead of hardcoding one zone.
+        let midnight: String =
+            sqlx::query_scalar("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', '2026-07-10', 'utc')")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let a_second_earlier: String = sqlx::query_scalar(
+            "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', '2026-07-10', 'utc', '-1 second')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        insert_message(
+            &pool,
+            id,
+            1,
+            "a@x.sk",
+            "",
+            "Včera",
+            &a_second_earlier,
+            true,
+            None,
+        )
+        .await;
+        insert_message(&pool, id, 2, "a@x.sk", "", "Dnes", &midnight, true, None).await;
+
+        // Both mails sit on the same UTC day, so a naive text bound would
+        // put them on the same side of it — the local day parts them.
+        assert_eq!(
+            subjects_for(&pool, None, "after:2026-07-10").await,
+            vec!["Dnes"]
+        );
+        assert_eq!(
+            subjects_for(&pool, None, "before:2026-07-10").await,
+            vec!["Včera"]
         );
     }
 
