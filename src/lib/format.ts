@@ -1,5 +1,16 @@
 // Display formatting for message headers, mirroring Apple Mail conventions:
 // today → time, yesterday → "Yesterday", this week → weekday, older → date.
+//
+// Numeric dates and clock times follow the user's preference (Settings →
+// General); "system" means the OS locale decides, which is the default and
+// what every one of these functions falls back to.
+
+import {
+  SYSTEM_DATE_TIME_FORMAT,
+  type DateFormat,
+  type DateTimeFormat,
+  type TimeFormat,
+} from "./types";
 
 export function senderName(from: string): string {
   const match = from.match(/^\s*"?(.*?)"?\s*<[^<>]*>\s*$/);
@@ -15,7 +26,49 @@ export function senderInitials(from: string): string {
   return words.slice(0, 2).join("").toUpperCase() || "?";
 }
 
-export function formatListDate(iso: string, now: Date = new Date()): string {
+/** The clock alone, on the preferred cycle. */
+function clock(date: Date, time: TimeFormat): string {
+  // why hourCycle instead of hour12: false — under hour12: false some
+  // locales write midnight as 24:15; h23 pins it to 00:15 everywhere.
+  const options: Intl.DateTimeFormatOptions =
+    time === "24h"
+      ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }
+      : time === "12h"
+        ? { hour: "numeric", minute: "2-digit", hour12: true }
+        : { timeStyle: "short" };
+  return new Intl.DateTimeFormat(undefined, options).format(date);
+}
+
+/** The date as a bare numeric pattern, or null when the locale decides.
+ * Built from the local parts by hand: the pattern names its own output, so
+ * a locale must not be able to reorder or re-punctuate it. */
+function numericDate(date: Date, format: DateFormat): string | null {
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(date.getFullYear()).padStart(4, "0");
+  switch (format) {
+    case "dd.mm.yyyy":
+      return `${dd}.${mm}.${yyyy}`;
+    case "dd.mm.yy":
+      return `${dd}.${mm}.${yyyy.slice(-2)}`;
+    case "dd/mm/yyyy":
+      return `${dd}/${mm}/${yyyy}`;
+    case "mm/dd/yyyy":
+      return `${mm}/${dd}/${yyyy}`;
+    case "yyyy-mm-dd":
+      return `${yyyy}-${mm}-${dd}`;
+    case "yyyy/mm/dd":
+      return `${yyyy}/${mm}/${dd}`;
+    case "system":
+      return null;
+  }
+}
+
+export function formatListDate(
+  iso: string,
+  now: Date = new Date(),
+  format: DateTimeFormat = SYSTEM_DATE_TIME_FORMAT,
+): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   const startOfDay = (d: Date) =>
@@ -23,22 +76,21 @@ export function formatListDate(iso: string, now: Date = new Date()): string {
   const dayDiff = Math.round(
     (startOfDay(now) - startOfDay(date)) / 86_400_000,
   );
-  if (dayDiff <= 0) {
-    return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(
-      date,
-    );
-  }
+  if (dayDiff <= 0) return clock(date, format.time);
   if (dayDiff === 1) return "Yesterday";
   if (dayDiff < 7) {
     return new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(
       date,
     );
   }
-  return new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
+  return (
+    numericDate(date, format.date) ??
+    new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date)
+  );
 }
 
 // Date-section buckets for the message list, checked top-down: a message
@@ -88,11 +140,24 @@ export function formatFileSize(bytes: number): string {
   return `${bytes} B`;
 }
 
-export function formatFullDate(iso: string): string {
+export function formatFullDate(
+  iso: string,
+  format: DateTimeFormat = SYSTEM_DATE_TIME_FORMAT,
+): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "long",
-    timeStyle: "short",
-  }).format(date);
+  // why the untouched branch: with both halves on "system" the locale gets
+  // to join the two itself ("May 8, 2026 at 7:51 PM"), and Intl rejects
+  // dateStyle next to explicit hour options — so date and time can only be
+  // combined by hand once either half is pinned.
+  if (format.date === "system" && format.time === "system") {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "long",
+      timeStyle: "short",
+    }).format(date);
+  }
+  const day =
+    numericDate(date, format.date) ??
+    new Intl.DateTimeFormat(undefined, { dateStyle: "long" }).format(date);
+  return `${day} ${clock(date, format.time)}`;
 }

@@ -7,6 +7,7 @@ import {
   senderInitials,
   senderName,
 } from "./format";
+import type { DateFormat, TimeFormat } from "./types";
 
 // Local-time ISO strings (no Z) keep the tests timezone-independent.
 const now = new Date(2026, 6, 9, 15, 0); // Thursday 9 July 2026, 15:00
@@ -143,6 +144,65 @@ describe("formatFullDate", () => {
 
   it("returns the raw string for unparseable dates", () => {
     expect(formatFullDate("not a date")).toBe("not a date");
+  });
+});
+
+describe("the chosen date and time format", () => {
+  const at = (time: TimeFormat) => ({ date: "system" as const, time });
+  const on = (date: DateFormat) => ({ date, time: "system" as const });
+
+  it("writes the list date in the chosen pattern", () => {
+    const may8 = "2026-05-08T19:51:00";
+    expect(formatListDate(may8, now, on("dd.mm.yyyy"))).toBe("08.05.2026");
+    expect(formatListDate(may8, now, on("dd.mm.yy"))).toBe("08.05.26");
+    expect(formatListDate(may8, now, on("dd/mm/yyyy"))).toBe("08/05/2026");
+    expect(formatListDate(may8, now, on("mm/dd/yyyy"))).toBe("05/08/2026");
+    expect(formatListDate(may8, now, on("yyyy-mm-dd"))).toBe("2026-05-08");
+    expect(formatListDate(may8, now, on("yyyy/mm/dd"))).toBe("2026/05/08");
+  });
+
+  it("writes today's row and the full date on the chosen clock", () => {
+    const afternoon = "2026-07-09T14:30:00";
+    expect(formatListDate(afternoon, now, at("24h"))).toBe("14:30");
+    expect(formatListDate(afternoon, now, at("12h"))).toBe("2:30 PM");
+    expect(formatFullDate(afternoon, { date: "dd.mm.yyyy", time: "24h" })).toBe(
+      "09.07.2026 14:30",
+    );
+  });
+
+  it("keeps midnight at 00:00 on the 24-hour clock", () => {
+    // why: hour12:false renders midnight as 24:00 in some locales — the
+    // formatter has to pin the h23 cycle, not just switch hour12 off.
+    expect(formatListDate("2026-07-09T00:15:00", now, at("24h"))).toBe("00:15");
+  });
+
+  it("leaves relative labels and month sections alone", () => {
+    expect(formatListDate("2026-07-08T23:59:00", now, on("yyyy-mm-dd"))).toBe(
+      "Yesterday",
+    );
+    const weekday = new Intl.DateTimeFormat(undefined, {
+      weekday: "long",
+    }).format(new Date(2026, 6, 6));
+    expect(formatListDate("2026-07-06T08:00:00", now, on("yyyy-mm-dd"))).toBe(
+      weekday,
+    );
+  });
+
+  it("still writes a long locale date when only the clock is pinned", () => {
+    const date = new Date(2026, 4, 8, 19, 51);
+    const long = new Intl.DateTimeFormat(undefined, {
+      dateStyle: "long",
+    }).format(date);
+    expect(formatFullDate("2026-05-08T19:51:00", at("24h"))).toBe(
+      `${long} 19:51`,
+    );
+  });
+
+  it("falls back to the locale for unparseable dates", () => {
+    expect(formatListDate("not a date", now, on("dd.mm.yyyy"))).toBe(
+      "not a date",
+    );
+    expect(formatFullDate("not a date", on("dd.mm.yyyy"))).toBe("not a date");
   });
 });
 
