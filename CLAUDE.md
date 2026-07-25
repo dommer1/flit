@@ -44,6 +44,12 @@ A minimal, privacy-first desktop email client for macOS (multiplatform later), m
 | Rust tests | `cargo test` (run in `src-tauri/`) |
 | Rust lint | `cargo clippy -- -D warnings` (in `src-tauri/`) |
 | Rust format | `cargo fmt` (in `src-tauri/`) |
+| Regenerate app icons | `npm run tauri icon -- icon.svg` |
+
+The app icon's source of truth is `icon.svg` in the repo root; everything under
+`src-tauri/icons/` is generated from it. Edit the SVG, never the PNGs. The
+generator also writes `icons/android/` and `icons/ios/` — gitignored, this is a
+desktop app.
 
 `npm run tauri` goes through `scripts/tauri.sh`, which loads `.env` (see
 `.env.example`) and signs macOS builds — dev binaries and release bundles alike

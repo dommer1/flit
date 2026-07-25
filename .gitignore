@@ -5,3 +5,6 @@ node_modules
 .env.*
 !.env.example
 vite.config.ts.timestamp-*
+# `tauri icon` also emits mobile icon sets; this is a desktop app.
+/src-tauri/icons/android
+/src-tauri/icons/ios
