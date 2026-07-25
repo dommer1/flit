@@ -286,6 +286,8 @@ export interface MessageHeader {
   bcc: string;
   subject: string;
   snippet: string;
+  /** In threaded lists: the newest message of the conversation (my own
+   * reply, filed in Sent, counts) — not necessarily this row's own date. */
   date: string;
   read: boolean;
   /** Whether the message (in threaded lists: any message of the

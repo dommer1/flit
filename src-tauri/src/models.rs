@@ -506,6 +506,8 @@ pub struct MessageHeader {
     pub snippet: String,
     // why: RFC3339 string for now — sorts chronologically as plain text and
     // serializes cleanly; becomes a real timestamp with SQLite in Phase 1.
+    /// In threaded lists: the newest message of the conversation (my own
+    /// reply, filed in Sent, counts) — not necessarily this row's own date.
     pub date: String,
     pub read: bool,
     /// Whether the message (in threaded lists: any message of the

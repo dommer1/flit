@@ -354,6 +354,12 @@ pub async fn list(
 /// count/unread columns look across the whole account (minus trash, junk
 /// and drafts), matching what the conversation view shows on click.
 ///
+/// why the date is the thread's, not the row's: my own reply is filed in
+/// Sent, so a folder-scoped date would leave the conversation sitting under
+/// yesterday's incoming message right after I answered it. The row keeps the
+/// folder's message as its face (sender, subject, snippet) but sorts and
+/// dates by the newest message of the whole exchange.
+///
 /// why 'row:'||id as the fallback key: rows without a Message-ID can never
 /// thread, so each groups under a synthetic key only it can match.
 /// why COUNT(DISTINCT mkey): servers list one RFC message in several folders
@@ -371,7 +377,7 @@ pub async fn list_threaded(
              SELECT t.account_id,
                     COALESCE(t.thread_key, 'row:' || t.id) AS tkey,
                     COALESCE(NULLIF(t.message_id_hdr, ''), 'row:' || t.id) AS mkey,
-                    t.read, t.has_attachments,
+                    t.date, t.read, t.has_attachments,
                     (COALESCE(b.role, '') = 'drafts') AS is_draft
              FROM messages t
              LEFT JOIN mailboxes b ON b.account_id = t.account_id AND b.name = t.mailbox
@@ -384,6 +390,7 @@ pub async fn list_threaded(
                     COUNT(DISTINCT CASE WHEN NOT is_draft THEN mkey END) AS thread_count,
                     MAX(CASE WHEN read = 0 AND NOT is_draft THEN 1 ELSE 0 END) AS thread_unread,
                     MAX(CASE WHEN is_draft THEN 0 ELSE has_attachments END) AS thread_attachments,
+                    MAX(CASE WHEN NOT is_draft THEN date END) AS thread_date,
                     MAX(is_draft) AS thread_has_draft
              FROM visible
              GROUP BY account_id, tkey
@@ -399,14 +406,15 @@ pub async fn list_threaded(
            SELECT r.id, r.account_id, r.mailbox, r.from_addr AS "from", r.to_addr AS "to",
                   r.cc_addr AS cc, r.reply_to_addr AS reply_to, r.bcc_addr AS bcc,
                   r.subject, r.snippet,
-                  r.date, r.read, s.thread_attachments AS has_attachments,
+                  MAX(r.date, COALESCE(s.thread_date, r.date)) AS date,
+                  r.read, s.thread_attachments AS has_attachments,
                   COALESCE(r.message_id_hdr, '') AS message_id,
                   r.references_hdr AS "references",
                   s.thread_count, s.thread_unread, s.thread_has_draft
            FROM ranked r
            JOIN stats s ON s.account_id = r.account_id
                        AND s.tkey = COALESCE(r.thread_key, 'row:' || r.id)
-           WHERE r.rn = 1 ORDER BY r.date DESC LIMIT ?3"#,
+           WHERE r.rn = 1 ORDER BY date DESC, r.id DESC LIMIT ?3"#,
     )
     .bind(account_id)
     .bind(mailbox)
@@ -1304,6 +1312,60 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].thread_count, 2);
+    }
+
+    #[tokio::test]
+    async fn my_own_reply_dates_the_thread_row_and_lifts_it() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "a@x", "", &[]), threaded(10, "solo@x", "", &[])],
+        )
+        .await
+        .unwrap();
+        // The answer I sent is filed in Sent, not in the viewed folder.
+        upsert_headers(&pool, id, "Sent", &[threaded(25, "b@x", "a@x", &["a@x"])])
+            .await
+            .unwrap();
+
+        let rows = list_threaded(&pool, Some(id), "INBOX", None).await.unwrap();
+
+        assert_eq!(rows.len(), 2);
+        // The conversation sorts and dates by my reply, above the newer solo
+        // message, while the inbox message still represents the row.
+        assert_eq!(rows[0].message_id, "a@x");
+        assert_eq!(rows[0].date, "2026-07-25T00:00:00Z");
+        assert_eq!(rows[1].message_id, "solo@x");
+    }
+
+    #[tokio::test]
+    async fn an_unsent_draft_does_not_lift_the_thread() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "a@x", "", &[]), threaded(10, "solo@x", "", &[])],
+        )
+        .await
+        .unwrap();
+        upsert_headers(&pool, id, "Drafts", &[threaded(25, "b@x", "a@x", &["a@x"])])
+            .await
+            .unwrap();
+
+        let rows = list_threaded(&pool, Some(id), "INBOX", None).await.unwrap();
+
+        // A draft is not a message of the exchange — it dates nothing.
+        assert_eq!(rows[0].message_id, "solo@x");
+        assert_eq!(rows[1].message_id, "a@x");
+        assert_eq!(rows[1].date, "2026-07-01T00:00:00Z");
+        assert!(rows[1].thread_has_draft);
     }
 
     #[tokio::test]
