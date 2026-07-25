@@ -10,8 +10,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri",
-    "build:app": "scripts/build-app.sh"
+    "tauri": "scripts/tauri.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

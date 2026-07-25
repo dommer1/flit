@@ -38,12 +38,17 @@ A minimal, privacy-first desktop email client for macOS (multiplatform later), m
 |---|---|
 | Run the desktop app (dev) | `npm run tauri dev` |
 | Frontend only in browser | `npm run dev` |
-| Build release app | `npm run build:app` — signs with the local `flit-dev` identity so the Keychain stops re-asking (`scripts/build-app.sh`) |
+| Build release app | `npm run tauri build` |
 | Frontend tests | `npm test` |
 | Frontend type/lint check | `npm run check` |
 | Rust tests | `cargo test` (run in `src-tauri/`) |
 | Rust lint | `cargo clippy -- -D warnings` (in `src-tauri/`) |
 | Rust format | `cargo fmt` (in `src-tauri/`) |
+
+`npm run tauri` goes through `scripts/tauri.sh`, which loads `.env` (see
+`.env.example`) and signs macOS builds — dev binaries and release bundles alike
+— with the local `flit-dev` identity, so the Keychain stops re-asking on every
+rebuild. Machines without that identity fall back to ad-hoc signing.
 
 All of `npm run check` + `npm test` + `cargo test` + `cargo clippy` must pass before any commit.
 
