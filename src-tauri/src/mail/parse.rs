@@ -18,8 +18,9 @@ pub struct ParsedHeader {
     /// strip the header) — Sent copies from other clients can carry it.
     pub bcc: String,
     pub subject: String,
-    /// RFC3339, or empty when the Date header is missing/unparsable —
-    /// empty sorts last in the date-desc list instead of inventing a date.
+    /// RFC3339 in UTC ("…Z"), or empty when the Date header is
+    /// missing/unparsable — empty sorts last in the date-desc list instead
+    /// of inventing a date.
     pub date: String,
     /// Message-ID without angle brackets; empty when the sender set none.
     pub message_id: String,
@@ -83,7 +84,7 @@ pub fn parse_header(raw: &[u8]) -> ParsedHeader {
         reply_to: format_addr_list(message.reply_to()),
         bcc: format_addr_list(message.bcc()),
         subject: message.subject().unwrap_or_default().to_string(),
-        date: message.date().map(|d| d.to_rfc3339()).unwrap_or_default(),
+        date: message.date().map(utc_rfc3339).unwrap_or_default(),
         message_id: clean_id(message.message_id().unwrap_or_default()),
         in_reply_to: id_list(message.in_reply_to())
             .into_iter()
@@ -91,6 +92,16 @@ pub fn parse_header(raw: &[u8]) -> ParsedHeader {
             .unwrap_or_default(),
         references: id_list(message.references()),
     }
+}
+
+/// A Date header as RFC3339 in UTC. mail-parser keeps the sender's zone
+/// ("…-06:00"), but the date column is compared as plain text throughout —
+/// list order, thread dates, sync bookkeeping — and mixed offsets make
+/// those string comparisons disagree with real time. Rebuilding the value
+/// from the timestamp shifts it to UTC, where the text order is the true
+/// chronological order.
+fn utc_rfc3339(date: &mail_parser::DateTime) -> String {
+    mail_parser::DateTime::from_timestamp(date.to_timestamp()).to_rfc3339()
 }
 
 /// A Message-ID normalized for comparison: angle brackets and whitespace
@@ -492,7 +503,7 @@ mod tests {
 
         assert_eq!(header.from, "Alice Novak <alice@example.com>");
         assert_eq!(header.subject, "Weekend plans");
-        assert!(header.date.starts_with("2026-07-07T09:15:00"));
+        assert_eq!(header.date, "2026-07-07T09:15:00Z");
         assert_eq!(header.to, "");
         assert_eq!(header.cc, "");
     }
@@ -591,6 +602,22 @@ mod tests {
                     \r\n";
 
         assert_eq!(parse_header(raw).subject, "Ahoj svet");
+    }
+
+    #[test]
+    fn dates_are_stored_as_utc_whatever_zone_the_sender_wrote() {
+        // The date column is compared as plain text everywhere (list order,
+        // thread dates, incremental sync) — mixed offsets would sort a
+        // "-0600" evening mail below an older "Z" one from the next day.
+        let west = b"Subject: t\r\nDate: Fri, 24 Jul 2026 23:03:32 -0600\r\n\r\n";
+        let east = b"Subject: t\r\nDate: Sat, 25 Jul 2026 09:02:20 +0200\r\n\r\n";
+
+        let west = parse_header(west).date;
+        let east = parse_header(east).date;
+
+        assert_eq!(west, "2026-07-25T05:03:32Z");
+        assert_eq!(east, "2026-07-25T07:02:20Z");
+        assert!(west < east);
     }
 
     #[test]
