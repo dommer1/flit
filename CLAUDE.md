@@ -38,7 +38,7 @@ A minimal, privacy-first desktop email client for macOS (multiplatform later), m
 |---|---|
 | Run the desktop app (dev) | `npm run tauri dev` |
 | Frontend only in browser | `npm run dev` |
-| Build release app | `npm run tauri build` |
+| Build release app | `npm run build:app` — signs with the local `flit-dev` identity so the Keychain stops re-asking (`scripts/build-app.sh`) |
 | Frontend tests | `npm test` |
 | Frontend type/lint check | `npm run check` |
 | Rust tests | `cargo test` (run in `src-tauri/`) |
