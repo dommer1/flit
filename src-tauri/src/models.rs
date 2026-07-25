@@ -314,6 +314,101 @@ impl ThreadOrder {
     }
 }
 
+/// How dates are written in the UI. Every variant but `System` is named
+/// after exactly what it produces, and that pattern IS its wire form — the
+/// value the settings menu shows is the value stored and the value the
+/// frontend switches on, so the three can never drift apart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DateFormat {
+    /// Default: whatever the OS locale writes (25 July 2026, 7/25/2026, …).
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "dd.mm.yyyy")]
+    DayMonthYearDot,
+    #[serde(rename = "dd.mm.yy")]
+    DayMonthShortYearDot,
+    #[serde(rename = "dd/mm/yyyy")]
+    DayMonthYearSlash,
+    #[serde(rename = "mm/dd/yyyy")]
+    MonthDayYearSlash,
+    #[serde(rename = "yyyy-mm-dd")]
+    YearMonthDayDash,
+    #[serde(rename = "yyyy/mm/dd")]
+    YearMonthDaySlash,
+}
+
+impl DateFormat {
+    /// The wire/storage form — matches the serde names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DateFormat::System => "system",
+            DateFormat::DayMonthYearDot => "dd.mm.yyyy",
+            DateFormat::DayMonthShortYearDot => "dd.mm.yy",
+            DateFormat::DayMonthYearSlash => "dd/mm/yyyy",
+            DateFormat::MonthDayYearSlash => "mm/dd/yyyy",
+            DateFormat::YearMonthDayDash => "yyyy-mm-dd",
+            DateFormat::YearMonthDaySlash => "yyyy/mm/dd",
+        }
+    }
+
+    /// why: unknown strings fall back to the locale's own format — that is
+    /// always readable, so a corrupt row can't leave dates unreadable.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "dd.mm.yyyy" => DateFormat::DayMonthYearDot,
+            "dd.mm.yy" => DateFormat::DayMonthShortYearDot,
+            "dd/mm/yyyy" => DateFormat::DayMonthYearSlash,
+            "mm/dd/yyyy" => DateFormat::MonthDayYearSlash,
+            "yyyy-mm-dd" => DateFormat::YearMonthDayDash,
+            "yyyy/mm/dd" => DateFormat::YearMonthDaySlash,
+            _ => DateFormat::System,
+        }
+    }
+}
+
+/// Whether clock times read as 14:30 or 2:30 PM.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeFormat {
+    /// Default: the OS locale's own convention.
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "24h")]
+    Hour24,
+    #[serde(rename = "12h")]
+    Hour12,
+}
+
+impl TimeFormat {
+    /// The wire/storage form — matches the serde names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TimeFormat::System => "system",
+            TimeFormat::Hour24 => "24h",
+            TimeFormat::Hour12 => "12h",
+        }
+    }
+
+    /// why: same as DateFormat — anything unknown reverts to the locale.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "24h" => TimeFormat::Hour24,
+            "12h" => TimeFormat::Hour12,
+            _ => TimeFormat::System,
+        }
+    }
+}
+
+/// How the UI writes dates and clock times. The two halves are independent
+/// — a 24-hour clock with US dates is a perfectly ordinary combination.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DateTimeFormat {
+    pub date: DateFormat,
+    pub time: TimeFormat,
+}
+
 /// What one direction of the message-list swipe gesture does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -2,11 +2,14 @@ use sqlx::SqlitePool;
 
 use crate::error::AppError;
 use crate::models::{
-    NotificationSettings, RemoteImagePolicy, SwipeAction, SwipeActions, ThreadOrder,
+    DateFormat, DateTimeFormat, NotificationSettings, RemoteImagePolicy, SwipeAction, SwipeActions,
+    ThreadOrder, TimeFormat,
 };
 
 const REMOTE_IMAGES_KEY: &str = "remote_images";
 const THREAD_ORDER_KEY: &str = "thread_order";
+const DATE_FORMAT_KEY: &str = "date_format";
+const TIME_FORMAT_KEY: &str = "time_format";
 const NOTIFICATIONS_ENABLED_KEY: &str = "notifications_enabled";
 const NOTIFICATION_SOUND_KEY: &str = "notification_sound";
 const SYNC_INTERVAL_KEY: &str = "sync_interval_minutes";
@@ -116,6 +119,32 @@ pub async fn thread_order(pool: &SqlitePool) -> Result<ThreadOrder, AppError> {
 
 pub async fn set_thread_order(pool: &SqlitePool, order: ThreadOrder) -> Result<(), AppError> {
     upsert(pool, THREAD_ORDER_KEY, order.as_str()).await
+}
+
+/// The stored date/time display format. The halves are read independently,
+/// so an unreadable date pattern still leaves the clock preference intact.
+pub async fn date_time_format(pool: &SqlitePool) -> Result<DateTimeFormat, AppError> {
+    Ok(DateTimeFormat {
+        date: value(pool, DATE_FORMAT_KEY)
+            .await?
+            .as_deref()
+            .map(DateFormat::parse)
+            .unwrap_or_default(),
+        time: value(pool, TIME_FORMAT_KEY)
+            .await?
+            .as_deref()
+            .map(TimeFormat::parse)
+            .unwrap_or_default(),
+    })
+}
+
+pub async fn set_date_time_format(
+    pool: &SqlitePool,
+    format: DateTimeFormat,
+) -> Result<(), AppError> {
+    upsert(pool, DATE_FORMAT_KEY, format.date.as_str()).await?;
+    upsert(pool, TIME_FORMAT_KEY, format.time.as_str()).await?;
+    Ok(())
 }
 
 /// The configured swipe actions; a missing or corrupt side falls back to
@@ -284,6 +313,59 @@ mod tests {
             .unwrap();
 
         assert_eq!(thread_order(&pool).await.unwrap(), ThreadOrder::NewestLast);
+    }
+
+    #[tokio::test]
+    async fn date_time_format_defaults_to_the_system_locale_and_roundtrips() {
+        let pool = test_pool().await;
+
+        assert_eq!(
+            date_time_format(&pool).await.unwrap(),
+            DateTimeFormat::default()
+        );
+
+        let wanted = DateTimeFormat {
+            date: DateFormat::DayMonthYearDot,
+            time: TimeFormat::Hour24,
+        };
+        set_date_time_format(&pool, wanted).await.unwrap();
+        assert_eq!(date_time_format(&pool).await.unwrap(), wanted);
+
+        // Saving again overwrites the same two rows instead of adding more.
+        set_date_time_format(&pool, wanted).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM settings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 2);
+    }
+
+    #[tokio::test]
+    async fn each_corrupt_format_half_falls_back_on_its_own() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('date_format', 'yolo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        set_date_time_format(
+            &pool,
+            DateTimeFormat {
+                date: DateFormat::System,
+                time: TimeFormat::Hour12,
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE settings SET value = 'yolo' WHERE key = 'date_format'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let format = date_time_format(&pool).await.unwrap();
+
+        // The unreadable half reverts, the readable one is kept.
+        assert_eq!(format.date, DateFormat::System);
+        assert_eq!(format.time, TimeFormat::Hour12);
     }
 
     #[tokio::test]
