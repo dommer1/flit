@@ -9,6 +9,7 @@ import {
 import type {
   Alias,
   Account,
+  DateTimeFormat,
   MessageHeader,
   ScheduledMessage,
   SendEvent,
@@ -137,6 +138,7 @@ let scheduledMissed: (() => void) | undefined;
 let scheduledChanged: (() => void) | undefined;
 let settingsChanged: (() => void) | undefined;
 let currentSwipeActions: SwipeActions;
+let currentDateTimeFormat: DateTimeFormat;
 
 // why a named default: tests override listMailboxes with
 // mockImplementation, which clearAllMocks does NOT undo — beforeEach
@@ -261,6 +263,7 @@ vi.mock("./lib/api", () => ({
   }),
   getThreadOrder: vi.fn(async () => "newestLast"),
   getSwipeActions: vi.fn(async () => currentSwipeActions),
+  getDateTimeFormat: vi.fn(async () => currentDateTimeFormat),
   onSettingsChanged: vi.fn(async (callback: () => void) => {
     settingsChanged = callback;
     return () => {};
@@ -296,6 +299,7 @@ beforeEach(() => {
   scheduledChanged = undefined;
   settingsChanged = undefined;
   currentSwipeActions = { left: "archive", right: "toggleRead" };
+  currentDateTimeFormat = { date: "system", time: "system" };
   localStorage.clear();
   vi.clearAllMocks();
   vi.mocked(api.listMailboxes).mockImplementation(defaultListMailboxes);
@@ -1102,6 +1106,21 @@ it("opens a quoted reply when the right swipe is configured to reply", async () 
       },
     }),
   );
+});
+
+it("writes list dates in the chosen format and follows a change", async () => {
+  currentDateTimeFormat = { date: "dd.mm.yyyy", time: "system" };
+  render(App);
+
+  const row = await screen.findByRole("option", { name: /Weekend plans/ });
+  await waitFor(() => expect(row).toHaveTextContent("07.07.2026"));
+
+  // The settings window saves in its own JS context; this one only hears
+  // the event — and the rows must re-render off the shared format.
+  currentDateTimeFormat = { date: "yyyy-mm-dd", time: "system" };
+  settingsChanged?.();
+
+  await waitFor(() => expect(row).toHaveTextContent("2026-07-07"));
 });
 
 it("re-reads the swipe config when settings change", async () => {

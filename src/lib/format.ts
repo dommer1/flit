@@ -5,12 +5,8 @@
 // General); "system" means the OS locale decides, which is the default and
 // what every one of these functions falls back to.
 
-import {
-  SYSTEM_DATE_TIME_FORMAT,
-  type DateFormat,
-  type DateTimeFormat,
-  type TimeFormat,
-} from "./types";
+import { dateTimeFormat } from "./datetime.svelte";
+import { type DateFormat, type DateTimeFormat, type TimeFormat } from "./types";
 
 export function senderName(from: string): string {
   const match = from.match(/^\s*"?(.*?)"?\s*<[^<>]*>\s*$/);
@@ -67,7 +63,7 @@ function numericDate(date: Date, format: DateFormat): string | null {
 export function formatListDate(
   iso: string,
   now: Date = new Date(),
-  format: DateTimeFormat = SYSTEM_DATE_TIME_FORMAT,
+  format: DateTimeFormat = dateTimeFormat,
 ): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -142,7 +138,7 @@ export function formatFileSize(bytes: number): string {
 
 export function formatFullDate(
   iso: string,
-  format: DateTimeFormat = SYSTEM_DATE_TIME_FORMAT,
+  format: DateTimeFormat = dateTimeFormat,
 ): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;

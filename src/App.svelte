@@ -5,6 +5,7 @@
     archiveThread,
     cancelScheduled,
     discardDraft,
+    getDateTimeFormat,
     getMessageBody,
     getMessageQuote,
     getSwipeActions,
@@ -37,6 +38,7 @@
     undoSend,
     viewStatus,
   } from "./lib/api";
+  import { applyDateTimeFormat } from "./lib/datetime.svelte";
   import { debounce } from "./lib/debounce";
   import {
     forwardDraft,
@@ -216,6 +218,13 @@
 
   async function refreshThreadOrder() {
     threadOrder = await getThreadOrder();
+  }
+
+  // How dates and clock times are written. Unlike the two above this is no
+  // prop: format.ts reads the shared rune, so the list rows, the
+  // conversation cards and the reply attribution all follow it at once.
+  async function refreshDateTimeFormat() {
+    applyDateTimeFormat(await getDateTimeFormat());
   }
 
   // why fetch first: neither the list rows nor the toolbar hold the body —
@@ -669,6 +678,9 @@
       );
       void refreshThreadOrder().catch((err: unknown) =>
         console.error("failed to load thread order:", err),
+      );
+      void refreshDateTimeFormat().catch((err: unknown) =>
+        console.error("failed to load the date format:", err),
       );
     };
     refreshSwipeLogged();
