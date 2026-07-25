@@ -87,6 +87,22 @@ it("fires the chrome callbacks from their buttons", async () => {
   expect(onOpenSettings).toHaveBeenCalledOnce();
 });
 
+it("spins the refresh icon and blocks re-clicks while a sync runs", async () => {
+  const { rerender } = renderToolbar({ refreshing: true });
+
+  const button = screen.getByRole("button", { name: "Check for new mail" });
+  expect(button).toBeDisabled();
+  expect(button.querySelector("svg")?.classList.contains("spinning")).toBe(
+    true,
+  );
+
+  await rerender({ refreshing: false });
+  expect(button).toBeEnabled();
+  expect(button.querySelector("svg")?.classList.contains("spinning")).toBe(
+    false,
+  );
+});
+
 it("reports what is typed into the search field", async () => {
   const onSearch = vi.fn();
   renderToolbar({ onSearch });

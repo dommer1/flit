@@ -610,14 +610,23 @@
     refreshDebounced();
   }
 
+  // How many fire-and-forget account syncs are still running — the toolbar's
+  // refresh icon spins while any are, so a click visibly does something.
+  let syncsInFlight = $state(0);
+
   // why: fire-and-forget and parallel — every invoke runs as its own async
   // task in the backend, and the UI reads from the cache as each account's
   // messages-changed event lands. One slow server never delays the others.
   function startSync(accountIds: number[]) {
     for (const id of accountIds) {
-      syncAccount(id).catch((err: unknown) => {
-        console.error(`account sync failed for account ${id}:`, err);
-      });
+      syncsInFlight += 1;
+      syncAccount(id)
+        .catch((err: unknown) => {
+          console.error(`account sync failed for account ${id}:`, err);
+        })
+        .finally(() => {
+          syncsInFlight -= 1;
+        });
     }
   }
 
@@ -706,6 +715,7 @@
   sidebarWidth={paneWidths.sidebar}
   onToggleSidebar={toggleSidebar}
   onRefresh={handleRefresh}
+  refreshing={syncsInFlight > 0}
   onCompose={openNewMessage}
   onSearch={handleSearch}
   onOpenSettings={handleOpenSettings}

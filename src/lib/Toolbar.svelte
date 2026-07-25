@@ -7,6 +7,7 @@
     sidebarWidth = 230,
     onToggleSidebar,
     onRefresh,
+    refreshing = false,
     onCompose,
     onSearch,
     onOpenSettings,
@@ -24,6 +25,8 @@
     sidebarWidth?: number;
     onToggleSidebar: () => void;
     onRefresh: () => void;
+    /** A sync is in flight — the refresh icon spins and the button locks. */
+    refreshing?: boolean;
     onCompose: () => void;
     onSearch: (query: string) => void;
     onOpenSettings: () => void;
@@ -96,9 +99,10 @@
       class="action"
       aria-label="Check for new mail"
       title="Check for new mail"
+      disabled={refreshing}
       onclick={onRefresh}
     >
-      <svg viewBox="0 0 20 20" aria-hidden="true">
+      <svg viewBox="0 0 20 20" aria-hidden="true" class:spinning={refreshing}>
         <path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6" />
         <path d="M16.8 2.8v3.4h-3.4" />
       </svg>
@@ -375,6 +379,29 @@
 
   .action .label {
     font-size: 10px;
+  }
+
+  /* why full opacity: the spinning state means "working", not "unavailable" —
+   * the disabled dimming would read as the wrong signal. */
+  .action:disabled:has(.spinning) {
+    opacity: 1;
+  }
+
+  .action svg.spinning {
+    animation: spin 0.9s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .action svg.spinning {
+      animation: none;
+      opacity: 0.5;
+    }
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .separator {
