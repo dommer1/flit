@@ -123,7 +123,7 @@ fn recipient_piece(piece: String) -> Address<'static> {
 
 /// The wrapper the compose window puts around a draft's quote block in the
 /// HTML body — MUST stay in sync with QUOTE_MARKER in src/lib/draft.ts.
-const QUOTE_MARKER: &str = r#"<div class="flit-draft-quote">"#;
+const QUOTE_MARKER: &str = r#"<br><div class="gmail_quote flit-draft-quote">"#;
 
 /// Inline style of the rebuilt quote block — mirrors QUOTE_BLOCK_STYLE in
 /// src/lib/draft.ts, so a reopened-then-resaved draft looks unchanged.
@@ -156,7 +156,12 @@ pub struct SavedQuote {
 pub fn split_saved_quote(text: &str, html: &str) -> Option<SavedQuote> {
     let marker_at = html.find(QUOTE_MARKER)?;
     let block = &html[marker_at + QUOTE_MARKER.len()..];
-    let attribution = unescape_html(block.strip_prefix("<p>")?.split("</p>").next()?);
+    let attribution = unescape_html(
+        block
+            .strip_prefix(r#"<div class="gmail_attr">"#)?
+            .split("</div>")
+            .next()?,
+    );
 
     let bq_at = block.find("<blockquote")?;
     let inner_start = bq_at + block[bq_at..].find('>')? + 1;
@@ -238,8 +243,9 @@ pub fn split_plain_quote(text: &str) -> Option<SavedQuote> {
 /// splitComposedHtml finds the marker again on reopen.
 pub fn compose_quoted_html(own_html: &str, attribution: &str, quote_html: &str) -> String {
     format!(
-        "{own_html}{QUOTE_MARKER}<p>{}</p>\
-         <blockquote type=\"cite\" style=\"{QUOTE_BLOCK_STYLE}\">{quote_html}</blockquote></div>",
+        "{own_html}{QUOTE_MARKER}<div class=\"gmail_attr\">{}</div>\
+         <blockquote class=\"gmail_quote\" type=\"cite\" \
+         style=\"{QUOTE_BLOCK_STYLE}\">{quote_html}</blockquote></div>",
         escape_html(attribution)
     )
 }
@@ -303,6 +309,22 @@ mod tests {
     }
 
     #[test]
+    fn compose_quoted_html_pins_the_wire_shape() {
+        // Pinned against src/lib/draft.ts — a reopened draft only splits
+        // again when both sides write the byte-identical marker. The <br>
+        // and the gmail_* classes are what recipient clients need to space
+        // and fold the quote.
+        assert_eq!(
+            compose_quoted_html("<p>hi</p>", "On X, Y <y@x> wrote:", "<p>q</p>"),
+            "<p>hi</p><br><div class=\"gmail_quote flit-draft-quote\">\
+             <div class=\"gmail_attr\">On X, Y &lt;y@x&gt; wrote:</div>\
+             <blockquote class=\"gmail_quote\" type=\"cite\" \
+             style=\"margin:0 0 0 0.8ex;border-left:2px solid #c8ccd4;padding-left:1ex\">\
+             <p>q</p></blockquote></div>"
+        );
+    }
+
+    #[test]
     fn split_saved_quote_survives_crlf_round_trips() {
         // A draft read back from the server (or the body cache fed by the
         // raw MIME) carries \r\n endings — the rich quote must still split,
@@ -355,6 +377,15 @@ mod tests {
         // apart) — reopening as-is beats duplicating the quote.
         let html = compose_quoted_html("<p>hi</p>", "On X, Y wrote:", "<p>q</p>");
         assert_eq!(split_saved_quote("something else entirely", &html), None);
+        // A draft saved by a build that wrote the pre-gmail_quote marker:
+        // the rich split no longer matches, and split_plain_quote takes over.
+        let legacy = "<p>hi</p><div class=\"flit-draft-quote\"><p>On X, Y wrote:</p>\
+                      <blockquote type=\"cite\"><p>q</p></blockquote></div>";
+        assert_eq!(
+            split_saved_quote("hi\n\nOn X, Y wrote:\n> q\n", legacy),
+            None
+        );
+        assert!(split_plain_quote("hi\n\nOn X, Y wrote:\n> q\n").is_some());
     }
 
     fn outgoing() -> OutgoingMessage {

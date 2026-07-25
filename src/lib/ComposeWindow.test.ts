@@ -943,7 +943,9 @@ it("sends the parked quote merged below the typed reply", async () => {
     expect(api.queueSend).toHaveBeenCalledWith(
       expect.objectContaining({
         body: expect.stringContaining("> Build Week is open."),
-        bodyHtml: expect.stringContaining('<div class="flit-draft-quote">'),
+        bodyHtml: expect.stringContaining(
+          '<div class="gmail_quote flit-draft-quote">',
+        ),
       }),
     ),
   );
@@ -999,9 +1001,10 @@ it("splits a reopened draft's composed quote back out of the editor", async () =
     ...quotedDraft,
     body: "Thanks!\n\nOn July 17, 2026, OpenAI wrote:\n> Build Week is open.\n",
     bodyHtml:
-      '<p>Thanks!</p><div class="flit-draft-quote">' +
-      "<p>On July 17, 2026, OpenAI wrote:</p>" +
-      '<blockquote type="cite"><p>Build Week is open.</p></blockquote></div>',
+      '<p>Thanks!</p><br><div class="gmail_quote flit-draft-quote">' +
+      '<div class="gmail_attr">On July 17, 2026, OpenAI wrote:</div>' +
+      '<blockquote class="gmail_quote" type="cite">' +
+      "<p>Build Week is open.</p></blockquote></div>",
     draftMessageId: "d1@flit.local",
   });
 

@@ -339,11 +339,33 @@ describe("composing a draft with its quote", () => {
     const html = composeHtmlBody("<p>Thanks!</p>", quote);
 
     expect(html.startsWith("<p>Thanks!</p>")).toBe(true);
-    expect(html).toContain('<div class="flit-draft-quote">');
+    expect(html).toContain('<div class="gmail_quote flit-draft-quote">');
     // The attribution's <angle brackets> must be escaped, not markup.
     expect(html).toContain("OpenAI &lt;dev@openai.com&gt; wrote:");
-    expect(html).toContain('<blockquote type="cite" style="');
+    expect(html).toContain(
+      '<blockquote class="gmail_quote" type="cite" style="',
+    );
     expect(html).toContain("<p>Build Week is open.</p></blockquote></div>");
+  });
+
+  it("html body separates the typed text from the quote with a break", () => {
+    // why <br> and not paragraph margins: clients that normalize away <p>
+    // margins (Spark, Canary) otherwise glue the attribution to the last
+    // typed line. Gmail writes the same break for the same reason.
+    expect(composeHtmlBody("<p>Thanks!</p>", quote)).toContain(
+      '<p>Thanks!</p><br><div class="gmail_quote',
+    );
+  });
+
+  it("html body labels the quote the way clients fold it", () => {
+    // gmail_quote/gmail_attr is what other clients look for to collapse the
+    // quoted history behind a "show more" control.
+    const html = composeHtmlBody("<p>Thanks!</p>", quote);
+
+    expect(html).toContain(
+      '<div class="gmail_attr">On July 17, 2026, ' +
+        "OpenAI &lt;dev@openai.com&gt; wrote:</div>",
+    );
   });
 
   it("quoteEditorHtml escapes the attribution and drops the marker", () => {

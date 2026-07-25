@@ -65,8 +65,16 @@ function draftQuote(
 }
 
 /** Marker the composed bodyHtml wraps its quote block in — the split point
- * when a reopened draft separates editor content from the quote again. */
-const QUOTE_MARKER = '<div class="flit-draft-quote">';
+ * when a reopened draft separates editor content from the quote again.
+ *
+ * why the leading <br>: clients that normalize <p> margins away (Spark,
+ * Canary) otherwise glue the attribution to the last typed line. Gmail
+ * writes the same break. It sits INSIDE the marker so a save/reopen round
+ * trip splits it off with the quote instead of stacking another one.
+ *
+ * why gmail_quote: the class other clients key their "fold the quoted
+ * history" heuristic on — without it the whole original stays expanded. */
+const QUOTE_MARKER = '<br><div class="gmail_quote flit-draft-quote">';
 
 /** Inline-styled (Gmail-style bar) so every recipient client renders it —
  * a receiving Flit recognizes the <blockquote> and folds it as history. */
@@ -95,8 +103,10 @@ export function composeHtmlBody(
 ): string {
   if (!quote) return editorHtml;
   return (
-    `${editorHtml}${QUOTE_MARKER}<p>${escapeHtml(quote.attribution)}</p>` +
-    `<blockquote type="cite" style="${QUOTE_BLOCK_STYLE}">${quote.html}</blockquote></div>`
+    `${editorHtml}${QUOTE_MARKER}` +
+    `<div class="gmail_attr">${escapeHtml(quote.attribution)}</div>` +
+    `<blockquote class="gmail_quote" type="cite" style="${QUOTE_BLOCK_STYLE}">` +
+    `${quote.html}</blockquote></div>`
   );
 }
 
