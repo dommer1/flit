@@ -137,6 +137,46 @@ mod tests {
         assert_eq!(count, 1);
     }
 
+    #[tokio::test]
+    async fn the_utc_migration_shifts_cached_dates_and_spares_the_rest() {
+        let pool = test_pool().await;
+        let account = crate::storage::accounts::insert(&pool, &sample_account())
+            .await
+            .unwrap();
+        // How older builds cached them: the sender's own zone, an already
+        // normalized row, and one whose Date header was missing.
+        for (uid, date) in [
+            (1, "2026-07-24T23:03:32-06:00"),
+            (2, "2026-07-25T09:02:20Z"),
+            (3, ""),
+        ] {
+            sqlx::query(
+                "INSERT INTO messages (account_id, uid, uid_validity, date) VALUES (?, ?, 1, ?)",
+            )
+            .bind(account.id)
+            .bind(uid)
+            .bind(date)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // The migration already ran on this pool with no rows to fix —
+        // running the very same file again proves it is idempotent too.
+        sqlx::raw_sql(include_str!(
+            "../../migrations/0026_message_dates_to_utc.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let dates: Vec<String> = sqlx::query_scalar("SELECT date FROM messages ORDER BY uid")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(dates, ["2026-07-25T05:03:32Z", "2026-07-25T09:02:20Z", ""]);
+    }
+
     fn sample_account() -> crate::models::NewAccount {
         crate::models::NewAccount {
             name: "Personal".to_string(),
