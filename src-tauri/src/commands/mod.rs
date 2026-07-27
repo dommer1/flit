@@ -90,6 +90,20 @@ pub async fn refresh_account(app: AppHandle, account_id: i64) -> Result<(), AppE
     run_sync(&app, account_id).await
 }
 
+/// Open one IMAP session for an account.
+async fn connect_account(
+    account: &Account,
+    password: &str,
+) -> Result<mail::imap::ImapSession, AppError> {
+    mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        password,
+    )
+    .await
+}
+
 const SYNC_LABEL: &str = "sync pass";
 /// Ceiling for one sync pass. Generous — a first pass over a large account
 /// does real work — but finite, because the pass holds the account's sync
@@ -118,7 +132,9 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
     // written to state beyond the cache, events, or logs.
     let result = mail::with_timeout(SYNC_LABEL, SYNC_TIMEOUT, async {
         let password = state.password(account_id).await?;
-        let new_mail = mail::sync::sync_account(&state.pool, &account, &password).await?;
+        let mut session = connect_account(&account, &password).await?;
+        let new_mail = mail::sync::sync_account(&state.pool, &account, &mut session).await?;
+        let _ = session.logout().await;
         Ok::<(String, Vec<mail::sync::NewMail>), AppError>((password, new_mail))
     })
     .await;
@@ -144,11 +160,12 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
     let pool = state.pool.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let prefetch = mail::with_timeout(
-            "body prefetch",
-            BACKGROUND_TIMEOUT,
-            mail::sync::prefetch_bodies(&pool, &account, &password),
-        );
+        let prefetch = mail::with_timeout("body prefetch", BACKGROUND_TIMEOUT, async {
+            let mut session = connect_account(&account, &password).await?;
+            let cached = mail::sync::prefetch_bodies(&pool, &account, &mut session).await?;
+            let _ = session.logout().await;
+            Ok(cached)
+        });
         match prefetch.await {
             // why: snippets just became real — lists and searches should see them.
             Ok(cached) if cached > 0 => {
@@ -170,11 +187,12 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
         let on_batch = || {
             let _ = app.emit("messages-changed", account_id);
         };
-        let backfill = mail::with_timeout(
-            "header backfill",
-            BACKGROUND_TIMEOUT,
-            mail::sync::backfill_headers(&pool, &account, &password, on_batch),
-        );
+        let backfill = mail::with_timeout("header backfill", BACKGROUND_TIMEOUT, async {
+            let mut session = connect_account(&account, &password).await?;
+            let total = mail::sync::backfill_headers(&pool, &account, &mut session, on_batch).await;
+            let _ = session.logout().await;
+            total
+        });
         if let Err(err) = backfill.await {
             eprintln!("header backfill failed for account {account_id}: {err}");
         }

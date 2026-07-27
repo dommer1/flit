@@ -71,8 +71,12 @@ pub struct NewMail {
 }
 
 /// One full sync pass for an account: discover folders, mirror them into
-/// the mailboxes table, then sync each folder over the same connection.
+/// the mailboxes table, then sync each folder over the caller's connection.
 /// Folders run in sidebar order, so INBOX is fresh before slower ones.
+///
+/// The caller owns the session — and so owns closing it — because one pass
+/// is followed by the body prefetch and the header backfill against the
+/// same server.
 ///
 /// Returns the new unread inbox messages this pass brought in — only those
 /// can warrant a notification. Initial and reset fetches report nothing:
@@ -80,27 +84,18 @@ pub struct NewMail {
 pub async fn sync_account(
     pool: &SqlitePool,
     account: &Account,
-    password: &str,
+    session: &mut imap::ImapSession,
 ) -> Result<Vec<NewMail>, AppError> {
-    let mut session = imap::connect(
-        &account.imap_host,
-        account.imap_port,
-        &account.username,
-        password,
-    )
-    .await?;
-
-    let found = imap::list_mailboxes(&mut session).await?;
+    let found = imap::list_mailboxes(session).await?;
     crate::storage::mailboxes::replace(pool, account.id, &found).await?;
 
     let mut new_mail = Vec::new();
     for mailbox in crate::storage::mailboxes::list(pool, account.id).await? {
-        let fetched = sync_mailbox(pool, account.id, &mut session, &mailbox.name).await?;
+        let fetched = sync_mailbox(pool, account.id, session, &mailbox.name).await?;
         if mailbox.role.as_deref() == Some("inbox") {
             new_mail.extend(notifiable(&fetched));
         }
     }
-    let _ = session.logout().await;
     Ok(new_mail)
 }
 
@@ -312,20 +307,12 @@ fn prefetch_plan(missing: &[(i64, i64)], sizes: &[(i64, u32)], max_bytes: u32) -
 pub async fn prefetch_bodies(
     pool: &SqlitePool,
     account: &Account,
-    password: &str,
+    session: &mut imap::ImapSession,
 ) -> Result<usize, AppError> {
     if !messages::has_missing_bodies(pool, account.id).await? {
         return Ok(0);
     }
     let folders = crate::storage::mailboxes::list(pool, account.id).await?;
-
-    let mut session = imap::connect(
-        &account.imap_host,
-        account.imap_port,
-        &account.username,
-        password,
-    )
-    .await?;
 
     let mut budget = PREFETCH_BATCH;
     let mut cached = 0;
@@ -343,12 +330,12 @@ pub async fn prefetch_bodies(
             .map_err(|e| AppError::Imap(format!("select {}: {e}", folder.name)))?;
 
         let uids: Vec<i64> = missing.iter().map(|(_, uid)| *uid).collect();
-        let sizes = imap::fetch_sizes(&mut session, &uids).await?;
+        let sizes = imap::fetch_sizes(session, &uids).await?;
 
         for (message_id, uid) in prefetch_plan(&missing, &sizes, MAX_PREFETCH_BYTES) {
             // why: a UID can vanish mid-run (deleted on another device) —
             // skip it rather than aborting the whole batch.
-            let Some(raw) = imap::fetch_body(&mut session, uid).await? else {
+            let Some(raw) = imap::fetch_body(session, uid).await? else {
                 continue;
             };
             let parsed = parse::parse_body(&raw);
@@ -367,7 +354,6 @@ pub async fn prefetch_bodies(
             budget -= 1;
         }
     }
-    let _ = session.logout().await;
     Ok(cached)
 }
 
@@ -386,25 +372,17 @@ const BACKFILL_BATCH: usize = 500;
 pub async fn backfill_headers(
     pool: &SqlitePool,
     account: &Account,
-    password: &str,
+    session: &mut imap::ImapSession,
     on_batch: impl Fn(),
 ) -> Result<usize, AppError> {
     let folders = crate::storage::mailboxes::incomplete_mailboxes(pool, account.id).await?;
     if folders.is_empty() {
         return Ok(0);
     }
-    let mut session = imap::connect(
-        &account.imap_host,
-        account.imap_port,
-        &account.username,
-        password,
-    )
-    .await?;
     let mut total = 0;
     for folder in &folders {
-        total += backfill_mailbox(pool, account.id, &mut session, folder, &on_batch).await?;
+        total += backfill_mailbox(pool, account.id, session, folder, &on_batch).await?;
     }
-    let _ = session.logout().await;
     Ok(total)
 }
 
