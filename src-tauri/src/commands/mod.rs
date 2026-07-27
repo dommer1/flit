@@ -128,14 +128,14 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
     };
     let account = storage::accounts::get(&state.pool, account_id).await?;
     // why: the password comes from the session cache (one keychain read per
-    // account per run) and is handed on to the prefetch task below — never
-    // written to state beyond the cache, events, or logs.
+    // account per run) and never leaves this block — never written to state
+    // beyond the cache, events, or logs. The open session outlives it: the
+    // background work below continues on the very same connection.
     let result = mail::with_timeout(SYNC_LABEL, SYNC_TIMEOUT, async {
         let password = state.password(account_id).await?;
         let mut session = connect_account(&account, &password).await?;
         let new_mail = mail::sync::sync_account(&state.pool, &account, &mut session).await?;
-        let _ = session.logout().await;
-        Ok::<(String, Vec<mail::sync::NewMail>), AppError>((password, new_mail))
+        Ok::<(mail::imap::ImapSession, Vec<mail::sync::NewMail>), AppError>((session, new_mail))
     })
     .await;
 
@@ -146,7 +146,7 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
         .await?;
     app.emit("accounts-changed", ())?;
 
-    let (password, new_mail) = result?;
+    let (session, new_mail) = result?;
     app.emit("messages-changed", account_id)?;
 
     // why: after the emit — banners are cosmetic, the fresh list is not.
@@ -160,25 +160,33 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
     let pool = state.pool.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let prefetch = mail::with_timeout("body prefetch", BACKGROUND_TIMEOUT, async {
-            let mut session = connect_account(&account, &password).await?;
-            let cached = mail::sync::prefetch_bodies(&pool, &account, &mut session).await?;
-            let _ = session.logout().await;
-            Ok(cached)
-        });
+        let mut session = session;
+        let prefetch = mail::with_timeout(
+            "body prefetch",
+            BACKGROUND_TIMEOUT,
+            mail::sync::prefetch_bodies(&pool, &account, &mut session),
+        );
         match prefetch.await {
             // why: snippets just became real — lists and searches should see them.
             Ok(cached) if cached > 0 => {
                 let _ = app.emit("messages-changed", account_id);
             }
             Ok(_) => {}
-            Err(err) => eprintln!("body prefetch failed for account {account_id}: {err}"),
+            Err(err) => {
+                eprintln!("body prefetch failed for account {account_id}: {err}");
+                // why return: a failed or timed-out command leaves the shared
+                // session mid-stream, and the reply it never read would be
+                // mistaken for the answer to the next one. Drop it — the next
+                // pass reconnects — rather than backfilling over a desynced
+                // protocol.
+                return;
+            }
         }
 
         // Header backfill: mirror the rest of every folder so the whole
-        // mailbox is eventually local. Runs after the body prefetch so the
-        // two never hold parallel connections to the same server. The slot
-        // makes a refresh mid-backfill a no-op instead of a second loop.
+        // mailbox is eventually local. Runs after the body prefetch, on the
+        // same connection, so the two never talk to the server at once. The
+        // slot makes a refresh mid-backfill a no-op instead of a second loop.
         let state = app.state::<AppState>();
         let Some(_slot) = state.try_begin_backfill(account_id) else {
             return;
@@ -187,14 +195,16 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
         let on_batch = || {
             let _ = app.emit("messages-changed", account_id);
         };
-        let backfill = mail::with_timeout("header backfill", BACKGROUND_TIMEOUT, async {
-            let mut session = connect_account(&account, &password).await?;
-            let total = mail::sync::backfill_headers(&pool, &account, &mut session, on_batch).await;
-            let _ = session.logout().await;
-            total
-        });
-        if let Err(err) = backfill.await {
-            eprintln!("header backfill failed for account {account_id}: {err}");
+        let backfill = mail::with_timeout(
+            "header backfill",
+            BACKGROUND_TIMEOUT,
+            mail::sync::backfill_headers(&pool, &account, &mut session, on_batch),
+        );
+        match backfill.await {
+            Ok(_) => {
+                let _ = session.logout().await;
+            }
+            Err(err) => eprintln!("header backfill failed for account {account_id}: {err}"),
         }
     });
     Ok(())
