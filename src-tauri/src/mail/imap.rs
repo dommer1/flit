@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use async_imap::extensions::idle::IdleResponse;
 use async_imap::imap_proto;
 use async_imap::types::{Fetch, Flag, Name, NameAttribute};
 use async_imap::Session;
@@ -134,6 +135,54 @@ fn role_from_name(name: &str) -> Option<&'static str> {
         "trash" | "deleted messages" => Some("trash"),
         _ => None,
     }
+}
+
+/// Whether the server offers IDLE (RFC 2177). Servers without it fall back
+/// to interval polling; an unreadable CAPABILITY reply counts as "no".
+pub async fn supports_idle(session: &mut ImapSession) -> bool {
+    session
+        .capabilities()
+        .await
+        .is_ok_and(|caps| caps.has_str("IDLE"))
+}
+
+/// What ended one IDLE wait.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Idled {
+    /// The server announced activity in the selected mailbox — sync it.
+    Activity,
+    /// Nothing happened before `limit`. Not an error: RFC 2177 requires the
+    /// client to re-issue IDLE periodically anyway, or middleboxes silently
+    /// drop the connection.
+    Quiet,
+}
+
+/// Wait on the selected mailbox until the server says something or `limit`
+/// passes, then leave IDLE and hand the session back.
+///
+/// why by value: `Session::idle` consumes the session and `done` returns it,
+/// so ownership has to travel through the wait. A caller that drops the
+/// returned session simply closes the connection.
+pub async fn idle_once(
+    session: ImapSession,
+    limit: Duration,
+) -> Result<(ImapSession, Idled), AppError> {
+    let mut handle = session.idle();
+    handle.init().await.map_err(imap_err)?;
+
+    let outcome = {
+        // The StopSource would interrupt the wait early; nothing here needs
+        // that, and dropping it must not cancel the wait, so it is held for
+        // exactly as long as the future is.
+        let (wait, _interrupt) = handle.wait_with_timeout(limit);
+        match wait.await.map_err(imap_err)? {
+            IdleResponse::NewData(_) => Idled::Activity,
+            IdleResponse::Timeout | IdleResponse::ManualInterrupt => Idled::Quiet,
+        }
+    };
+
+    let session = handle.done().await.map_err(imap_err)?;
+    Ok((session, outcome))
 }
 
 /// The sequence-number range covering the newest `window` messages of a
