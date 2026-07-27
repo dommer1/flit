@@ -147,6 +147,15 @@ export function syncAccount(accountId: number): Promise<void> {
 }
 
 /**
+ * The user's explicit "check for new mail": same pass as syncAccount, but
+ * every folder reconciles end to end, so changes made elsewhere that are too
+ * old for the routine windowed sweep show up on demand.
+ */
+export function refreshAccount(accountId: number): Promise<void> {
+  return invoke<void>("refresh_account", { accountId });
+}
+
+/**
  * Mark a message read/unread. Updates the local cache and fires
  * messages-changed at once; the `\Seen` flag is pushed to the server in the
  * background by the backend.

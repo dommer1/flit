@@ -160,6 +160,19 @@ pub async fn mark_full_sweep(
     Ok(())
 }
 
+/// Forget every folder's full-sweep marker for one account, so the next
+/// pass reconciles each folder end to end. This is what the user's explicit
+/// "check for new mail" buys over the periodic pass: a way to make the app
+/// notice a change too old for the windowed sweep, without waiting out the
+/// hourly cadence.
+pub async fn clear_full_sweeps(pool: &SqlitePool, account_id: i64) -> Result<(), AppError> {
+    sqlx::query("UPDATE mailboxes SET last_full_sweep = NULL WHERE account_id = ?")
+        .bind(account_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Folders whose server count exceeds what the cache holds — the header
 /// backfill's work list, in sidebar order so INBOX completes first. Folders
 /// that never synced (server_exists NULL) are skipped: the regular sync owns
@@ -641,6 +654,51 @@ mod tests {
         .unwrap();
         assert_eq!(
             last_full_sweep(&pool, id, "INBOX").await.unwrap(),
+            Some(1_753_600_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_full_sweeps_resets_only_that_account() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        let other = crate::storage::accounts::insert(
+            &pool,
+            &crate::models::NewAccount {
+                name: "Work".to_string(),
+                email: "b@example.com".to_string(),
+                imap_host: "imap.example.com".to_string(),
+                imap_port: 993,
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_port: 587,
+                username: "b@example.com".to_string(),
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        for account_id in [id, other] {
+            replace(
+                &pool,
+                account_id,
+                &[found("INBOX", Some("inbox")), found("Work", None)],
+            )
+            .await
+            .unwrap();
+            mark_full_sweep(&pool, account_id, "INBOX", 1_753_600_000)
+                .await
+                .unwrap();
+            mark_full_sweep(&pool, account_id, "Work", 1_753_600_000)
+                .await
+                .unwrap();
+        }
+
+        clear_full_sweeps(&pool, id).await.unwrap();
+
+        assert_eq!(last_full_sweep(&pool, id, "INBOX").await.unwrap(), None);
+        assert_eq!(last_full_sweep(&pool, id, "Work").await.unwrap(), None);
+        assert_eq!(
+            last_full_sweep(&pool, other, "INBOX").await.unwrap(),
             Some(1_753_600_000)
         );
     }

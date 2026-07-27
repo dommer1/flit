@@ -230,6 +230,7 @@ vi.mock("./lib/api", () => ({
     text: "body text",
   })),
   syncAccount: vi.fn(async () => undefined),
+  refreshAccount: vi.fn(async () => undefined),
   setMessageRead: vi.fn(async () => undefined),
   moveToTrash: vi.fn(async () => undefined),
   archiveMessage: vi.fn(async () => undefined),
@@ -612,6 +613,9 @@ it("syncs accounts in parallel, not one after another", async () => {
 it("pull-to-refresh re-syncs the view and pins the drawer until syncs land", async () => {
   render(App);
   await screen.findByText("Weekend plans");
+  vi.mocked(api.refreshAccount).mockClear();
+  // Cleared too: the launch sync already called it, and the point below is
+  // that the pull itself does not.
   vi.mocked(api.syncAccount).mockClear();
 
   let releaseSyncs!: () => void;
@@ -621,7 +625,7 @@ it("pull-to-refresh re-syncs the view and pins the drawer until syncs land", asy
   const gatedSync = async () => {
     await gate;
   };
-  vi.mocked(api.syncAccount)
+  vi.mocked(api.refreshAccount)
     .mockImplementationOnce(gatedSync)
     .mockImplementationOnce(gatedSync);
 
@@ -630,10 +634,13 @@ it("pull-to-refresh re-syncs the view and pins the drawer until syncs land", asy
   await fireEvent.wheel(list, { deltaY: -80 });
   await fireEvent.wheel(list, { deltaY: -80 });
 
-  // The unified inbox is visible — the pull re-syncs every account.
+  // The unified inbox is visible — the pull re-syncs every account. It goes
+  // through refreshAccount, not syncAccount: a pull is the user asking on
+  // purpose, so folders reconcile in full.
   await screen.findByText(/Checking for new mail/);
-  expect(api.syncAccount).toHaveBeenCalledWith(1);
-  expect(api.syncAccount).toHaveBeenCalledWith(2);
+  expect(api.refreshAccount).toHaveBeenCalledWith(1);
+  expect(api.refreshAccount).toHaveBeenCalledWith(2);
+  expect(api.syncAccount).not.toHaveBeenCalled();
 
   releaseSyncs();
   await waitFor(() =>

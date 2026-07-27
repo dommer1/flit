@@ -76,6 +76,20 @@ pub async fn sync_account(app: AppHandle, account_id: i64) -> Result<(), AppErro
     run_sync(&app, account_id).await
 }
 
+/// The user's explicit "check for new mail". Same pass as `sync_account`,
+/// but every folder reconciles end to end instead of just its newest slice,
+/// so a change too old for the windowed sweep shows up on demand rather
+/// than at the next hourly full sweep.
+///
+/// why a separate command: `sync_account` also fires on every folder
+/// switch, and a full sweep of every folder is far too heavy for that.
+#[tauri::command]
+pub async fn refresh_account(app: AppHandle, account_id: i64) -> Result<(), AppError> {
+    let pool = app.state::<AppState>().pool.clone();
+    storage::mailboxes::clear_full_sweeps(&pool, account_id).await?;
+    run_sync(&app, account_id).await
+}
+
 /// The sync pass behind the command, callable from background tasks (the
 /// poller) that have an AppHandle but no `State` extractor.
 pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), AppError> {

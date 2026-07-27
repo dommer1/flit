@@ -34,6 +34,7 @@
     searchMessages,
     sendScheduledNow,
     setMessageRead,
+    refreshAccount,
     syncAccount,
     undoSend,
     viewStatus,
@@ -513,10 +514,12 @@
   let searchQuery = "";
 
   // Manual "check for new mail": re-sync what the user is looking at — all
-  // accounts on the unified inbox, otherwise just the selected one.
+  // accounts on the unified inbox, otherwise just the selected one. Asking
+  // on purpose reconciles folders in full, unlike the routine passes.
   function handleRefresh() {
     startSync(
       selectedAccountId === null ? accounts.map((a) => a.id) : [selectedAccountId],
+      refreshAccount,
     );
   }
 
@@ -533,7 +536,7 @@
         : [selectedAccountId];
     // why allSettled: one account's dead server must neither hide the other
     // syncs' results nor leave the drawer spinning forever.
-    const results = await Promise.allSettled(ids.map((id) => syncAccount(id)));
+    const results = await Promise.allSettled(ids.map((id) => refreshAccount(id)));
     results.forEach((result, i) => {
       if (result.status === "rejected")
         console.error(
@@ -626,10 +629,13 @@
   // why: fire-and-forget and parallel — every invoke runs as its own async
   // task in the backend, and the UI reads from the cache as each account's
   // messages-changed event lands. One slow server never delays the others.
-  function startSync(accountIds: number[]) {
+  function startSync(
+    accountIds: number[],
+    run: (accountId: number) => Promise<void> = syncAccount,
+  ) {
     for (const id of accountIds) {
       syncsInFlight += 1;
-      syncAccount(id)
+      run(id)
         .catch((err: unknown) => {
           console.error(`account sync failed for account ${id}:`, err);
         })
