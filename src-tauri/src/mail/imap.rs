@@ -136,18 +136,33 @@ fn role_from_name(name: &str) -> Option<&'static str> {
     }
 }
 
-/// One `(uid, seen)` sweep of the whole selected folder — numbers only, no
-/// content — so reconciliation can spot deletions and flag changes made by
-/// other clients. `exists` guards the empty-folder case (FETCH 1:* errors).
+/// The sequence-number range covering the newest `window` messages of a
+/// folder holding `exists` of them; `None` for an empty folder, where there
+/// is nothing to sweep (and `FETCH 1:*` errors). `window` of `None` — or one
+/// at least as large as the folder — covers everything.
+///
+/// why sequence numbers work here: they are contiguous 1..=exists, and a
+/// server assigns UIDs in ascending order (RFC 3501 §2.3.1.1), so the
+/// highest `window` sequence numbers are exactly the highest `window` UIDs.
+pub fn sweep_range(exists: u32, window: Option<u32>) -> Option<String> {
+    if exists == 0 {
+        return None;
+    }
+    match window {
+        Some(window) if window > 0 && window < exists => Some(format!("{}:*", exists - window + 1)),
+        _ => Some("1:*".to_string()),
+    }
+}
+
+/// One `(uid, seen)` sweep of `range` in the selected folder — numbers only,
+/// no content — so reconciliation can spot deletions and flag changes made
+/// by other clients. Build `range` with `sweep_range`.
 pub async fn fetch_uid_flags(
     session: &mut ImapSession,
-    exists: u32,
+    range: &str,
 ) -> Result<Vec<(i64, bool)>, AppError> {
-    if exists == 0 {
-        return Ok(Vec::new());
-    }
     let stream = session
-        .fetch("1:*", "(UID FLAGS)")
+        .fetch(range, "(UID FLAGS)")
         .await
         .map_err(imap_err)?;
     let fetches: Vec<Fetch> = stream.try_collect().await.map_err(imap_err)?;
@@ -382,6 +397,33 @@ pub fn new_uids_only(headers: Vec<RawHeader>, last_uid: i64) -> Vec<RawHeader> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_folder_has_nothing_to_sweep() {
+        assert_eq!(sweep_range(0, None), None);
+        assert_eq!(sweep_range(0, Some(1000)), None);
+    }
+
+    #[test]
+    fn no_window_sweeps_the_whole_folder() {
+        assert_eq!(sweep_range(55_662, None).as_deref(), Some("1:*"));
+        assert_eq!(sweep_range(1, None).as_deref(), Some("1:*"));
+    }
+
+    #[test]
+    fn a_window_takes_the_newest_messages() {
+        assert_eq!(sweep_range(55_662, Some(1_000)).as_deref(), Some("54663:*"));
+        assert_eq!(sweep_range(10, Some(3)).as_deref(), Some("8:*"));
+    }
+
+    #[test]
+    fn a_window_covering_the_folder_sweeps_all_of_it() {
+        // Off-by-one guard: a window equal to the count must stay at 1:*,
+        // never 2:*.
+        assert_eq!(sweep_range(10, Some(10)).as_deref(), Some("1:*"));
+        assert_eq!(sweep_range(10, Some(11)).as_deref(), Some("1:*"));
+        assert_eq!(sweep_range(10, Some(0)).as_deref(), Some("1:*"));
+    }
 
     fn raw(uid: i64) -> RawHeader {
         RawHeader {
