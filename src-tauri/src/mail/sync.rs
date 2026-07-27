@@ -38,6 +38,25 @@ pub fn plan(stored_validity: Option<i64>, server_validity: i64, last_uid: Option
     }
 }
 
+/// How long a folder may go without a full flag reconciliation. Ordinary
+/// passes only sweep the newest slice, so this is the cadence at which a
+/// deletion far below that window is finally noticed.
+pub const FULL_SWEEP_INTERVAL: i64 = 60 * 60;
+
+/// Whether this folder's full sweep is due, from its last one (epoch
+/// seconds; `None` = never swept) and the current time.
+///
+/// why the range check rather than `now - last >= interval`: if the system
+/// clock jumps backwards, plain subtraction goes negative and the folder
+/// would stop sweeping until real time caught up. A `now` outside the
+/// window we trust means sweep — the cheap answer is always the safe one.
+pub fn full_sweep_due(last: Option<i64>, now: i64, interval: i64) -> bool {
+    match last {
+        None => true,
+        Some(last) => !(last..last.saturating_add(interval)).contains(&now),
+    }
+}
+
 /// One message a sync discovered as genuinely new — the payload a new-mail
 /// notification is built from.
 #[derive(Debug, Clone, PartialEq)]
@@ -527,6 +546,30 @@ mod tests {
     #[test]
     fn matching_validity_without_uids_plans_initial() {
         assert_eq!(plan(Some(7), 7, None), SyncPlan::Initial);
+    }
+
+    #[test]
+    fn a_folder_never_swept_is_due() {
+        assert!(full_sweep_due(None, 1_000, FULL_SWEEP_INTERVAL));
+    }
+
+    #[test]
+    fn a_folder_swept_within_the_interval_is_not_due() {
+        assert!(!full_sweep_due(Some(1_000), 1_000, 3_600));
+        assert!(!full_sweep_due(Some(1_000), 4_599, 3_600));
+    }
+
+    #[test]
+    fn a_folder_swept_longer_ago_than_the_interval_is_due() {
+        assert!(full_sweep_due(Some(1_000), 4_600, 3_600));
+        assert!(full_sweep_due(Some(1_000), 99_999, 3_600));
+    }
+
+    #[test]
+    fn a_clock_jump_backwards_makes_the_sweep_due() {
+        // Otherwise the folder would stop reconciling until real time caught
+        // up with the stale marker.
+        assert!(full_sweep_due(Some(5_000), 1_000, 3_600));
     }
 
     #[test]

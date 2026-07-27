@@ -127,6 +127,39 @@ pub async fn set_server_exists(
     Ok(())
 }
 
+/// When this folder last had a full flag reconciliation, as unix epoch
+/// seconds; `None` when it never did (or the folder is unknown).
+pub async fn last_full_sweep(
+    pool: &SqlitePool,
+    account_id: i64,
+    name: &str,
+) -> Result<Option<i64>, AppError> {
+    let at: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT last_full_sweep FROM mailboxes WHERE account_id = ? AND name = ?",
+    )
+    .bind(account_id)
+    .bind(name)
+    .fetch_optional(pool)
+    .await?;
+    Ok(at.flatten())
+}
+
+/// Record that this folder just had a full flag reconciliation.
+pub async fn mark_full_sweep(
+    pool: &SqlitePool,
+    account_id: i64,
+    name: &str,
+    at: i64,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE mailboxes SET last_full_sweep = ? WHERE account_id = ? AND name = ?")
+        .bind(at)
+        .bind(account_id)
+        .bind(name)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Folders whose server count exceeds what the cache holds — the header
 /// backfill's work list, in sidebar order so INBOX completes first. Folders
 /// that never synced (server_exists NULL) are skipped: the regular sync owns
@@ -572,6 +605,55 @@ mod tests {
         assert_eq!(server_exists_of(&pool, id, "INBOX").await, Some(9876));
         // Only the selected folder is touched.
         assert_eq!(server_exists_of(&pool, id, "Work").await, None);
+    }
+
+    #[tokio::test]
+    async fn full_sweep_marker_round_trips_and_survives_a_refresh() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(
+            &pool,
+            id,
+            &[found("INBOX", Some("inbox")), found("Work", None)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(last_full_sweep(&pool, id, "INBOX").await.unwrap(), None);
+
+        mark_full_sweep(&pool, id, "INBOX", 1_753_600_000)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            last_full_sweep(&pool, id, "INBOX").await.unwrap(),
+            Some(1_753_600_000)
+        );
+        // Only the swept folder is touched.
+        assert_eq!(last_full_sweep(&pool, id, "Work").await.unwrap(), None);
+
+        // The marker is worthless if the next pass's folder refresh clears it.
+        replace(
+            &pool,
+            id,
+            &[found("INBOX", Some("inbox")), found("Work", None)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            last_full_sweep(&pool, id, "INBOX").await.unwrap(),
+            Some(1_753_600_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn last_full_sweep_is_none_for_an_unknown_folder() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(&pool, id, &[found("INBOX", Some("inbox"))])
+            .await
+            .unwrap();
+
+        assert_eq!(last_full_sweep(&pool, id, "Nope").await.unwrap(), None);
     }
 
     #[tokio::test]
