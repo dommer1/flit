@@ -43,6 +43,11 @@ pub fn plan(stored_validity: Option<i64>, server_validity: i64, last_uid: Option
 /// deletion far below that window is finally noticed.
 pub const FULL_SWEEP_INTERVAL: i64 = 60 * 60;
 
+/// How many of a folder's newest messages an ordinary pass reconciles.
+/// Changes made on another device land at the top of a folder, so this
+/// catches them; anything older waits for the full sweep.
+pub const SWEEP_WINDOW: u32 = 1_000;
+
 /// Whether this folder's full sweep is due, from its last one (epoch
 /// seconds; `None` = never swept) and the current time.
 ///
@@ -161,18 +166,41 @@ pub(crate) async fn sync_mailbox(
     messages::upsert_headers(pool, account_id, mailbox, &headers).await?;
 
     // Mirror what other clients did to this folder (moves, deletes, reads):
-    // one cheap numbers-only sweep, then apply the differences locally.
-    let server = match imap::sweep_range(selected.exists, None) {
-        Some(range) => imap::fetch_uid_flags(session, &range).await?,
-        None => Vec::new(),
-    };
-    let cached = messages::uid_flags(pool, account_id, mailbox, 0).await?;
-    let plan = reconcile_plan(&cached, &server);
-    for id in plan.delete {
-        messages::delete_by_id(pool, id).await?;
+    // one numbers-only sweep, then apply the differences locally.
+    //
+    // why windowed: this used to sweep every folder end to end on every
+    // pass — tens of thousands of FETCH replies and cached rows per pass,
+    // for a handful of changes. Ordinary passes now cover only the newest
+    // slice, and the wider sweep that can still catch an old deletion runs
+    // on FULL_SWEEP_INTERVAL.
+    let now = now_epoch();
+    let full = full_sweep_due(
+        crate::storage::mailboxes::last_full_sweep(pool, account_id, mailbox).await?,
+        now,
+        FULL_SWEEP_INTERVAL,
+    );
+    let window = if full { None } else { Some(SWEEP_WINDOW) };
+
+    match imap::sweep_range(selected.exists, window) {
+        // The server emptied the folder (someone emptied Trash elsewhere).
+        // Drop the cached rows now rather than at the next full sweep.
+        None => messages::clear_mailbox(pool, account_id, mailbox).await?,
+        Some(range) => {
+            let server = imap::fetch_uid_flags(session, &range).await?;
+            if let Some(floor) = reconcile_floor(&server) {
+                let cached = messages::uid_flags(pool, account_id, mailbox, floor).await?;
+                let plan = reconcile_plan(&cached, &server);
+                for id in plan.delete {
+                    messages::delete_by_id(pool, id).await?;
+                }
+                for (id, read) in plan.flag {
+                    messages::set_read(pool, id, read).await?;
+                }
+            }
+        }
     }
-    for (id, read) in plan.flag {
-        messages::set_read(pool, id, read).await?;
+    if full {
+        crate::storage::mailboxes::mark_full_sweep(pool, account_id, mailbox, now).await?;
     }
 
     backfill_thread_headers(pool, account_id, session, mailbox).await?;
@@ -220,6 +248,22 @@ struct ReconcilePlan {
     delete: Vec<i64>,
     /// `(message id, new read state)`
     flag: Vec<(i64, bool)>,
+}
+
+/// The lowest uid a sweep returned — the floor of the cached range it may
+/// be reconciled against. `None` when the sweep came back empty, which is
+/// the signal NOT to reconcile at all: the folder was not empty (or
+/// `sweep_range` would have said so), so an empty result is an anomaly, and
+/// diffing the whole cache against nothing would delete every cached row.
+fn reconcile_floor(server: &[(i64, bool)]) -> Option<i64> {
+    server.iter().map(|(uid, _)| *uid).min()
+}
+
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Diff the cached rows `(id, uid, read)` against the server sweep
@@ -573,6 +617,20 @@ mod tests {
         // Otherwise the folder would stop reconciling until real time caught
         // up with the stale marker.
         assert!(full_sweep_due(Some(5_000), 1_000, 3_600));
+    }
+
+    #[test]
+    fn the_reconcile_floor_is_the_lowest_uid_the_sweep_returned() {
+        assert_eq!(reconcile_floor(&[(103, false), (101, true)]), Some(101));
+        assert_eq!(reconcile_floor(&[(7, false)]), Some(7));
+    }
+
+    #[test]
+    fn an_empty_sweep_has_no_reconcile_floor() {
+        // The folder was not empty (or sweep_range would have said so), yet
+        // nothing came back. Reconciling against that would read every
+        // cached row as deleted and wipe the folder — skip instead.
+        assert_eq!(reconcile_floor(&[]), None);
     }
 
     #[test]
