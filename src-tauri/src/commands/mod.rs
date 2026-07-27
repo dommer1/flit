@@ -96,6 +96,12 @@ const SYNC_LABEL: &str = "sync pass";
 /// slot: a hung one would make every later pass skip, silently, forever.
 const SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
+/// Ceiling for the background prefetch and backfill. Much larger than a sync
+/// pass — mirroring a big mailbox legitimately runs for many minutes — but
+/// still finite: the backfill holds its own slot, and both resume where they
+/// left off on the next pass, so cutting one short costs nothing but time.
+const BACKGROUND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 /// The sync pass behind the command, callable from background tasks (the
 /// poller) that have an AppHandle but no `State` extractor.
 pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), AppError> {
@@ -138,7 +144,12 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
     let pool = state.pool.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        match mail::sync::prefetch_bodies(&pool, &account, &password).await {
+        let prefetch = mail::with_timeout(
+            "body prefetch",
+            BACKGROUND_TIMEOUT,
+            mail::sync::prefetch_bodies(&pool, &account, &password),
+        );
+        match prefetch.await {
             // why: snippets just became real — lists and searches should see them.
             Ok(cached) if cached > 0 => {
                 let _ = app.emit("messages-changed", account_id);
@@ -159,7 +170,12 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
         let on_batch = || {
             let _ = app.emit("messages-changed", account_id);
         };
-        if let Err(err) = mail::sync::backfill_headers(&pool, &account, &password, on_batch).await {
+        let backfill = mail::with_timeout(
+            "header backfill",
+            BACKGROUND_TIMEOUT,
+            mail::sync::backfill_headers(&pool, &account, &password, on_batch),
+        );
+        if let Err(err) = backfill.await {
             eprintln!("header backfill failed for account {account_id}: {err}");
         }
     });
