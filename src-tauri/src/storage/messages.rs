@@ -795,20 +795,29 @@ pub async fn has_missing_bodies(pool: &SqlitePool, account_id: i64) -> Result<bo
     Ok(count > 0)
 }
 
-/// `(id, uid, read)` of every cached row in one folder, uid order — the
-/// local side of reconciliation. Provisional local rows (uid < 0) are
-/// invisible here — see max_uid.
+/// `(id, uid, read)` of cached rows in one folder from `min_uid` upwards, in
+/// uid order — the local side of reconciliation. Provisional local rows
+/// (uid < 0) are invisible here — see max_uid.
+///
+/// why the bound: reconciliation deletes cached rows the server did not
+/// list, so both sides must describe the SAME uid range. A pass that swept
+/// only the newest slice of the folder must compare against only that
+/// slice — handed the whole cache, it would read every older row as deleted
+/// and wipe the folder. Pass 0 for the full folder.
 pub async fn uid_flags(
     pool: &SqlitePool,
     account_id: i64,
     mailbox: &str,
+    min_uid: i64,
 ) -> Result<Vec<(i64, i64, bool)>, AppError> {
     let rows = sqlx::query_as(
         "SELECT id, uid, read FROM messages
-         WHERE account_id = ? AND mailbox = ? AND uid > 0 ORDER BY uid",
+         WHERE account_id = ? AND mailbox = ? AND uid > 0 AND uid >= ?
+         ORDER BY uid",
     )
     .bind(account_id)
     .bind(mailbox)
+    .bind(min_uid)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -1498,7 +1507,7 @@ mod tests {
             uid_set(&pool, id, "Drafts").await.unwrap(),
             std::collections::HashSet::from([5])
         );
-        let uids: Vec<i64> = uid_flags(&pool, id, "Drafts")
+        let uids: Vec<i64> = uid_flags(&pool, id, "Drafts", 0)
             .await
             .unwrap()
             .iter()
@@ -2863,19 +2872,69 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = uid_flags(&pool, id, "INBOX").await.unwrap();
+        let rows = uid_flags(&pool, id, "INBOX", 0).await.unwrap();
         let uids: Vec<i64> = rows.iter().map(|(_, uid, _)| *uid).collect();
         assert_eq!(uids, vec![1, 2]);
 
         let (first_id, _, first_read) = rows[0];
         assert!(!first_read);
         set_read(&pool, first_id, true).await.unwrap();
-        assert!(uid_flags(&pool, id, "INBOX").await.unwrap()[0].2);
+        assert!(uid_flags(&pool, id, "INBOX", 0).await.unwrap()[0].2);
 
         delete_by_id(&pool, first_id).await.unwrap();
-        let remaining = uid_flags(&pool, id, "INBOX").await.unwrap();
+        let remaining = uid_flags(&pool, id, "INBOX", 0).await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].1, 2);
+    }
+
+    #[tokio::test]
+    async fn uid_flags_returns_only_the_window_from_min_uid() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(10, "Old", "2026-07-01T00:00:00Z", true),
+                header(20, "Middle", "2026-07-02T00:00:00Z", true),
+                header(30, "New", "2026-07-03T00:00:00Z", false),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let uids: Vec<i64> = uid_flags(&pool, id, "INBOX", 20)
+            .await
+            .unwrap()
+            .iter()
+            .map(|(_, uid, _)| *uid)
+            .collect();
+        assert_eq!(uids, vec![20, 30]);
+
+        // The bound is inclusive at both ends of the range it describes.
+        assert_eq!(uid_flags(&pool, id, "INBOX", 31).await.unwrap().len(), 0);
+        assert_eq!(uid_flags(&pool, id, "INBOX", 0).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn uid_flags_never_returns_provisional_draft_rows() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "Drafts",
+            &[header(-1, "Unpushed draft", "2026-07-01T00:00:00Z", true)],
+        )
+        .await
+        .unwrap();
+
+        // A negative uid clears `uid >= min_uid` for any non-positive bound,
+        // so the `uid > 0` guard is what keeps it out — reconciliation would
+        // otherwise delete a draft that never reached the server.
+        assert_eq!(uid_flags(&pool, id, "Drafts", 0).await.unwrap().len(), 0);
+        assert_eq!(uid_flags(&pool, id, "Drafts", -5).await.unwrap().len(), 0);
     }
 
     #[tokio::test]

@@ -163,7 +163,7 @@ pub(crate) async fn sync_mailbox(
     // Mirror what other clients did to this folder (moves, deletes, reads):
     // one cheap numbers-only sweep, then apply the differences locally.
     let server = imap::fetch_uid_flags(session, selected.exists).await?;
-    let cached = messages::uid_flags(pool, account_id, mailbox).await?;
+    let cached = messages::uid_flags(pool, account_id, mailbox, 0).await?;
     let plan = reconcile_plan(&cached, &server);
     for id in plan.delete {
         messages::delete_by_id(pool, id).await?;
