@@ -90,6 +90,12 @@ pub async fn refresh_account(app: AppHandle, account_id: i64) -> Result<(), AppE
     run_sync(&app, account_id).await
 }
 
+const SYNC_LABEL: &str = "sync pass";
+/// Ceiling for one sync pass. Generous — a first pass over a large account
+/// does real work — but finite, because the pass holds the account's sync
+/// slot: a hung one would make every later pass skip, silently, forever.
+const SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 /// The sync pass behind the command, callable from background tasks (the
 /// poller) that have an AppHandle but no `State` extractor.
 pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), AppError> {
@@ -104,11 +110,11 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
     // why: the password comes from the session cache (one keychain read per
     // account per run) and is handed on to the prefetch task below — never
     // written to state beyond the cache, events, or logs.
-    let result = async {
+    let result = mail::with_timeout(SYNC_LABEL, SYNC_TIMEOUT, async {
         let password = state.password(account_id).await?;
         let new_mail = mail::sync::sync_account(&state.pool, &account, &password).await?;
         Ok::<(String, Vec<mail::sync::NewMail>), AppError>((password, new_mail))
-    }
+    })
     .await;
 
     // why: every sync doubles as a health check — the recorded outcome is
