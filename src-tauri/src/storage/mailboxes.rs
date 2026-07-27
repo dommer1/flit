@@ -13,29 +13,50 @@ pub struct DiscoveredMailbox {
     pub role: Option<String>,
 }
 
-/// Mirror the server's folder list for one account: wholesale replace.
+/// Mirror the server's folder list for one account: folders the server no
+/// longer lists are dropped, the rest are inserted or updated in place.
 ///
-/// why: folder lists are tiny and rarely change — delete + insert inside one
-/// transaction is simpler than diffing, and nothing references mailbox rows
-/// by id (messages carry the mailbox *name*).
+/// why not delete-all + insert: this runs at the top of every sync pass, and
+/// the row carries per-folder sync state (how far the cache has got). Wiping
+/// and re-inserting would reset that state sixty times an hour. Upserting on
+/// the (account_id, name) unique key keeps surviving folders' rows — and
+/// their state — intact, while still mirroring renames and role changes.
 pub async fn replace(
     pool: &SqlitePool,
     account_id: i64,
     mailboxes: &[DiscoveredMailbox],
 ) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM mailboxes WHERE account_id = ?")
+
+    // Prune first: a folder gone from the server takes its row with it.
+    //
+    // why a built string: the placeholder count follows the folder count, so
+    // it cannot be a literal. Only `?`s are formatted in — every value is
+    // still bound, never interpolated.
+    let prune_sql = if mailboxes.is_empty() {
+        "DELETE FROM mailboxes WHERE account_id = ?".to_string()
+    } else {
+        let placeholders = vec!["?"; mailboxes.len()].join(",");
+        format!("DELETE FROM mailboxes WHERE account_id = ? AND name NOT IN ({placeholders})")
+    };
+    let mut prune = sqlx::query(sqlx::AssertSqlSafe(prune_sql)).bind(account_id);
+    for mailbox in mailboxes {
+        prune = prune.bind(&mailbox.name);
+    }
+    prune.execute(&mut *tx).await?;
+
+    for mailbox in mailboxes {
+        sqlx::query(
+            "INSERT INTO mailboxes (account_id, name, role) VALUES (?, ?, ?)
+             ON CONFLICT (account_id, name) DO UPDATE SET role = excluded.role",
+        )
         .bind(account_id)
+        .bind(&mailbox.name)
+        .bind(&mailbox.role)
         .execute(&mut *tx)
         .await?;
-    for mailbox in mailboxes {
-        sqlx::query("INSERT INTO mailboxes (account_id, name, role) VALUES (?, ?, ?)")
-            .bind(account_id)
-            .bind(&mailbox.name)
-            .bind(&mailbox.role)
-            .execute(&mut *tx)
-            .await?;
     }
+
     tx.commit().await?;
     Ok(())
 }
@@ -325,6 +346,49 @@ mod tests {
             .map(|m| m.name)
             .collect();
         assert_eq!(names, vec!["INBOX", "New"]);
+    }
+
+    #[tokio::test]
+    async fn replace_keeps_per_folder_state_of_surviving_folders() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(
+            &pool,
+            id,
+            &[found("INBOX", Some("inbox")), found("Old", None)],
+        )
+        .await
+        .unwrap();
+        set_server_exists(&pool, id, "INBOX", 9876).await.unwrap();
+
+        replace(
+            &pool,
+            id,
+            &[found("INBOX", Some("inbox")), found("New", None)],
+        )
+        .await
+        .unwrap();
+
+        // The folder survived the refresh, so its accumulated state must too —
+        // sync progress is per folder and must not reset on every pass.
+        assert_eq!(server_exists_of(&pool, id, "INBOX").await, Some(9876));
+        assert_eq!(server_exists_of(&pool, id, "New").await, None);
+    }
+
+    #[tokio::test]
+    async fn replace_adopts_a_changed_role() {
+        let pool = test_pool().await;
+        let id = account(&pool).await;
+        replace(&pool, id, &[found("Archive", None)]).await.unwrap();
+
+        replace(&pool, id, &[found("Archive", Some("archive"))])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            name_for_role(&pool, id, "archive").await.unwrap(),
+            Some("Archive".to_string())
+        );
     }
 
     #[tokio::test]
