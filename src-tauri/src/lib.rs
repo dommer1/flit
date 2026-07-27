@@ -1,6 +1,7 @@
 pub mod auth;
 mod commands;
 pub mod error;
+mod idle;
 pub mod mail;
 mod models;
 mod notify;
@@ -36,6 +37,12 @@ pub fn run() {
             // configured in Settings › Notifications so notifications work
             // while the app idles.
             poller::spawn(app.handle().clone());
+
+            // IMAP IDLE listeners, when push is on: an open connection per
+            // account so new inbox mail arrives as the server announces it.
+            // The poll above keeps running — under push its interval covers
+            // the folders IDLE cannot watch.
+            idle::spawn(app.handle().clone());
 
             // why: macOS convention puts "Settings…" (⌘,) in the app menu; we
             // extend Tauri's default menu instead of rebuilding it from
