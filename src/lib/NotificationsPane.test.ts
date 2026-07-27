@@ -102,6 +102,78 @@ it("saves the check interval as a number", async () => {
   );
 });
 
+it("switching to automatic turns on push without losing the interval", async () => {
+  render(NotificationsPane, { props: { accounts: [] } });
+  await waitFor(() =>
+    expect(screen.getByLabelText("Check for new mail")).toHaveValue("3"),
+  );
+
+  await fireEvent.change(screen.getByLabelText("Check for new mail"), {
+    target: { value: "push" },
+  });
+
+  await waitFor(() =>
+    expect(api.setNotificationSettings).toHaveBeenCalledWith({
+      enabled: true,
+      sound: "default",
+      // Kept, not zeroed: with push on it becomes the cadence for the
+      // folders IDLE does not watch.
+      syncIntervalMinutes: 3,
+      pushEnabled: true,
+    }),
+  );
+});
+
+it("picking an interval turns push back off", async () => {
+  settings = {
+    enabled: true,
+    sound: "default",
+    syncIntervalMinutes: 3,
+    pushEnabled: true,
+  };
+  render(NotificationsPane, { props: { accounts: [] } });
+  await waitFor(() =>
+    expect(screen.getByLabelText("Check for new mail")).toHaveValue("push"),
+  );
+
+  await fireEvent.change(screen.getByLabelText("Check for new mail"), {
+    target: { value: "5" },
+  });
+
+  await waitFor(() =>
+    expect(api.setNotificationSettings).toHaveBeenCalledWith({
+      enabled: true,
+      sound: "default",
+      syncIntervalMinutes: 5,
+      pushEnabled: false,
+    }),
+  );
+});
+
+it("offers the other-folders cadence only while push is on", async () => {
+  render(NotificationsPane, { props: { accounts: [] } });
+  await waitFor(() =>
+    expect(screen.getByLabelText("Check for new mail")).toHaveValue("3"),
+  );
+  expect(screen.queryByLabelText("Check other folders")).toBeNull();
+
+  await fireEvent.change(screen.getByLabelText("Check for new mail"), {
+    target: { value: "push" },
+  });
+
+  const other = await screen.findByLabelText("Check other folders");
+  await fireEvent.change(other, { target: { value: "15" } });
+
+  await waitFor(() =>
+    expect(api.setNotificationSettings).toHaveBeenCalledWith({
+      enabled: true,
+      sound: "default",
+      syncIntervalMinutes: 15,
+      pushEnabled: true,
+    }),
+  );
+});
+
 it("account rows show the effective value when inheriting", async () => {
   settings = {
     enabled: false,

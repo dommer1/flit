@@ -28,6 +28,9 @@
     "Tink",
   ];
 
+  /** The one non-numeric choice in the cadence picker: IMAP IDLE. */
+  const PUSH_OPTION = "push";
+
   const INTERVALS: { value: number; label: string }[] = [
     { value: 0, label: "Manually" },
     { value: 1, label: "Every minute" },
@@ -113,21 +116,56 @@
       <label for="notification-interval">Check for new mail</label>
       <select
         id="notification-interval"
-        value={settings.syncIntervalMinutes}
-        onchange={(e) =>
-          void save({
-            ...settings,
-            syncIntervalMinutes: Number(e.currentTarget.value),
-          })}
+        value={settings.pushEnabled
+          ? PUSH_OPTION
+          : String(settings.syncIntervalMinutes)}
+        onchange={(e) => {
+          const picked = e.currentTarget.value;
+          // why the interval survives the switch to push: it stops being the
+          // inbox's cadence and becomes the other folders'.
+          void save(
+            picked === PUSH_OPTION
+              ? { ...settings, pushEnabled: true }
+              : {
+                  ...settings,
+                  pushEnabled: false,
+                  syncIntervalMinutes: Number(picked),
+                },
+          );
+        }}
       >
+        <option value={PUSH_OPTION}>Automatically</option>
         {#each INTERVALS as interval (interval.value)}
-          <option value={interval.value}>{interval.label}</option>
+          <option value={String(interval.value)}>{interval.label}</option>
         {/each}
       </select>
     </div>
+    {#if settings.pushEnabled}
+      <div class="setting">
+        <label for="notification-fallback-interval">Check other folders</label>
+        <select
+          id="notification-fallback-interval"
+          value={String(settings.syncIntervalMinutes)}
+          onchange={(e) =>
+            void save({
+              ...settings,
+              syncIntervalMinutes: Number(e.currentTarget.value),
+            })}
+        >
+          {#each INTERVALS as interval (interval.value)}
+            <option value={String(interval.value)}>{interval.label}</option>
+          {/each}
+        </select>
+      </div>
+    {/if}
     <p class="explain">
       New messages in each account's inbox show a notification. Checking also
       keeps the message list fresh while the app is open.
+      {#if settings.pushEnabled}
+        Automatically means the server announces new inbox mail on an open
+        connection, so it arrives at once; the other folders are still checked
+        on the interval below.
+      {/if}
     </p>
   </fieldset>
 
