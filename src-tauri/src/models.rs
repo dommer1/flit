@@ -271,7 +271,14 @@ pub struct NotificationSettings {
     /// anything else = a macOS sound name such as "Ping".
     pub sound: String,
     /// Minutes between background new-mail checks; 0 = manual sync only.
+    ///
+    /// With `push_enabled` this is not the inbox's cadence but everything
+    /// else's: IDLE covers the inbox, and this is how often the other
+    /// folders — and flag changes made on another device — are picked up.
     pub sync_interval_minutes: i64,
+    /// Hold an IMAP IDLE connection open per account so new inbox mail
+    /// arrives as the server announces it, instead of at the next poll.
+    pub push_enabled: bool,
 }
 
 impl Default for NotificationSettings {
@@ -280,6 +287,9 @@ impl Default for NotificationSettings {
             enabled: true,
             sound: "default".to_string(),
             sync_interval_minutes: 3,
+            // why off by default: it holds an open connection per account,
+            // so it is the user's call, not ours.
+            push_enabled: false,
         }
     }
 }

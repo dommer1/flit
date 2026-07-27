@@ -37,11 +37,21 @@ import NotificationsPane from "./NotificationsPane.svelte";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  settings = { enabled: true, sound: "default", syncIntervalMinutes: 3 };
+  settings = {
+    enabled: true,
+    sound: "default",
+    syncIntervalMinutes: 3,
+    pushEnabled: false,
+  };
 });
 
 it("shows the stored global settings", async () => {
-  settings = { enabled: false, sound: "Ping", syncIntervalMinutes: 15 };
+  settings = {
+    enabled: false,
+    sound: "Ping",
+    syncIntervalMinutes: 15,
+    pushEnabled: false,
+  };
 
   render(NotificationsPane, { props: { accounts: [] } });
 
@@ -67,6 +77,7 @@ it("saves a global sound change", async () => {
       enabled: true,
       sound: "Glass",
       syncIntervalMinutes: 3,
+      pushEnabled: false,
     }),
   );
 });
@@ -86,12 +97,18 @@ it("saves the check interval as a number", async () => {
       enabled: true,
       sound: "default",
       syncIntervalMinutes: 0,
+      pushEnabled: false,
     }),
   );
 });
 
 it("account rows show the effective value when inheriting", async () => {
-  settings = { enabled: false, sound: "default", syncIntervalMinutes: 3 };
+  settings = {
+    enabled: false,
+    sound: "default",
+    syncIntervalMinutes: 3,
+    pushEnabled: false,
+  };
   const accounts = [
     account(1, "Work"),
     account(2, "Personal", { notifyEnabled: true, notifySound: "Ping" }),
@@ -139,7 +156,12 @@ it("previews a picked global sound", async () => {
 });
 
 it("previews a picked per-account sound, resolving Default to the global one", async () => {
-  settings = { enabled: true, sound: "Glass", syncIntervalMinutes: 3 };
+  settings = {
+    enabled: true,
+    sound: "Glass",
+    syncIntervalMinutes: 3,
+    pushEnabled: false,
+  };
   const accounts = [account(1, "Work", { notifySound: "Ping" })];
   render(NotificationsPane, { props: { accounts } });
   await waitFor(() =>

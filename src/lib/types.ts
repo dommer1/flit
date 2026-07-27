@@ -164,8 +164,14 @@ export interface NotificationSettings {
   enabled: boolean;
   /** "default" = system sound, "none" = silent, else a macOS sound name. */
   sound: string;
-  /** Minutes between background new-mail checks; 0 = manual sync only. */
+  /**
+   * Minutes between background new-mail checks; 0 = manual sync only. With
+   * pushEnabled this is the cadence for everything IDLE does not cover:
+   * the other folders, and flag changes made on another device.
+   */
   syncIntervalMinutes: number;
+  /** Hold an IMAP IDLE connection open per account for instant inbox mail. */
+  pushEnabled: boolean;
 }
 
 /** What one direction of the message-list swipe gesture does;

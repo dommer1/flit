@@ -42,6 +42,7 @@
     enabled: true,
     sound: "default",
     syncIntervalMinutes: 3,
+    pushEnabled: false,
   });
   let error = $state<string | null>(null);
 

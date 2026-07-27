@@ -13,6 +13,7 @@ const TIME_FORMAT_KEY: &str = "time_format";
 const NOTIFICATIONS_ENABLED_KEY: &str = "notifications_enabled";
 const NOTIFICATION_SOUND_KEY: &str = "notification_sound";
 const SYNC_INTERVAL_KEY: &str = "sync_interval_minutes";
+const PUSH_ENABLED_KEY: &str = "push_enabled";
 const SWIPE_LEFT_KEY: &str = "swipe_left";
 const SWIPE_RIGHT_KEY: &str = "swipe_right";
 
@@ -56,10 +57,16 @@ pub async fn notification_settings(pool: &SqlitePool) -> Result<NotificationSett
         .and_then(|minutes| minutes.parse::<i64>().ok())
         .filter(|minutes| *minutes >= 0)
         .unwrap_or(defaults.sync_interval_minutes);
+    let push_enabled = match value(pool, PUSH_ENABLED_KEY).await?.as_deref() {
+        Some("true") => true,
+        Some("false") => false,
+        _ => defaults.push_enabled,
+    };
     Ok(NotificationSettings {
         enabled,
         sound,
         sync_interval_minutes,
+        push_enabled,
     })
 }
 
@@ -76,6 +83,12 @@ pub async fn set_notification_settings(
         &settings.sync_interval_minutes.to_string(),
     )
     .await?;
+    let push = if settings.push_enabled {
+        "true"
+    } else {
+        "false"
+    };
+    upsert(pool, PUSH_ENABLED_KEY, push).await?;
     Ok(())
 }
 
@@ -377,6 +390,8 @@ mod tests {
         assert!(settings.enabled);
         assert_eq!(settings.sound, "default");
         assert_eq!(settings.sync_interval_minutes, 3);
+        // Push holds an open connection per account — opt-in, never assumed.
+        assert!(!settings.push_enabled);
     }
 
     #[tokio::test]
@@ -386,18 +401,19 @@ mod tests {
             enabled: false,
             sound: "Ping".to_string(),
             sync_interval_minutes: 15,
+            push_enabled: true,
         };
 
         set_notification_settings(&pool, &wanted).await.unwrap();
         assert_eq!(notification_settings(&pool).await.unwrap(), wanted);
 
-        // Saving again overwrites the same three rows instead of adding more.
+        // Saving again overwrites the same four rows instead of adding more.
         set_notification_settings(&pool, &wanted).await.unwrap();
         let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM settings")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(rows, 3);
+        assert_eq!(rows, 4);
     }
 
     #[tokio::test]
@@ -407,6 +423,7 @@ mod tests {
             ("notifications_enabled", "yolo"),
             ("notification_sound", ""),
             ("sync_interval_minutes", "-5"),
+            ("push_enabled", "sure"),
         ] {
             sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
                 .bind(key)
