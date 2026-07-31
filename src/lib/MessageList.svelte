@@ -9,6 +9,7 @@
     DRAG_SLOP,
     isHorizontal,
   } from "./swipe";
+  import { modeFor, type SelectMode } from "./selection";
   import type {
     MessageHeader,
     SwipeAction,
@@ -21,6 +22,7 @@
     messages,
     accountColors = {},
     selectedId,
+    selectedIds,
     onSelect,
     swipeActions = DEFAULT_SWIPE_ACTIONS,
     onArchive,
@@ -37,8 +39,13 @@
     messages: MessageHeader[];
     /** accountId → accent color (or null); drives the per-row color dot. */
     accountColors?: Record<number, string | null>;
+    /** The lead row — what the reading pane shows and the keyboard walks.
+     * Only scrolling follows it; the highlight follows `selectedIds`. */
     selectedId: number | null;
-    onSelect: (id: number) => void;
+    /** Every selected row. Omitted (the common single-selection case) it
+     * stands in as just the lead row. */
+    selectedIds?: number[];
+    onSelect: (id: number, mode: SelectMode) => void;
     /** Which action a full swipe in each direction fires. */
     swipeActions?: SwipeActions;
     onArchive?: (id: number) => void;
@@ -59,6 +66,11 @@
     /** The pull's refresh is in flight — pins the indicator open. */
     refreshing?: boolean;
   } = $props();
+
+  // why a Set: a shift-range can hold hundreds of ids and every row asks.
+  let selection = $derived(
+    new Set(selectedIds ?? (selectedId === null ? [] : [selectedId])),
+  );
 
   /** Strip color + label for each swipe action ("none" never renders). */
   const SWIPE_STRIPS: Record<
@@ -155,12 +167,12 @@
     swipeOffset = 0;
   }
 
-  function handleClick(message: MessageHeader) {
+  function handleClick(message: MessageHeader, event: MouseEvent) {
     if (dragConsumedClick) {
       dragConsumedClick = false;
       return;
     }
-    onSelect(message.id);
+    onSelect(message.id, modeFor(event));
   }
 
   function settleSwipe(message: MessageHeader) {
@@ -247,11 +259,13 @@
 
   // why: keyboard navigation moves the selection without scrolling — keep the
   // selected row in view so arrowing through a long list stays usable.
+  // why the lead and not ".selected": a shift-range marks many rows, and the
+  // one worth keeping in view is the end the user just moved to.
   let listEl = $state<HTMLElement | null>(null);
   $effect(() => {
     if (selectedId === null || listEl === null) return;
     listEl
-      .querySelector<HTMLElement>(".selected")
+      .querySelector<HTMLElement>("[data-lead]")
       ?.scrollIntoView({ block: "nearest" });
   });
 </script>
@@ -302,6 +316,7 @@
     class="list"
     role="listbox"
     aria-label="Messages"
+    aria-multiselectable="true"
     bind:this={listEl}
     onscroll={handleScroll}
     onwheel={handlePullWheel}
@@ -352,14 +367,15 @@
           {/if}
           <button
             role="option"
-            aria-selected={selectedId === message.id}
-            class:selected={selectedId === message.id}
+            aria-selected={selection.has(message.id)}
+            data-lead={selectedId === message.id ? "true" : undefined}
+            class:selected={selection.has(message.id)}
             class:unread={!message.read}
             class:swiping={offset !== 0}
             style:transform={offset === 0
               ? undefined
               : `translateX(${offset}px)`}
-            onclick={() => handleClick(message)}
+            onclick={(e) => handleClick(message, e)}
           >
             <span class="content">
               <span class="row">

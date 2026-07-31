@@ -2,11 +2,33 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_SELECTION,
   extendRange,
+  modeFor,
   pruneSelection,
   type Selection,
   selectOne,
   toggleId,
 } from "./selection";
+
+describe("modeFor", () => {
+  const plain = { metaKey: false, ctrlKey: false, shiftKey: false };
+
+  it("reads a bare click as replacing the selection", () => {
+    expect(modeFor(plain)).toBe("replace");
+  });
+
+  it("reads cmd (and ctrl) as toggling one row", () => {
+    expect(modeFor({ ...plain, metaKey: true })).toBe("toggle");
+    expect(modeFor({ ...plain, ctrlKey: true })).toBe("toggle");
+  });
+
+  it("reads shift as extending a range", () => {
+    expect(modeFor({ ...plain, shiftKey: true })).toBe("range");
+  });
+
+  it("lets shift win over cmd when both are held", () => {
+    expect(modeFor({ ...plain, metaKey: true, shiftKey: true })).toBe("range");
+  });
+});
 
 describe("selectOne", () => {
   it("collapses the selection to the one row and anchors there", () => {

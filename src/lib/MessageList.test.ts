@@ -211,7 +211,7 @@ it("still selects on a plain click", async () => {
   await fireEvent(row, pointer("pointerup", { clientX: 200, clientY: 50 }));
   await fireEvent.click(row);
 
-  expect(onSelect).toHaveBeenCalledWith(1);
+  expect(onSelect).toHaveBeenCalledWith(1, "replace");
 });
 
 it("does not start a drag from a mostly vertical pointer move", async () => {
@@ -227,7 +227,50 @@ it("does not start a drag from a mostly vertical pointer move", async () => {
 
   expect(onArchive).not.toHaveBeenCalled();
   // No drag happened, so the click still counts as a selection.
-  expect(onSelect).toHaveBeenCalledWith(1);
+  expect(onSelect).toHaveBeenCalledWith(1, "replace");
+});
+
+it("reports a cmd-click as a toggle and a shift-click as a range", async () => {
+  const onSelect = vi.fn();
+  renderList({ onSelect });
+  const row = screen.getByRole("option", { name: /Bob/ });
+
+  await fireEvent.click(row, { metaKey: true });
+  expect(onSelect).toHaveBeenCalledWith(2, "toggle");
+
+  await fireEvent.click(row, { shiftKey: true });
+  expect(onSelect).toHaveBeenCalledWith(2, "range");
+});
+
+it("marks every selected row, not just the lead one", () => {
+  renderList({ selectedId: 1, selectedIds: [1, 2] });
+
+  expect(screen.getByRole("option", { name: /Alice/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(screen.getByRole("option", { name: /Bob/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+it("leaves a row unmarked once it is toggled out of the selection", () => {
+  renderList({ selectedId: 1, selectedIds: [2] });
+
+  expect(screen.getByRole("option", { name: /Alice/ })).toHaveAttribute(
+    "aria-selected",
+    "false",
+  );
+});
+
+it("announces the list as multi-selectable", () => {
+  renderList();
+
+  expect(screen.getByRole("listbox")).toHaveAttribute(
+    "aria-multiselectable",
+    "true",
+  );
 });
 
 it("labels the swipe backdrop Move to Inbox for archived rows", async () => {

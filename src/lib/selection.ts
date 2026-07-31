@@ -11,6 +11,26 @@ export type Selection = {
 
 export const EMPTY_SELECTION: Selection = { ids: [], anchor: null };
 
+/** What a click on a row means for the selection. */
+export type SelectMode = "replace" | "toggle" | "range";
+
+/**
+ * Read a click's modifiers as an intent, so the list maps DOM events and
+ * App.svelte maps intents to state — neither has to know the other's half.
+ *
+ * why ctrl counts as cmd: the keyboard handler already treats the two alike,
+ * and the app has no context menu for ctrl-click to collide with.
+ */
+export function modeFor(event: {
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+}): SelectMode {
+  if (event.shiftKey) return "range";
+  if (event.metaKey || event.ctrlKey) return "toggle";
+  return "replace";
+}
+
 /** Plain click or arrow key — the selection collapses to this row. */
 export function selectOne(id: number): Selection {
   return { ids: [id], anchor: id };
