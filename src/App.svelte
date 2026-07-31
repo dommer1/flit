@@ -866,6 +866,7 @@
     <section class="view">
       <MessageView
         message={selectedMessage}
+        selectedCount={visibleSelection.ids.length}
         {accountEmails}
         {accountColors}
         {threadOrder}

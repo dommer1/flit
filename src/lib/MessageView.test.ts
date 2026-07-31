@@ -565,3 +565,15 @@ it("dismisses the trust banner via its close button", async () => {
     screen.queryByText(/does not usually use this email address/),
   ).not.toBeInTheDocument();
 });
+
+it("summarises a multi-row selection instead of showing a body", () => {
+  renderView({ message: null, selectedCount: 5 });
+
+  expect(screen.getByText("5 messages selected")).toBeInTheDocument();
+});
+
+it("keeps the prompt when nothing is selected at all", () => {
+  renderView({ message: null, selectedCount: 0 });
+
+  expect(screen.getByText("Select a message")).toBeInTheDocument();
+});

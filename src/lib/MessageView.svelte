@@ -6,6 +6,7 @@
 
   let {
     message,
+    selectedCount = 0,
     accountEmails = {},
     accountColors = {},
     threadOrder = "newestLast",
@@ -14,6 +15,9 @@
     onDeleteDraft,
   }: {
     message: MessageHeader | null;
+    /** How many rows the list has selected. Past one there is no single
+     * message to read, so the pane says how many are staged instead. */
+    selectedCount?: number;
     /** accountId → address; marks a card's sender as "me". */
     accountEmails?: Record<number, string>;
     /** accountId → accent color for the "me" avatar. */
@@ -150,7 +154,11 @@
 
 <article>
   {#if message === null}
-    <p class="empty">Select a message</p>
+    <p class="empty">
+      {selectedCount > 1
+        ? `${selectedCount} messages selected`
+        : "Select a message"}
+    </p>
   {:else}
     <div class="thread">
       <div class="stack">

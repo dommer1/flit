@@ -1387,3 +1387,12 @@ it("unarchives an archived message via Move to Inbox", async () => {
   expect(api.archiveMessage).not.toHaveBeenCalled();
 });
 
+
+it("tells the reading pane how many rows are staged for a bulk action", async () => {
+  render(App);
+  const list = within(screen.getByRole("listbox"));
+  await fireEvent.click(await list.findByText("Weekend plans"));
+  await fireEvent.click(list.getByText("Re: Invoice"), { metaKey: true });
+
+  expect(screen.getByText("2 messages selected")).toBeInTheDocument();
+});
