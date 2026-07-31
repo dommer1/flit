@@ -97,6 +97,7 @@ pub fn run() {
             commands::move_to_trash,
             commands::archive_message,
             commands::move_message,
+            commands::move_messages,
             commands::trash_thread,
             commands::archive_thread,
             commands::move_thread,

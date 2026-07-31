@@ -281,6 +281,88 @@ pub async fn move_message(
     move_rows_to_mailbox(&app, &state, loc.account_id, &loc.mailbox, &rows, &mailbox).await
 }
 
+/// One IMAP session's worth of work: the rows of a single account's folder.
+#[derive(Debug, PartialEq, Eq)]
+struct FolderBatch {
+    account_id: i64,
+    mailbox: String,
+    /// `(message row id, server uid)` — what move_rows_to_mailbox takes.
+    rows: Vec<(i64, i64)>,
+}
+
+/// Split located messages so each batch is one account's folder.
+///
+/// why: a bulk action over a unified-inbox selection can span accounts and
+/// folders, and a MOVE only applies to the mailbox that is SELECTed. Grouping
+/// first means one connection per folder instead of one per message.
+///
+/// Batch order is (account, folder name) and rows keep their input order, so
+/// a run is reproducible and a partial failure is explainable.
+fn group_by_folder(located: Vec<(i64, storage::messages::MessageLocation)>) -> Vec<FolderBatch> {
+    let mut batches: std::collections::BTreeMap<(i64, String), Vec<(i64, i64)>> =
+        std::collections::BTreeMap::new();
+    for (message_id, loc) in located {
+        batches
+            .entry((loc.account_id, loc.mailbox))
+            .or_default()
+            .push((message_id, loc.uid));
+    }
+    batches
+        .into_iter()
+        .map(|((account_id, mailbox), rows)| FolderBatch {
+            account_id,
+            mailbox,
+            rows,
+        })
+        .collect()
+}
+
+/// Look every selected id up, then group them into per-folder batches.
+async fn locate_batches(
+    state: &AppState,
+    message_ids: &[i64],
+) -> Result<Vec<FolderBatch>, AppError> {
+    let mut located = Vec::with_capacity(message_ids.len());
+    for id in message_ids {
+        located.push((*id, storage::messages::location(&state.pool, *id).await?));
+    }
+    Ok(group_by_folder(located))
+}
+
+/// Move a whole selection to a user-chosen folder — one server session per
+/// account folder the selection touches.
+///
+/// why it keeps going after a failure: a selection can span accounts, and one
+/// stale password must not strand the rows of every other account. The first
+/// error is still returned, so the frontend can put the failed rows back.
+#[tauri::command]
+pub async fn move_messages(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_ids: Vec<i64>,
+    mailbox: String,
+) -> Result<(), AppError> {
+    let mut outcome = Ok(());
+    for batch in locate_batches(&state, &message_ids).await? {
+        if !storage::mailboxes::exists(&state.pool, batch.account_id, &mailbox).await? {
+            return Err(AppError::Imap(format!("no folder named {mailbox}")));
+        }
+        let moved = move_rows_to_mailbox(
+            &app,
+            &state,
+            batch.account_id,
+            &batch.mailbox,
+            &batch.rows,
+            &mailbox,
+        )
+        .await;
+        if outcome.is_ok() {
+            outcome = moved;
+        }
+    }
+    outcome
+}
+
 /// Trash a whole conversation as shown in its folder — every thread member
 /// sharing the anchor's mailbox. Flat views (trash/junk/drafts) keep using
 /// the single-message commands; the frontend picks per row.
@@ -2056,5 +2138,76 @@ mod tests {
         // "now" and the past both belong to the ordinary send button
         assert!(validate_scheduled_at(1_000, 1_000).is_err());
         assert!(validate_scheduled_at(999, 1_000).is_err());
+    }
+
+    fn located(
+        id: i64,
+        account_id: i64,
+        mailbox: &str,
+        uid: i64,
+    ) -> (i64, storage::messages::MessageLocation) {
+        (
+            id,
+            storage::messages::MessageLocation {
+                account_id,
+                mailbox: mailbox.to_string(),
+                uid,
+            },
+        )
+    }
+
+    #[test]
+    fn grouping_an_empty_selection_yields_no_work() {
+        assert_eq!(group_by_folder(Vec::new()), Vec::new());
+    }
+
+    #[test]
+    fn rows_of_one_folder_share_a_single_batch() {
+        let batches = group_by_folder(vec![
+            located(1, 7, "INBOX", 100),
+            located(2, 7, "INBOX", 101),
+        ]);
+
+        assert_eq!(
+            batches,
+            vec![FolderBatch {
+                account_id: 7,
+                mailbox: "INBOX".to_string(),
+                rows: vec![(1, 100), (2, 101)],
+            }]
+        );
+    }
+
+    #[test]
+    fn folders_and_accounts_each_get_their_own_batch() {
+        // A unified-inbox selection: two accounts, and one of them spans two
+        // folders. Every batch is one IMAP session.
+        let batches = group_by_folder(vec![
+            located(1, 7, "INBOX", 100),
+            located(2, 9, "INBOX", 200),
+            located(3, 7, "Archive", 300),
+            located(4, 7, "INBOX", 101),
+        ]);
+
+        assert_eq!(
+            batches,
+            vec![
+                FolderBatch {
+                    account_id: 7,
+                    mailbox: "Archive".to_string(),
+                    rows: vec![(3, 300)],
+                },
+                FolderBatch {
+                    account_id: 7,
+                    mailbox: "INBOX".to_string(),
+                    rows: vec![(1, 100), (4, 101)],
+                },
+                FolderBatch {
+                    account_id: 9,
+                    mailbox: "INBOX".to_string(),
+                    rows: vec![(2, 200)],
+                },
+            ]
+        );
     }
 }
