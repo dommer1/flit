@@ -100,6 +100,7 @@ pub fn run() {
             commands::move_messages,
             commands::trash_messages,
             commands::archive_messages,
+            commands::set_messages_read,
             commands::trash_thread,
             commands::archive_thread,
             commands::move_thread,

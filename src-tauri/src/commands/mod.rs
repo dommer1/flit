@@ -238,6 +238,49 @@ pub async fn set_message_read(
     Ok(())
 }
 
+/// Mark a whole selection read or unread. Same shape as set_message_read —
+/// the cache and the UI update at once, the server catches up in the
+/// background — but batched, so each account folder is one STORE.
+#[tauri::command]
+pub async fn set_messages_read(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_ids: Vec<i64>,
+    read: bool,
+) -> Result<(), AppError> {
+    let batches = locate_batches(&state, &message_ids).await?;
+    for batch in &batch_ids(&batches) {
+        storage::messages::set_read(&state.pool, *batch, read).await?;
+    }
+    for batch in &batches {
+        app.emit("messages-changed", batch.account_id)?;
+    }
+
+    for batch in batches {
+        let account = storage::accounts::get(&state.pool, batch.account_id).await?;
+        let password = state.password(batch.account_id).await?;
+        let uids: Vec<i64> = batch.rows.iter().map(|(_, uid)| *uid).collect();
+        tauri::async_runtime::spawn(async move {
+            // why: best effort, like the single-message path — a failed STORE
+            // is adopted back from the server by the next sync's reconcile.
+            if let Err(err) =
+                push_seen_flags(&account, &password, &batch.mailbox, &uids, read).await
+            {
+                eprintln!("failed to push read={read} for {} rows: {err}", uids.len());
+            }
+        });
+    }
+    Ok(())
+}
+
+/// Every message row id across a set of batches.
+fn batch_ids(batches: &[FolderBatch]) -> Vec<i64> {
+    batches
+        .iter()
+        .flat_map(|batch| batch.rows.iter().map(|(id, _)| *id))
+        .collect()
+}
+
 /// Move one message to the account's Trash folder, then drop it from the
 /// local cache.
 #[tauri::command]
@@ -572,6 +615,17 @@ async fn push_seen_flag(
     uid: i64,
     seen: bool,
 ) -> Result<(), AppError> {
+    push_seen_flags(account, password, mailbox, &[uid], seen).await
+}
+
+/// One connection, one SELECT, one STORE over the whole set.
+async fn push_seen_flags(
+    account: &Account,
+    password: &str,
+    mailbox: &str,
+    uids: &[i64],
+    seen: bool,
+) -> Result<(), AppError> {
     let mut session = mail::imap::connect(
         &account.imap_host,
         account.imap_port,
@@ -583,7 +637,7 @@ async fn push_seen_flag(
         .select(mailbox)
         .await
         .map_err(|e| AppError::Imap(format!("select {mailbox}: {e}")))?;
-    let result = mail::imap::set_seen(&mut session, uid, seen).await;
+    let result = mail::imap::set_seen_many(&mut session, uids, seen).await;
     let _ = session.logout().await;
     result
 }

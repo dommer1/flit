@@ -255,13 +255,36 @@ pub async fn fetch_sizes(
 /// read state. `.SILENT` suppresses the echoed FETCH, but the tagged
 /// response still has to be drained for the command to complete.
 pub async fn set_seen(session: &mut ImapSession, uid: i64, seen: bool) -> Result<(), AppError> {
+    set_seen_many(session, &[uid], seen).await
+}
+
+/// The IMAP set notation for a list of UIDs: `"3,1,2"`.
+fn uid_set(uids: &[i64]) -> String {
+    uids.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Flip `\Seen` on a whole set of UIDs in the selected folder.
+///
+/// why one command and not one per uid: UID STORE takes a set, so marking
+/// fifty messages read is a single round trip rather than fifty.
+pub async fn set_seen_many(
+    session: &mut ImapSession,
+    uids: &[i64],
+    seen: bool,
+) -> Result<(), AppError> {
+    if uids.is_empty() {
+        return Ok(());
+    }
     let query = if seen {
         "+FLAGS.SILENT (\\Seen)"
     } else {
         "-FLAGS.SILENT (\\Seen)"
     };
     let updates = session
-        .uid_store(uid.to_string(), query)
+        .uid_store(uid_set(uids), query)
         .await
         .map_err(imap_err)?;
     let _: Vec<Fetch> = updates.try_collect().await.map_err(imap_err)?;
@@ -446,6 +469,14 @@ pub fn new_uids_only(headers: Vec<RawHeader>, last_uid: i64) -> Vec<RawHeader> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_uid_set_is_comma_separated() {
+        assert_eq!(uid_set(&[]), "");
+        assert_eq!(uid_set(&[42]), "42");
+        // Order is the caller's; the server does not care.
+        assert_eq!(uid_set(&[3, 1, 2]), "3,1,2");
+    }
 
     #[test]
     fn an_empty_folder_has_nothing_to_sweep() {

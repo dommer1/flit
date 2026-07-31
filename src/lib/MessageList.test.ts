@@ -511,3 +511,20 @@ it("renders no section headers for an empty list", () => {
 
   expect(document.querySelector(".section")).toBeNull();
 });
+
+it("gives every row a monogram tinted by the sender's domain", () => {
+  renderList({
+    messages: [
+      header(1, "Alice <alice@example.com>", false),
+      header(2, "Bob <bob@example.com>", true),
+      header(3, "Carol <carol@other.test>", true),
+    ],
+  });
+
+  const avatars = [...document.querySelectorAll<HTMLElement>(".avatar")];
+  expect(avatars.map((el) => el.textContent?.trim())).toEqual(["A", "B", "C"]);
+  // Alice and Bob share a domain, so they share a tint — that shared color is
+  // the whole point of keying on the domain rather than the address.
+  expect(avatars[0].style.background).toBe(avatars[1].style.background);
+  expect(avatars[2].style.background).not.toBe(avatars[0].style.background);
+});

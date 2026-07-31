@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { formatListDate, sectionFor, senderName } from "./format";
+  import { avatarColor, senderDomain } from "./avatar";
+  import {
+    formatListDate,
+    sectionFor,
+    senderInitials,
+    senderName,
+  } from "./format";
   import { accumulatePull, shouldRefresh } from "./pullRefresh";
   import {
     accumulateOffset,
@@ -326,6 +332,7 @@
     {:else}
       {#each rows as { message, section, opens } (message.id)}
         {@const color = accountColors[message.accountId] ?? null}
+        {@const domain = senderDomain(message.from)}
         {@const offset = swipeId === message.id ? swipeOffset : 0}
         {@const stripAction =
           offset < 0
@@ -377,6 +384,15 @@
               : `translateX(${offset}px)`}
             onclick={(e) => handleClick(message, e)}
           >
+            <!-- aria-hidden: the monogram is a visual shortcut to the sender
+                 name, which the row already spells out right beside it. -->
+            <span
+              class="avatar"
+              aria-hidden="true"
+              style:background={domain ? avatarColor(domain) : undefined}
+            >
+              {senderInitials(message.from)}
+            </span>
             <span class="content">
               <span class="row">
                 {#if !message.read || message.threadUnread}
@@ -639,7 +655,11 @@
     /* why relative: keeps the button painting above the positioned swipe
        backdrop. */
     position: relative;
-    display: block;
+    display: flex;
+    /* why flex-start: the monogram lines up with the sender row, so rows of
+       one, two and three lines all keep the avatars on one baseline. */
+    align-items: flex-start;
+    gap: 10px;
     box-sizing: border-box;
     width: 100%;
     padding: 10px 16px;
@@ -685,8 +705,26 @@
     background: var(--accent-text);
   }
 
+  /* Sender monogram, tinted per domain (see lib/avatar.ts). */
+  .avatar {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    /* Nudged down so the circle centers on the sender row rather than on the
+       row's ascender. */
+    margin-top: 1px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--avatar-muted);
+    font-size: 12px;
+    font-weight: 600;
+    color: #ffffff;
+  }
+
   .content {
     display: flex;
+    flex: 1;
     flex-direction: column;
     gap: 1px;
     min-width: 0;
