@@ -247,8 +247,9 @@ pub async fn set_messages_read(
     state: State<'_, AppState>,
     message_ids: Vec<i64>,
     read: bool,
+    threads: bool,
 ) -> Result<(), AppError> {
-    let batches = locate_batches(&state, &message_ids).await?;
+    let batches = locate_batches(&state, &message_ids, threads).await?;
     for batch in &batch_ids(&batches) {
         storage::messages::set_read(&state.pool, *batch, read).await?;
     }
@@ -340,11 +341,16 @@ struct FolderBatch {
 /// first means one connection per folder instead of one per message.
 ///
 /// Batch order is (account, folder name) and rows keep their input order, so
-/// a run is reproducible and a partial failure is explainable.
+/// a run is reproducible and a partial failure is explainable. A row named
+/// more than once — conversation expansion can do that — is kept once.
 fn group_by_folder(located: Vec<(i64, storage::messages::MessageLocation)>) -> Vec<FolderBatch> {
     let mut batches: std::collections::BTreeMap<(i64, String), Vec<(i64, i64)>> =
         std::collections::BTreeMap::new();
+    let mut seen = std::collections::HashSet::new();
     for (message_id, loc) in located {
+        if !seen.insert(message_id) {
+            continue;
+        }
         batches
             .entry((loc.account_id, loc.mailbox))
             .or_default()
@@ -373,13 +379,34 @@ fn first_error(current: Result<(), AppError>, next: Result<(), AppError>) -> Res
 }
 
 /// Look every selected id up, then group them into per-folder batches.
+///
+/// `threads` mirrors what the row on screen stands for: in the conversation
+/// views a row is a whole thread, so the action has to reach every member in
+/// that folder, exactly as the single-row thread commands do. The flat
+/// trash/junk/drafts views pass false — there a row is one message, and
+/// expanding it would drag in siblings the user never selected.
 async fn locate_batches(
     state: &AppState,
     message_ids: &[i64],
+    threads: bool,
 ) -> Result<Vec<FolderBatch>, AppError> {
     let mut located = Vec::with_capacity(message_ids.len());
     for id in message_ids {
-        located.push((*id, storage::messages::location(&state.pool, *id).await?));
+        let loc = storage::messages::location(&state.pool, *id).await?;
+        if !threads {
+            located.push((*id, loc));
+            continue;
+        }
+        for (row_id, uid) in storage::messages::thread_rows_in_mailbox(&state.pool, *id).await? {
+            located.push((
+                row_id,
+                storage::messages::MessageLocation {
+                    account_id: loc.account_id,
+                    mailbox: loc.mailbox.clone(),
+                    uid,
+                },
+            ));
+        }
     }
     Ok(group_by_folder(located))
 }
@@ -396,9 +423,10 @@ pub async fn move_messages(
     state: State<'_, AppState>,
     message_ids: Vec<i64>,
     mailbox: String,
+    threads: bool,
 ) -> Result<(), AppError> {
     let mut outcome = Ok(());
-    for batch in locate_batches(&state, &message_ids).await? {
+    for batch in locate_batches(&state, &message_ids, threads).await? {
         if !storage::mailboxes::exists(&state.pool, batch.account_id, &mailbox).await? {
             return Err(AppError::Imap(format!("no folder named {mailbox}")));
         }
@@ -423,11 +451,12 @@ async fn move_batches_to_special_folder(
     app: &AppHandle,
     state: &AppState,
     message_ids: &[i64],
+    threads: bool,
     roles: &[&str],
     label: &str,
 ) -> Result<(), AppError> {
     let mut outcome = Ok(());
-    for batch in locate_batches(state, message_ids).await? {
+    for batch in locate_batches(state, message_ids, threads).await? {
         let dest = special_folder_dest(state, batch.account_id, roles, label).await?;
         let moved = move_rows_to_mailbox(
             app,
@@ -449,8 +478,9 @@ pub async fn trash_messages(
     app: AppHandle,
     state: State<'_, AppState>,
     message_ids: Vec<i64>,
+    threads: bool,
 ) -> Result<(), AppError> {
-    move_batches_to_special_folder(&app, &state, &message_ids, &["trash"], "trash").await
+    move_batches_to_special_folder(&app, &state, &message_ids, threads, &["trash"], "trash").await
 }
 
 /// Archive a whole selection — each account's own Archive (Gmail: All Mail).
@@ -459,8 +489,17 @@ pub async fn archive_messages(
     app: AppHandle,
     state: State<'_, AppState>,
     message_ids: Vec<i64>,
+    threads: bool,
 ) -> Result<(), AppError> {
-    move_batches_to_special_folder(&app, &state, &message_ids, &["archive", "all"], "archive").await
+    move_batches_to_special_folder(
+        &app,
+        &state,
+        &message_ids,
+        threads,
+        &["archive", "all"],
+        "archive",
+    )
+    .await
 }
 
 /// Trash a whole conversation as shown in its folder — every thread member
@@ -2305,6 +2344,26 @@ mod tests {
         let batches = group_by_folder(vec![
             located(1, 7, "INBOX", 100),
             located(2, 7, "INBOX", 101),
+        ]);
+
+        assert_eq!(
+            batches,
+            vec![FolderBatch {
+                account_id: 7,
+                mailbox: "INBOX".to_string(),
+                rows: vec![(1, 100), (2, 101)],
+            }]
+        );
+    }
+
+    // Expanding conversations can name the same row twice — two selected
+    // rows of one thread, say. Moving a uid twice would fail the second time.
+    #[test]
+    fn a_row_named_twice_is_moved_once() {
+        let batches = group_by_folder(vec![
+            located(1, 7, "INBOX", 100),
+            located(2, 7, "INBOX", 101),
+            located(1, 7, "INBOX", 100),
         ]);
 
         assert_eq!(
