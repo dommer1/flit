@@ -98,6 +98,8 @@ pub fn run() {
             commands::archive_message,
             commands::move_message,
             commands::move_messages,
+            commands::trash_messages,
+            commands::archive_messages,
             commands::trash_thread,
             commands::archive_thread,
             commands::move_thread,

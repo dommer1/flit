@@ -317,6 +317,18 @@ fn group_by_folder(located: Vec<(i64, storage::messages::MessageLocation)>) -> V
         .collect()
 }
 
+/// Which failure a bulk run reports: the one it hit first.
+///
+/// why not the last, and why not abort: every batch runs, so one account
+/// with a stale password cannot strand the rows of the others — and the
+/// error worth showing is where the run first went wrong.
+fn first_error(current: Result<(), AppError>, next: Result<(), AppError>) -> Result<(), AppError> {
+    match current {
+        Err(err) => Err(err),
+        Ok(()) => next,
+    }
+}
+
 /// Look every selected id up, then group them into per-folder batches.
 async fn locate_batches(
     state: &AppState,
@@ -356,11 +368,56 @@ pub async fn move_messages(
             &mailbox,
         )
         .await;
-        if outcome.is_ok() {
-            outcome = moved;
-        }
+        outcome = first_error(outcome, moved);
     }
     outcome
+}
+
+/// The bulk counterpart of `move_to_special_folder`: each batch resolves the
+/// destination against its own account, because "archive" and "trash" are
+/// per-account folder names, not one shared string.
+async fn move_batches_to_special_folder(
+    app: &AppHandle,
+    state: &AppState,
+    message_ids: &[i64],
+    roles: &[&str],
+    label: &str,
+) -> Result<(), AppError> {
+    let mut outcome = Ok(());
+    for batch in locate_batches(state, message_ids).await? {
+        let dest = special_folder_dest(state, batch.account_id, roles, label).await?;
+        let moved = move_rows_to_mailbox(
+            app,
+            state,
+            batch.account_id,
+            &batch.mailbox,
+            &batch.rows,
+            &dest,
+        )
+        .await;
+        outcome = first_error(outcome, moved);
+    }
+    outcome
+}
+
+/// Trash a whole selection — each account's own Trash folder.
+#[tauri::command]
+pub async fn trash_messages(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_ids: Vec<i64>,
+) -> Result<(), AppError> {
+    move_batches_to_special_folder(&app, &state, &message_ids, &["trash"], "trash").await
+}
+
+/// Archive a whole selection — each account's own Archive (Gmail: All Mail).
+#[tauri::command]
+pub async fn archive_messages(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_ids: Vec<i64>,
+) -> Result<(), AppError> {
+    move_batches_to_special_folder(&app, &state, &message_ids, &["archive", "all"], "archive").await
 }
 
 /// Trash a whole conversation as shown in its folder — every thread member
@@ -2154,6 +2211,34 @@ mod tests {
                 uid,
             },
         )
+    }
+
+    fn imap_err(text: &str) -> Result<(), AppError> {
+        Err(AppError::Imap(text.to_string()))
+    }
+
+    #[test]
+    fn a_bulk_run_reports_the_first_failure_it_hit() {
+        assert!(first_error(Ok(()), Ok(())).is_ok());
+        assert_eq!(
+            first_error(Ok(()), imap_err("second"))
+                .unwrap_err()
+                .to_string(),
+            AppError::Imap("second".to_string()).to_string(),
+        );
+        // Later batches still ran; their errors must not mask the first.
+        assert_eq!(
+            first_error(imap_err("first"), imap_err("second"))
+                .unwrap_err()
+                .to_string(),
+            AppError::Imap("first".to_string()).to_string(),
+        );
+        assert_eq!(
+            first_error(imap_err("first"), Ok(()))
+                .unwrap_err()
+                .to_string(),
+            AppError::Imap("first".to_string()).to_string(),
+        );
     }
 
     #[test]
