@@ -61,6 +61,15 @@
   import { DEFAULT_SWIPE_ACTIONS } from "./lib/swipe";
   import { neighborId, nextMessageId, type NavDelta } from "./lib/messageNav";
   import {
+    EMPTY_SELECTION,
+    extendRange,
+    pruneSelection,
+    type SelectMode,
+    type Selection,
+    selectOne,
+    toggleId,
+  } from "./lib/selection";
+  import {
     clampPaneWidth,
     loadPaneWidths,
     PANE_LIMITS,
@@ -99,8 +108,22 @@
     );
   }
 
+  // The rows a bulk action would hit. `selection` is the raw record; rows it
+  // names can leave the list at any time (an eviction, a folder switch, a
+  // search), so everything downstream reads the pruned view instead — no
+  // effect has to chase `messages` to keep the two in step.
+  let selection = $state<Selection>(EMPTY_SELECTION);
+  let messageIds = $derived(messages.map((m) => m.id));
+  let visibleSelection = $derived(pruneSelection(selection, messageIds));
+
+  // why gated on the selection size: the reading pane must not follow a
+  // cmd-click into a second message — showing it would mark it read, which
+  // is the opposite of what gathering rows for a bulk action means. One row
+  // selected still reads normally, cmd-clicked or not.
   let selectedMessage = $derived(
-    messages.find((m) => m.id === selectedMessageId) ?? null,
+    visibleSelection.ids.length > 1
+      ? null
+      : (messages.find((m) => m.id === selectedMessageId) ?? null),
   );
 
   // accountId → color, so the list can dot each row with its account's color
@@ -132,12 +155,26 @@
     );
   }
 
-  function selectMessage(id: number) {
+  // A click or arrow key on a row. Only "replace" opens the message — cmd
+  // and shift gather rows for a bulk action, which must not resume a draft
+  // in a compose window or clear an unread dot the user never read.
+  function selectMessage(id: number, mode: SelectMode = "replace") {
+    if (mode === "toggle") {
+      selection = toggleId(visibleSelection, id);
+      selectedMessageId = id;
+      return;
+    }
+    if (mode === "range") {
+      selection = extendRange(visibleSelection, messageIds, id);
+      selectedMessageId = id;
+      return;
+    }
     const message = messages.find((m) => m.id === id);
     if (message && isDraft(message)) {
       editDraft(id);
       return;
     }
+    selection = selectOne(id);
     selectedMessageId = id;
     // why: opening an unread message marks it read (like Apple Mail) — the
     // backend clears the local dot and pushes \Seen to the server.
@@ -790,6 +827,7 @@
         {messages}
         {accountColors}
         selectedId={selectedMessageId}
+        selectedIds={visibleSelection.ids}
         onSelect={selectMessage}
         {swipeActions}
         onArchive={handleArchive}

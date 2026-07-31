@@ -955,6 +955,75 @@ it("does not touch the read state of an already-read message", async () => {
   expect(api.setMessageRead).not.toHaveBeenCalled();
 });
 
+it("adds a row to the selection on cmd-click", async () => {
+  render(App);
+  const first = (await screen.findByText("Weekend plans")).closest(
+    '[role="option"]',
+  );
+  const second = screen.getByText("Re: Invoice").closest('[role="option"]');
+
+  await fireEvent.click(screen.getByText("Weekend plans"));
+  await fireEvent.click(screen.getByText("Re: Invoice"), { metaKey: true });
+
+  expect(first).toHaveAttribute("aria-selected", "true");
+  expect(second).toHaveAttribute("aria-selected", "true");
+});
+
+it("drops a row from the selection when it is cmd-clicked again", async () => {
+  render(App);
+  // why scoped to the list: the open message repeats its subject in the
+  // reading pane, so a bare getByText would match two nodes.
+  const list = within(screen.getByRole("listbox"));
+  const first = (await list.findByText("Weekend plans")).closest(
+    '[role="option"]',
+  );
+
+  await fireEvent.click(list.getByText("Weekend plans"));
+  await fireEvent.click(list.getByText("Weekend plans"), { metaKey: true });
+
+  expect(first).toHaveAttribute("aria-selected", "false");
+});
+
+// why: cmd-click gathers rows for a bulk action — the user is not reading
+// them, so the unread dot has to stay put.
+it("does not mark a message read when it is cmd-clicked", async () => {
+  render(App);
+  const list = within(screen.getByRole("listbox"));
+  await fireEvent.click(await list.findByText("Re: Invoice"));
+  await fireEvent.click(list.getByText("Weekend plans"), { metaKey: true });
+
+  expect(api.setMessageRead).not.toHaveBeenCalled();
+});
+
+it("selects the span between the anchor and a shift-click", async () => {
+  render(App);
+  const first = (await screen.findByText("Weekend plans")).closest(
+    '[role="option"]',
+  );
+  const second = screen.getByText("Re: Invoice").closest('[role="option"]');
+
+  await fireEvent.click(screen.getByText("Weekend plans"));
+  await fireEvent.click(screen.getByText("Re: Invoice"), { shiftKey: true });
+
+  expect(first).toHaveAttribute("aria-selected", "true");
+  expect(second).toHaveAttribute("aria-selected", "true");
+});
+
+it("collapses a multi-selection back to one row on an arrow key", async () => {
+  render(App);
+  const first = (await screen.findByText("Weekend plans")).closest(
+    '[role="option"]',
+  );
+  const second = screen.getByText("Re: Invoice").closest('[role="option"]');
+
+  await fireEvent.click(screen.getByText("Weekend plans"));
+  await fireEvent.click(screen.getByText("Re: Invoice"), { metaKey: true });
+  await fireEvent.keyDown(document.body, { key: "ArrowDown" });
+
+  expect(first).toHaveAttribute("aria-selected", "false");
+  expect(second).toHaveAttribute("aria-selected", "true");
+});
+
 it("marks message rows of colored accounts with a dot", async () => {
   currentAccounts = [{ ...accounts[0], color: "#ff9f0a" }, accounts[1]];
   const { container } = render(App);
@@ -1317,3 +1386,4 @@ it("unarchives an archived message via Move to Inbox", async () => {
   expect(api.moveMessage).toHaveBeenCalledWith(9, "INBOX");
   expect(api.archiveMessage).not.toHaveBeenCalled();
 });
+
