@@ -213,6 +213,43 @@ export function moveMessage(
 }
 
 /**
+ * The bulk counterparts, for a multi-row selection. Each opens one server
+ * session per account folder the selection touches, not one per message.
+ *
+ * `threads` says what a selected row stands for: a whole conversation in the
+ * threaded views, one message in the flat trash/junk/drafts views.
+ */
+export function trashMessages(
+  messageIds: number[],
+  threads: boolean,
+): Promise<void> {
+  return invoke<void>("trash_messages", { messageIds, threads });
+}
+
+export function archiveMessages(
+  messageIds: number[],
+  threads: boolean,
+): Promise<void> {
+  return invoke<void>("archive_messages", { messageIds, threads });
+}
+
+export function moveMessages(
+  messageIds: number[],
+  mailbox: string,
+  threads: boolean,
+): Promise<void> {
+  return invoke<void>("move_messages", { messageIds, mailbox, threads });
+}
+
+export function setMessagesRead(
+  messageIds: number[],
+  read: boolean,
+  threads: boolean,
+): Promise<void> {
+  return invoke<void>("set_messages_read", { messageIds, read, threads });
+}
+
+/**
  * Save one received attachment: a native save dialog picks the destination,
  * then the backend re-fetches the message from the server and writes the
  * extracted part there. Resolves without saving when the dialog is

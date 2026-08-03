@@ -238,6 +238,10 @@ vi.mock("./lib/api", () => ({
   trashThread: vi.fn(async () => undefined),
   archiveThread: vi.fn(async () => undefined),
   moveThread: vi.fn(async () => undefined),
+  trashMessages: vi.fn(async () => undefined),
+  archiveMessages: vi.fn(async () => undefined),
+  moveMessages: vi.fn(async () => undefined),
+  setMessagesRead: vi.fn(async () => undefined),
   openCompose: vi.fn(async () => undefined),
   openDraft: vi.fn(async () => undefined),
   openSettings: vi.fn(async () => undefined),
@@ -1395,4 +1399,58 @@ it("tells the reading pane how many rows are staged for a bulk action", async ()
   await fireEvent.click(list.getByText("Re: Invoice"), { metaKey: true });
 
   expect(screen.getByText("2 messages selected")).toBeInTheDocument();
+});
+
+/** Select both inbox rows: click the first, cmd-click the second. */
+async function selectBoth() {
+  const list = within(screen.getByRole("listbox"));
+  await fireEvent.click(await list.findByText("Weekend plans"));
+  await fireEvent.click(list.getByText("Re: Invoice"), { metaKey: true });
+}
+
+it("archives every selected row in one call", async () => {
+  render(App);
+  await selectBoth();
+  await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+
+  expect(api.archiveMessages).toHaveBeenCalledWith([1, 2], true);
+  expect(api.archiveMessage).not.toHaveBeenCalled();
+});
+
+it("trashes every selected row in one call", async () => {
+  render(App);
+  await selectBoth();
+  await fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+
+  expect(api.trashMessages).toHaveBeenCalledWith([1, 2], true);
+});
+
+// One unread among them means the button offers Mark Read for the lot.
+it("marks a mixed selection read rather than unread", async () => {
+  render(App);
+  await selectBoth();
+  await fireEvent.click(screen.getByRole("button", { name: "Mark Read" }));
+
+  expect(api.setMessagesRead).toHaveBeenCalledWith([1, 2], true, true);
+});
+
+it("drops every selected row from the list at once", async () => {
+  render(App);
+  await selectBoth();
+  await fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+
+  await waitFor(() =>
+    expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument(),
+  );
+  expect(screen.queryByText("Re: Invoice")).not.toBeInTheDocument();
+});
+
+it("still uses the single-message command for one selected row", async () => {
+  render(App);
+  const list = within(screen.getByRole("listbox"));
+  await fireEvent.click(await list.findByText("Re: Invoice"));
+  await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+
+  expect(api.archiveMessage).toHaveBeenCalledWith(2);
+  expect(api.archiveMessages).not.toHaveBeenCalled();
 });

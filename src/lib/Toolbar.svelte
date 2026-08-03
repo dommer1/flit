@@ -12,6 +12,7 @@
     onSearch,
     onOpenSettings,
     selected = null,
+    selection = [],
     archived = false,
     moveTargets = [],
     onDraft,
@@ -32,6 +33,9 @@
     onOpenSettings: () => void;
     /** The open message the action buttons operate on; null disables them. */
     selected?: MessageHeader | null;
+    /** Every selected row, when the list holds more than one. Empty falls
+     * back to `selected`, so a single selection behaves as it always did. */
+    selection?: MessageHeader[];
     /** The selection already sits in its archive folder — the archive
      * action flips to "Move to Inbox" (onArchive still fires). */
     archived?: boolean;
@@ -50,9 +54,15 @@
   // lights plus the toggle button.
   let zoneWidth = $derived(sidebarCollapsed ? 130 : sidebarWidth);
 
-  let readTitle = $derived(
-    selected && !selected.read ? "Mark Read" : "Mark Unread",
+  // What the action buttons operate on. The id still travels with each
+  // callback — it is the row the click started from; the parent decides
+  // whether the action covers the rest of the selection.
+  let rows = $derived(
+    selection.length > 0 ? selection : selected ? [selected] : [],
   );
+  let allRead = $derived(rows.every((row) => row.read));
+
+  let readTitle = $derived(allRead ? "Mark Unread" : "Mark Read");
   let archiveTitle = $derived(archived ? "Move to Inbox" : "Archive");
 
   let moveOpen = $state(false);
@@ -170,8 +180,8 @@
       class="action"
       aria-label={readTitle}
       title={readTitle}
-      disabled={!selected}
-      onclick={() => selected && onSetRead?.(selected.id, !selected.read)}
+      disabled={rows.length === 0}
+      onclick={() => rows.length > 0 && onSetRead?.(rows[0].id, !allRead)}
     >
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <rect x="2.5" y="4.5" width="15" height="11" rx="2" />
@@ -183,8 +193,8 @@
       class="action"
       aria-label={archiveTitle}
       title={archiveTitle}
-      disabled={!selected}
-      onclick={() => selected && onArchive?.(selected.id)}
+      disabled={rows.length === 0}
+      onclick={() => rows.length > 0 && onArchive?.(rows[0].id)}
     >
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <rect x="2.5" y="3.5" width="15" height="4" rx="1" />
@@ -201,7 +211,7 @@
         title="Move to"
         aria-haspopup="menu"
         aria-expanded={moveOpen}
-        disabled={!selected || moveTargets.length === 0}
+        disabled={rows.length === 0 || moveTargets.length === 0}
         onclick={() => (moveOpen = !moveOpen)}
       >
         <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -219,7 +229,7 @@
               role="menuitem"
               onclick={() => {
                 moveOpen = false;
-                if (selected) onMove?.(selected.id, folder.name);
+                if (rows.length > 0) onMove?.(rows[0].id, folder.name);
               }}
             >
               {folder.displayName}
@@ -232,8 +242,8 @@
       class="action"
       aria-label="Trash"
       title="Trash"
-      disabled={!selected}
-      onclick={() => selected && onTrash?.(selected.id)}
+      disabled={rows.length === 0}
+      onclick={() => rows.length > 0 && onTrash?.(rows[0].id)}
     >
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <path d="M3.5 5.5h13" />

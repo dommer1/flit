@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import {
     archiveMessage,
+    archiveMessages,
     archiveThread,
     cancelScheduled,
     discardDraft,
@@ -17,8 +18,10 @@
     listThread,
     listScheduled,
     moveMessage,
+    moveMessages,
     moveThread,
     moveToTrash,
+    trashMessages,
     trashThread,
     onAccountsChanged,
     onMessagesChanged,
@@ -34,6 +37,7 @@
     searchMessages,
     sendScheduledNow,
     setMessageRead,
+    setMessagesRead,
     refreshAccount,
     syncAccount,
     undoSend,
@@ -191,6 +195,13 @@
   // list refreshes on its own — here we only fire the command and log a
   // failure (a stale flag heals on the next sync).
   function handleSetRead(id: number, read: boolean) {
+    const ids = bulkIds();
+    if (ids) {
+      void setMessagesRead(ids, read, selectionIsThreaded).catch(
+        (err: unknown) => console.error("failed to set read state:", err),
+      );
+      return;
+    }
     void setMessageRead(id, read).catch((err: unknown) =>
       console.error("failed to set read state:", err),
     );
@@ -238,7 +249,54 @@
     return (messages.find((m) => m.id === id)?.threadCount ?? 0) > 1;
   }
 
+  // The selected rows themselves — the toolbar needs their read state, and
+  // the bulk commands their ids.
+  let selectedRows = $derived(
+    messages.filter((m) => visibleSelection.ids.includes(m.id)),
+  );
+
+  /** A toolbar action covers the selection only once it holds more than one
+   * row; a single row keeps the existing per-message commands. */
+  function bulkIds(): number[] | null {
+    return visibleSelection.ids.length > 1 ? visibleSelection.ids : null;
+  }
+
+  // What a selected row stands for, which is what the backend must expand:
+  // a whole conversation in the threaded views, one message in the flat
+  // trash/junk/drafts views (where the backend reports threadCount 0).
+  let selectionIsThreaded = $derived(
+    selectedRows.length > 0 && selectedRows.every((m) => m.threadCount > 0),
+  );
+
+  // Optimistic bulk eviction: every row leaves the list at once, selection
+  // clears, and one command covers the lot. A failure re-queries, exactly
+  // like the single-row path.
+  function evictMessages(ids: number[], action: () => Promise<void>) {
+    for (const id of ids) pendingEvictions.add(id);
+    messages = messages.filter((m) => !ids.includes(m.id));
+    selection = EMPTY_SELECTION;
+    selectedMessageId = null;
+    void action().then(
+      () => {
+        for (const id of ids) pendingEvictions.delete(id);
+      },
+      (err: unknown) => {
+        console.error("bulk message action failed:", err);
+        for (const id of ids) pendingEvictions.delete(id);
+        void refreshMessages();
+      },
+    );
+  }
+
   function handleTrash(id: number) {
+    const ids = bulkIds();
+    if (ids) {
+      // why read now: evictMessages clears the selection, and the closure
+      // would otherwise see an empty one by the time it runs.
+      const threaded = selectionIsThreaded;
+      evictMessages(ids, () => trashMessages(ids, threaded));
+      return;
+    }
     evictMessage(id, isThreadRow(id) ? trashThread : moveToTrash);
   }
 
@@ -321,6 +379,18 @@
   // Archive flips to unarchive on an already-archived message — re-archiving
   // would be a silent server no-op while the row vanished from the list.
   function handleArchive(id: number) {
+    const ids = bulkIds();
+    if (ids) {
+      // why every: a selection sitting entirely in its archive folder flips
+      // to unarchive, like one row does; a mixed one archives what is left.
+      if (selectedRows.every(isArchived)) {
+        handleMove(id, "INBOX");
+      } else {
+        const threaded = selectionIsThreaded;
+        evictMessages(ids, () => archiveMessages(ids, threaded));
+      }
+      return;
+    }
     const message = messages.find((m) => m.id === id);
     const thread = isThreadRow(id);
     if (message && isArchived(message)) {
@@ -335,6 +405,12 @@
   }
 
   function handleMove(id: number, mailbox: string) {
+    const ids = bulkIds();
+    if (ids) {
+      const threaded = selectionIsThreaded;
+      evictMessages(ids, () => moveMessages(ids, mailbox, threaded));
+      return;
+    }
     const move = isThreadRow(id) ? moveThread : moveMessage;
     evictMessage(id, (messageId) => move(messageId, mailbox));
   }
@@ -775,6 +851,7 @@
   onSearch={handleSearch}
   onOpenSettings={handleOpenSettings}
   selected={selectedMessage}
+  selection={selectedRows}
   archived={selectedMessage ? isArchived(selectedMessage) : false}
   {moveTargets}
   onDraft={openDraftFromSelection}
