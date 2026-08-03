@@ -90,11 +90,14 @@ it("renders html bodies in a sandboxed iframe without script rights", async () =
     expect(frame).not.toBeNull();
     return frame as HTMLIFrameElement;
   });
-  // SECURITY tripwire (hard rule): the sandbox must contain EXACTLY
-  // allow-same-origin — it only lets the parent measure the document's
-  // height. allow-scripts (or any other token) must NEVER appear here:
-  // scripts stay blocked by the sandbox, the sanitizer and the srcdoc CSP.
-  expect(iframe.getAttribute("sandbox")).toBe("allow-same-origin");
+  // SECURITY tripwire (hard rule): the sandbox must contain EXACTLY these
+  // two tokens — allow-same-origin so the parent can measure the document's
+  // height, and allow-popups so a link click becomes a new-window request
+  // that Rust denies and forwards to the default browser. allow-scripts (or
+  // any other token) must NEVER appear here: scripts stay blocked by the
+  // sandbox, the sanitizer and the srcdoc CSP, and the app frame must stay
+  // unnavigable.
+  expect(iframe.getAttribute("sandbox")).toBe("allow-same-origin allow-popups");
   expect(iframe.getAttribute("referrerpolicy")).toBe("no-referrer");
   expect(iframe.getAttribute("srcdoc")).toContain("<p>hi there</p>");
 });

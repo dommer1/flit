@@ -387,18 +387,22 @@
       {#if shown?.html}
         <!-- SECURITY (hard rule): the srcdoc is a sanitized document built in
              Rust (mail::sanitize) — never render raw mail HTML, never outside
-             this iframe. sandbox contains EXACTLY allow-same-origin and
-             nothing else: it lets the parent read the document's height
-             (autoSize) so whole conversations can be open at once.
+             this iframe. The sandbox contains EXACTLY these two tokens:
+             allow-same-origin lets the parent read the document's height
+             (autoSize) so whole conversations can be open at once, and
+             allow-popups lets a link click surface as a new-window request —
+             Rust denies every one of them and hands http(s) URLs to the
+             default browser (on_new_window in lib.rs), so no window ever
+             opens and nothing remote loads in the app. It is what makes links
+             work on WebKit, where a scripts-sandboxed frame runs no listener
+             at all (WebKit bug 218086), so interceptBodyLinks never fires.
              allow-scripts must NEVER be added — scripts stay blocked by the
-             sandbox flag, by the sanitizer, and by the srcdoc's own CSP.
-             Navigation stays blocked too (no allow-popups /
-             allow-top-navigation): link clicks are intercepted parent-side
-             by interceptBodyLinks and handed to the default browser. -->
+             sandbox flag, by the sanitizer, and by the srcdoc's own CSP; and
+             neither may allow-top-navigation: the app frame stays put. -->
         <iframe
           class="body-frame"
           title="Message body"
-          sandbox="allow-same-origin"
+          sandbox="allow-same-origin allow-popups"
           srcdoc={shown.html}
           referrerpolicy="no-referrer"
           use:autoSize
