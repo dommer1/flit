@@ -1,4 +1,5 @@
 pub mod attachments;
+pub mod avatars;
 pub mod css;
 pub mod draft;
 pub mod imap;
