@@ -234,11 +234,17 @@ pub fn build_srcdoc(
     // base. The css module returns text already safe to embed here.
     let message_css =
         crate::mail::css::sanitize_style_blocks(untrusted_html, &style_property_set());
+    // `<base target="_blank">`: link clicks must leave the app entirely, and
+    // no script (not even the parent's listeners) runs inside the sandboxed
+    // frame on WebKit. Aiming every link at a new window turns the click into
+    // a native new-window request, which the app denies and forwards to the
+    // default browser — see the on_new_window handler in lib.rs.
     SanitizedBody {
         html: format!(
             "<!doctype html><html><head>\
              <meta charset=\"utf-8\">\
              <meta http-equiv=\"Content-Security-Policy\" content=\"{BODY_CSP}\">\
+             <base target=\"_blank\">\
              <style>{BODY_STYLE}{message_css}</style>\
              </head><body>{clean}</body></html>"
         ),
@@ -515,6 +521,29 @@ mod tests {
 
         assert!(doc.contains("<img"));
         assert!(doc.contains("pixel.png"));
+    }
+
+    #[test]
+    fn points_every_link_at_a_new_window() {
+        // why: WebKit runs no JS in a scripts-sandboxed frame — not even
+        // listeners the parent attached (WebKit bug 218086) — so a link click
+        // cannot be intercepted in the frame. `target=_blank` turns it into a
+        // new-window request instead, which the Rust side denies and hands to
+        // the default browser (see the on_new_window handler in lib.rs).
+        let doc = srcdoc(r#"<a href="https://example.com/x">x</a>"#, &[]);
+
+        assert!(doc.contains(r#"<base target="_blank">"#));
+    }
+
+    #[test]
+    fn strips_sender_chosen_link_targets() {
+        // The base target above only governs links that carry none of their
+        // own — a sender-set target would opt back out of it (and _top would
+        // aim at the app frame). ammonia's allowlist has no `target`, so none
+        // survives; this test is the tripwire if that ever changes.
+        let doc = srcdoc(r#"<a href="https://example.com" target="_top">x</a>"#, &[]);
+
+        assert!(!doc.contains("_top"));
     }
 
     #[test]
