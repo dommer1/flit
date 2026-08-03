@@ -512,6 +512,28 @@ it("renders no section headers for an empty list", () => {
   expect(document.querySelector(".section")).toBeNull();
 });
 
+it("shows a fetched icon in place of the monogram", () => {
+  renderList({
+    messages: [
+      header(1, "Alice <alice@example.com>", false),
+      header(2, "Carol <carol@other.test>", true),
+    ],
+    avatars: { "example.com": "data:image/png;base64,iVBORw==" },
+  });
+
+  const avatars = [...document.querySelectorAll<HTMLElement>(".avatar")];
+  const icon = avatars[0].querySelector("img");
+  expect(icon).not.toBeNull();
+  expect(icon?.getAttribute("src")).toBe("data:image/png;base64,iVBORw==");
+  // The tint would fight the logo, so a row with an icon drops it.
+  expect(avatars[0].style.background).toBe("");
+
+  // A domain with no icon is untouched — it keeps its tinted monogram.
+  expect(avatars[1].querySelector("img")).toBeNull();
+  expect(avatars[1].textContent?.trim()).toBe("C");
+  expect(avatars[1].style.background).not.toBe("");
+});
+
 it("gives every row a monogram tinted by the sender's domain", () => {
   renderList({
     messages: [

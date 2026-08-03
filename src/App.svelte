@@ -17,6 +17,7 @@
     listMessages,
     listThread,
     listScheduled,
+    loadDomainAvatars,
     moveMessage,
     moveMessages,
     moveThread,
@@ -43,6 +44,7 @@
     undoSend,
     viewStatus,
   } from "./lib/api";
+  import { senderDomain } from "./lib/avatar";
   import { applyDateTimeFormat } from "./lib/datetime.svelte";
   import { debounce } from "./lib/debounce";
   import {
@@ -298,6 +300,46 @@
       return;
     }
     evictMessage(id, isThreadRow(id) ? trashThread : moveToTrash);
+  }
+
+  // sender domain → icon, for the message list's avatars. Empty while the
+  // lookup setting is off: the backend returns nothing rather than fetching.
+  let avatars = $state<Record<string, string>>({});
+  // why a plain Set, not $state: it must NOT be a dependency of the effect
+  // below. A domain with no icon never lands in `avatars`, so tracking asked
+  // domains reactively would re-run the effect and ask again forever.
+  let askedDomains = new Set<string>();
+  // Bumped by resetAvatars so a settings change re-runs the effect below —
+  // without it, nothing would re-ask until the message list itself changed.
+  let avatarEpoch = $state(0);
+
+  $effect(() => {
+    void avatarEpoch;
+    const wanted = [
+      ...new Set(
+        messages
+          .map((message) => senderDomain(message.from))
+          .filter((domain): domain is string => domain !== null),
+      ),
+    ].filter((domain) => !askedDomains.has(domain));
+    if (wanted.length === 0) return;
+
+    for (const domain of wanted) askedDomains.add(domain);
+    // why fire-and-forget: avatars are decoration — a failed lookup leaves
+    // the monogram in place and must never surface as an error.
+    void loadDomainAvatars(wanted)
+      .then((found) => {
+        if (Object.keys(found).length > 0) avatars = { ...avatars, ...found };
+      })
+      .catch((err: unknown) => console.error("failed to load avatars:", err));
+  });
+
+  /** Drop what we know so a settings change is picked up: switching the
+   *  lookup on must re-ask, switching it off must clear the icons. */
+  function resetAvatars() {
+    askedDomains = new Set();
+    avatars = {};
+    avatarEpoch += 1;
   }
 
   // What the list's swipe gesture does per direction — user-configurable in
@@ -805,6 +847,7 @@
       void refreshDateTimeFormat().catch((err: unknown) =>
         console.error("failed to load the date format:", err),
       );
+      resetAvatars();
     };
     refreshSwipeLogged();
     // why: the settings window mutates the config in its own JS context —
@@ -907,6 +950,7 @@
         title={listTitle}
         {messages}
         {accountColors}
+        {avatars}
         selectedId={selectedMessageId}
         selectedIds={visibleSelection.ids}
         onSelect={selectMessage}

@@ -27,6 +27,7 @@
     title,
     messages,
     accountColors = {},
+    avatars = {},
     selectedId,
     selectedIds,
     onSelect,
@@ -45,6 +46,9 @@
     messages: MessageHeader[];
     /** accountId → accent color (or null); drives the per-row color dot. */
     accountColors?: Record<number, string | null>;
+    /** sender domain → icon data: URI. Empty unless the user switched the
+     * lookup on; a domain that is absent keeps its monogram. */
+    avatars?: Record<string, string>;
     /** The lead row — what the reading pane shows and the keyboard walks.
      * Only scrolling follows it; the highlight follows `selectedIds`. */
     selectedId: number | null;
@@ -333,6 +337,7 @@
       {#each rows as { message, section, opens } (message.id)}
         {@const color = accountColors[message.accountId] ?? null}
         {@const domain = senderDomain(message.from)}
+        {@const icon = domain ? avatars[domain] : undefined}
         {@const offset = swipeId === message.id ? swipeOffset : 0}
         {@const stripAction =
           offset < 0
@@ -388,10 +393,19 @@
                  name, which the row already spells out right beside it. -->
             <span
               class="avatar"
+              class:has-icon={icon !== undefined}
               aria-hidden="true"
-              style:background={domain ? avatarColor(domain) : undefined}
+              style:background={icon || !domain
+                ? undefined
+                : avatarColor(domain)}
             >
-              {senderInitials(message.from)}
+              {#if icon}
+                <!-- alt="": the sender name sits right beside it, so the icon
+                     is decoration and a screen reader should skip it. -->
+                <img src={icon} alt="" />
+              {:else}
+                {senderInitials(message.from)}
+              {/if}
             </span>
             <span class="content">
               <span class="row">
@@ -720,6 +734,22 @@
     font-size: 12px;
     font-weight: 600;
     color: #ffffff;
+    /* Clips a favicon that isn't square to the circle. */
+    overflow: hidden;
+  }
+
+  /* A real icon replaces the tint: a colored disc behind a logo fights it.
+     The hairline keeps a white favicon from dissolving into the row. */
+  .avatar.has-icon {
+    background: var(--bg-card);
+    box-shadow: inset 0 0 0 1px var(--hairline);
+  }
+
+  .avatar img {
+    width: 18px;
+    height: 18px;
+    /* contain, not cover: a logo cropped to a circle stops being the logo. */
+    object-fit: contain;
   }
 
   .content {

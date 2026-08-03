@@ -267,6 +267,8 @@ vi.mock("./lib/api", () => ({
     return () => {};
   }),
   getThreadOrder: vi.fn(async () => "newestLast"),
+  // Avatar lookups are off by default, so the command resolves to nothing.
+  loadDomainAvatars: vi.fn(async () => ({})),
   getSwipeActions: vi.fn(async () => currentSwipeActions),
   getDateTimeFormat: vi.fn(async () => currentDateTimeFormat),
   onSettingsChanged: vi.fn(async (callback: () => void) => {
