@@ -430,12 +430,16 @@
     }
     event.preventDefault();
     const delta: NavDelta = event.key === "ArrowDown" ? 1 : -1;
-    const next = nextMessageId(
-      messages.map((m) => m.id),
-      selectedMessageId,
-      delta,
-    );
-    if (next !== null) selectMessage(next);
+    const next = nextMessageId(messageIds, selectedMessageId, delta);
+    if (next === null) return;
+    // Shift grows the range instead of moving the selection — and, like a
+    // shift-click, it must not open the row it lands on.
+    if (event.shiftKey) {
+      selection = extendRange(visibleSelection, messageIds, next);
+      selectedMessageId = next;
+      return;
+    }
+    selectMessage(next);
   }
 
   let listTitle = $derived(

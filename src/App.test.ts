@@ -1454,3 +1454,28 @@ it("still uses the single-message command for one selected row", async () => {
   expect(api.archiveMessage).toHaveBeenCalledWith(2);
   expect(api.archiveMessages).not.toHaveBeenCalled();
 });
+
+it("extends the selection with shift and an arrow key", async () => {
+  render(App);
+  const list = within(screen.getByRole("listbox"));
+  const first = (await list.findByText("Weekend plans")).closest(
+    '[role="option"]',
+  );
+  const second = list.getByText("Re: Invoice").closest('[role="option"]');
+
+  await fireEvent.click(list.getByText("Weekend plans"));
+  await fireEvent.keyDown(document.body, { key: "ArrowDown", shiftKey: true });
+
+  expect(first).toHaveAttribute("aria-selected", "true");
+  expect(second).toHaveAttribute("aria-selected", "true");
+});
+
+// Reading is what a plain arrow does; extending a selection is not reading.
+it("does not mark a message read when shift-arrowing onto it", async () => {
+  render(App);
+  const list = within(screen.getByRole("listbox"));
+  await fireEvent.click(await list.findByText("Re: Invoice"));
+  await fireEvent.keyDown(document.body, { key: "ArrowUp", shiftKey: true });
+
+  expect(api.setMessageRead).not.toHaveBeenCalled();
+});
