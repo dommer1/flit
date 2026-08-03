@@ -10,6 +10,7 @@
     updateAlias,
     confirmAccountDeletion,
     deleteAccount,
+    getAvatarLookupEnabled,
     getDateTimeFormat,
     getRemoteImagePolicy,
     getSwipeActions,
@@ -17,6 +18,7 @@
     listAccounts,
     onAccountsChanged,
     setAccountColor,
+    setAvatarLookupEnabled,
     setDateTimeFormat,
     setRemoteImagePolicy,
     setSwipeActions,
@@ -76,6 +78,7 @@
     "general" | "accounts" | "signatures" | "notifications" | "swipes" | "privacy"
   >("accounts");
   let policy = $state<RemoteImagePolicy>("ask");
+  let avatarLookup = $state(false);
   let swipes = $state<SwipeActions>(DEFAULT_SWIPE_ACTIONS);
   let threadOrder = $state<ThreadOrder>("newestLast");
   let dateTime = $state<DateTimeFormat>(SYSTEM_DATE_TIME_FORMAT);
@@ -181,6 +184,20 @@
     }
   }
 
+  async function toggleAvatarLookup(next: boolean) {
+    lastError = null;
+    const previous = avatarLookup;
+    avatarLookup = next;
+    try {
+      await setAvatarLookupEnabled(next);
+    } catch (err) {
+      // why: same as the policy radio — a box that failed to save must not
+      // keep claiming the setting changed.
+      avatarLookup = previous;
+      lastError = String(err);
+    }
+  }
+
   async function selectPolicy(next: RemoteImagePolicy) {
     lastError = null;
     const previous = policy;
@@ -240,6 +257,7 @@
   onMount(() => {
     void refresh();
     void getRemoteImagePolicy().then((stored) => (policy = stored));
+    void getAvatarLookupEnabled().then((stored) => (avatarLookup = stored));
     void getSwipeActions().then((stored) => (swipes = stored));
     void getThreadOrder().then((stored) => (threadOrder = stored));
     void getDateTimeFormat().then((stored) => (dateTime = stored));
@@ -430,6 +448,30 @@
         Remote images can tell the sender when, where and on what device a
         message was opened. Known tracking images are always removed. Images
         attached inside the message always show.
+      </p>
+
+      <div class="section-label">Sender avatars</div>
+      <div class="group">
+        <div class="choice">
+          <input
+            type="checkbox"
+            id="avatar-lookup"
+            checked={avatarLookup}
+            onchange={(e) => void toggleAvatarLookup(e.currentTarget.checked)}
+          />
+          <span>
+            <label for="avatar-lookup">Look up sender icons online</label>
+            <small>Off shows coloured initials instead.</small>
+          </span>
+        </div>
+      </div>
+      <p class="explain">
+        Off by default. When on, Flit asks each sender's domain for its site
+        icon — never an address, only the domain, so the request says which
+        organisations write to you and never who you correspond with. Each
+        domain is asked at most once a month and the answer is cached, so it
+        cannot reveal which message you opened, or when. With this off, every
+        sender keeps the coloured initials.
       </p>
     </section>
   {/if}

@@ -449,6 +449,24 @@ export function setRemoteImagePolicy(
   return invoke<void>("set_remote_image_policy", { policy });
 }
 
+/** Whether sender-domain avatar lookups are on. Off until switched on. */
+export function getAvatarLookupEnabled(): Promise<boolean> {
+  return invoke<boolean>("get_avatar_lookup_enabled");
+}
+
+export function setAvatarLookupEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>("set_avatar_lookup_enabled", { enabled });
+}
+
+/** Icons for sender domains, keyed by domain and ready to use as an img src.
+ *  A domain with no icon is simply absent — the list falls back to its
+ *  monogram. Returns nothing at all while the lookup switch is off. */
+export function loadDomainAvatars(
+  domains: string[],
+): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("load_domain_avatars", { domains });
+}
+
 /** Global notification defaults + background check cadence. */
 export function getNotificationSettings(): Promise<NotificationSettings> {
   return invoke<NotificationSettings>("get_notification_settings");

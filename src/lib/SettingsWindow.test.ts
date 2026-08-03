@@ -58,6 +58,8 @@ vi.mock("./api", () => ({
   onAccountsChanged: vi.fn(async () => () => {}),
   getRemoteImagePolicy: vi.fn(async () => "ask"),
   setRemoteImagePolicy: vi.fn(async () => undefined),
+  getAvatarLookupEnabled: vi.fn(async () => false),
+  setAvatarLookupEnabled: vi.fn(async () => undefined),
   getSwipeActions: vi.fn(async () => ({
     left: "archive",
     right: "toggleRead",
@@ -213,6 +215,25 @@ it("saves a remote-image policy change", async () => {
   await fireEvent.click(screen.getByLabelText("Always load"));
 
   expect(api.setRemoteImagePolicy).toHaveBeenCalledWith("always");
+});
+
+it("shows sender avatar lookups switched off by default", async () => {
+  render(SettingsWindow);
+  await fireEvent.click(screen.getByRole("button", { name: "Privacy" }));
+
+  expect(
+    await screen.findByLabelText("Look up sender icons online"),
+  ).not.toBeChecked();
+});
+
+it("saves switching sender avatar lookups on", async () => {
+  render(SettingsWindow);
+  await fireEvent.click(screen.getByRole("button", { name: "Privacy" }));
+  const box = await screen.findByLabelText("Look up sender icons online");
+
+  await fireEvent.click(box);
+
+  expect(api.setAvatarLookupEnabled).toHaveBeenCalledWith(true);
 });
 
 it("shows the stored swipe actions on the swipes tab", async () => {
