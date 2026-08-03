@@ -10,9 +10,17 @@ mod scheduler;
 pub mod state;
 pub mod storage;
 
-use tauri::Manager;
+use tauri::{Manager, Url};
 
 use crate::state::AppState;
+
+/// Should a new-window request from the webview be handed to the user's
+/// default browser? Only web links are: the URL comes from a message, so its
+/// scheme is untrusted input, and handing an arbitrary one to the OS would let
+/// a sender choose which application launches.
+fn opens_in_browser(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -28,6 +36,36 @@ pub fn run() {
             // then assume the pool always exists in state.
             let pool = tauri::async_runtime::block_on(storage::init(&data_dir.join("flit.db")))?;
             app.manage(AppState::new(pool));
+
+            // SECURITY (message-body rendering): the main window is built here
+            // instead of by tauri.conf.json ("create": false) because only the
+            // builder can carry a new-window handler — and that handler is how
+            // message-body links reach the browser. Bodies render with
+            // `<base target="_blank">` in a frame whose sandbox blocks both
+            // navigation and script (WebKit runs no listener there at all, see
+            // mail::sanitize), so a link click surfaces as a new-window
+            // request. Every one of them is DENIED — no second webview is ever
+            // created, nothing remote loads inside the app — and a plain
+            // http(s) link is handed to the user's default browser instead.
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .cloned()
+                .ok_or("no main window in tauri.conf.json")?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+                .on_new_window(|url, _features| {
+                    if opens_in_browser(&url) {
+                        if let Err(err) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>)
+                        {
+                            eprintln!("failed to open {url} in the default browser: {err}");
+                        }
+                    }
+                    tauri::webview::NewWindowResponse::Deny
+                })
+                .build()?;
 
             // The send-later scheduler: delivers parked messages when their
             // time comes; runs for the whole life of the app.
@@ -154,4 +192,31 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opens_in_browser;
+    use tauri::Url;
+
+    fn url(raw: &str) -> Url {
+        Url::parse(raw).expect("test url parses")
+    }
+
+    #[test]
+    fn hands_web_links_to_the_browser() {
+        assert!(opens_in_browser(&url("https://example.com/offer")));
+        assert!(opens_in_browser(&url("http://example.com")));
+    }
+
+    #[test]
+    fn keeps_every_other_scheme_inside_the_app() {
+        // A message names the URL, so the scheme is untrusted input: handing
+        // an arbitrary one to the OS would let a sender pick which app
+        // launches. Only web links leave, everything else dies here.
+        assert!(!opens_in_browser(&url("file:///etc/passwd")));
+        assert!(!opens_in_browser(&url("javascript:alert(1)")));
+        assert!(!opens_in_browser(&url("mailto:x@example.com")));
+        assert!(!opens_in_browser(&url("data:text/html,<b>x")));
+    }
 }
