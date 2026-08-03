@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
@@ -2016,6 +2018,38 @@ pub fn take_compose_draft(
 pub async fn close_compose(window: tauri::WebviewWindow) -> Result<(), AppError> {
     window.close()?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_avatar_lookup_enabled(state: State<'_, AppState>) -> Result<bool, AppError> {
+    storage::settings::avatar_lookup_enabled(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_avatar_lookup_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), AppError> {
+    storage::settings::set_avatar_lookup_enabled(&state.pool, enabled).await?;
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+/// Icons for the given sender domains, as data: URIs. Domains without one are
+/// simply absent and the list falls back to its monogram.
+#[tauri::command]
+pub async fn load_domain_avatars(
+    state: State<'_, AppState>,
+    domains: Vec<String>,
+) -> Result<HashMap<String, String>, AppError> {
+    // why the gate lives here: mail::avatars does the work unconditionally, so
+    // this is the one place that decides whether the network may be touched
+    // at all. Off means off — not even a cache read.
+    if !storage::settings::avatar_lookup_enabled(&state.pool).await? {
+        return Ok(HashMap::new());
+    }
+    Ok(mail::avatars::load_avatars(&state.pool, &domains).await)
 }
 
 #[tauri::command]

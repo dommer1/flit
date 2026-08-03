@@ -16,6 +16,7 @@ const SYNC_INTERVAL_KEY: &str = "sync_interval_minutes";
 const PUSH_ENABLED_KEY: &str = "push_enabled";
 const SWIPE_LEFT_KEY: &str = "swipe_left";
 const SWIPE_RIGHT_KEY: &str = "swipe_right";
+const AVATAR_LOOKUP_KEY: &str = "avatar_lookup";
 
 async fn value(pool: &SqlitePool, key: &str) -> Result<Option<String>, AppError> {
     Ok(
@@ -90,6 +91,23 @@ pub async fn set_notification_settings(
     };
     upsert(pool, PUSH_ENABLED_KEY, push).await?;
     Ok(())
+}
+
+/// Whether sender-domain avatar lookups are switched on. Anything other than
+/// a stored "true" — missing, corrupt, explicitly off — reads as off, because
+/// this is the switch that permits calls to hosts beyond the user's own mail
+/// servers (see the hard rules in CLAUDE.md).
+pub async fn avatar_lookup_enabled(pool: &SqlitePool) -> Result<bool, AppError> {
+    Ok(value(pool, AVATAR_LOOKUP_KEY).await?.as_deref() == Some("true"))
+}
+
+pub async fn set_avatar_lookup_enabled(pool: &SqlitePool, enabled: bool) -> Result<(), AppError> {
+    upsert(
+        pool,
+        AVATAR_LOOKUP_KEY,
+        if enabled { "true" } else { "false" },
+    )
+    .await
 }
 
 /// The stored remote-image policy, falling back to the default (Ask) when
@@ -191,6 +209,34 @@ pub async fn set_swipe_actions(pool: &SqlitePool, actions: SwipeActions) -> Resu
 mod tests {
     use super::*;
     use crate::storage::test_pool;
+
+    #[tokio::test]
+    async fn avatar_lookup_is_off_until_switched_on() {
+        let pool = test_pool().await;
+
+        // Off by default: this is the switch that allows calls to hosts other
+        // than the user's own mail servers.
+        assert!(!avatar_lookup_enabled(&pool).await.unwrap());
+
+        set_avatar_lookup_enabled(&pool, true).await.unwrap();
+        assert!(avatar_lookup_enabled(&pool).await.unwrap());
+
+        set_avatar_lookup_enabled(&pool, false).await.unwrap();
+        assert!(!avatar_lookup_enabled(&pool).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_avatar_lookup_value_reads_as_off() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('avatar_lookup', 'yolo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // why off rather than the stored garbage: an unreadable value must
+        // never be the reason the app starts reaching out to the network.
+        assert!(!avatar_lookup_enabled(&pool).await.unwrap());
+    }
 
     #[tokio::test]
     async fn defaults_to_ask_and_roundtrips() {
