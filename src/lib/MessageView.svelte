@@ -2,6 +2,7 @@
   import { listThread, setMessageRead, threadBodies } from "./api";
   import type { DraftKind } from "./draft";
   import MessageCard from "./MessageCard.svelte";
+  import { timed } from "./timing";
   import type { MessageBody, MessageHeader, ThreadOrder } from "./types";
 
   let {
@@ -57,7 +58,7 @@
     }
     const id = message.id;
     const fallback = message;
-    listThread(id)
+    timed("listThread", () => listThread(id))
       .then((loaded) => {
         if (message?.id !== id) return;
         thread = loaded.length > 0 ? loaded : [fallback];
@@ -90,7 +91,9 @@
   function fetchBodies(anchor: number) {
     bodiesLoading = true;
     bodiesError = null;
-    threadBodies(anchor)
+    // why timed here: this is the wait between clicking a message and seeing
+    // any body at all — every member of the thread has to land first.
+    timed("threadBodies", () => threadBodies(anchor))
       .then((loaded) => {
         if (anchorId === anchor) bodies = loaded;
       })

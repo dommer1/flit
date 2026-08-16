@@ -65,6 +65,7 @@
     ViewStatus,
   } from "./lib/types";
   import { DEFAULT_SWIPE_ACTIONS } from "./lib/swipe";
+  import { markPaint, timed } from "./lib/timing";
   import { neighborId, nextMessageId, type NavDelta } from "./lib/messageNav";
   import {
     EMPTY_SELECTION,
@@ -737,18 +738,28 @@
   async function refreshMessages() {
     const query = searchQuery.trim();
     if (query) {
-      messages = withoutPending(await searchMessages(selectedAccountId, query));
+      messages = withoutPending(
+        await timed("searchMessages", () =>
+          searchMessages(selectedAccountId, query),
+        ),
+      );
       // Search results are their own universe — whole-view totals and the
       // load-more trigger don't apply to them.
       listStatus = null;
+      markPaint("list.paint");
       return;
     }
-    const [list, status] = await Promise.all([
-      listMessages(selectedAccountId, selectedMailbox, visibleLimit),
-      viewStatus(selectedAccountId, selectedMailbox),
-    ]);
+    const [list, status] = await timed("refreshMessages", () =>
+      Promise.all([
+        listMessages(selectedAccountId, selectedMailbox, visibleLimit),
+        viewStatus(selectedAccountId, selectedMailbox),
+      ]),
+    );
     messages = withoutPending(list);
     listStatus = status;
+    // why here: the assignment above is what re-renders the rows, so the
+    // frame that follows it is the list's render cost.
+    markPaint("list.paint");
   }
 
   // The sidebar's folder lists, mirrored per account. Refreshed alongside
