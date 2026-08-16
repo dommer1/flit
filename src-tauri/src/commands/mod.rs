@@ -15,6 +15,44 @@ use crate::{auth, mail, storage};
 // why: commands stay thin — validate/orchestrate, call a module, return
 // Result. Business logic lives in storage/ and auth/, which are unit-tested.
 
+/// Least time between two progress events during a long backfill.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Paces the progress events a long backfill emits.
+///
+/// why this exists: every "messages-changed" makes the window re-run the
+/// whole list query — a full scan — plus the folder counts. Emitting one per
+/// cached batch tied the UI's refresh rate to the write batch size, so
+/// shrinking batches (for the write lock, see storage::WRITE_LOCK) silently
+/// multiplied the query load and the app sat above 300% CPU for the length
+/// of a backfill. How often we write and how often we redraw are unrelated
+/// concerns and must not share a constant.
+struct Progress {
+    last: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl Progress {
+    fn new() -> Self {
+        Self {
+            last: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Is an event due? True the first time, then at most once per
+    /// `PROGRESS_INTERVAL`.
+    ///
+    /// why `into_inner` on a poisoned lock: all this guards is a timestamp,
+    /// so a panic elsewhere must not silence progress reporting for good.
+    fn due(&self, now: std::time::Instant) -> bool {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if last.is_some_and(|t| now.duration_since(t) < PROGRESS_INTERVAL) {
+            return false;
+        }
+        *last = Some(now);
+        true
+    }
+}
+
 #[tauri::command]
 pub async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<Account>, AppError> {
     storage::accounts::list(&state.pool).await
@@ -194,9 +232,13 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
         let Some(_slot) = state.try_begin_backfill(account_id) else {
             return;
         };
-        // Each cached batch refreshes the list (and its progress line) live.
+        // Each cached batch refreshes the list (and its progress line) live —
+        // but no faster than Progress allows.
+        let progress = Progress::new();
         let on_batch = || {
-            let _ = app.emit("messages-changed", account_id);
+            if progress.due(std::time::Instant::now()) {
+                let _ = app.emit("messages-changed", account_id);
+            }
         };
         let backfill = mail::with_timeout(
             "header backfill",
@@ -205,6 +247,10 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
         );
         match backfill.await {
             Ok(_) => {
+                // why a final event: the throttle above can swallow the last
+                // batch's notice, and the newest headers would then sit in
+                // the cache unshown until something else refreshed.
+                let _ = app.emit("messages-changed", account_id);
                 let _ = session.logout().await;
             }
             Err(err) => eprintln!("header backfill failed for account {account_id}: {err}"),
@@ -2348,6 +2394,22 @@ pub async fn close_settings(app: AppHandle) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_fires_once_then_waits_out_the_interval() {
+        // why explicit instants instead of sleeping: the pacing is the whole
+        // point of this type, and a test that waits a real second to prove it
+        // is both slow and flaky.
+        let progress = Progress::new();
+        let start = std::time::Instant::now();
+
+        assert!(progress.due(start), "the first batch reports immediately");
+        assert!(!progress.due(start + PROGRESS_INTERVAL / 2));
+        assert!(progress.due(start + PROGRESS_INTERVAL));
+        // The clock restarts from the event that went out, not from the
+        // batches suppressed in between.
+        assert!(!progress.due(start + PROGRESS_INTERVAL + PROGRESS_INTERVAL / 2));
+    }
 
     #[test]
     fn schedule_times_must_be_in_the_future() {
