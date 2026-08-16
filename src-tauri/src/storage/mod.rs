@@ -58,10 +58,19 @@ pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
         .foreign_keys(true)
         .busy_timeout(Duration::from_secs(5));
 
-    // why: a modest pool — SQLite allows only one writer at a time anyway,
-    // extra connections only help concurrent reads.
+    // why more than a handful: writes are serialized by WRITE_LOCK, so these
+    // connections are almost all readers — the list query, the folder counts,
+    // the thread view and the poller can now all be in flight at once without
+    // queueing behind each other.
+    //
+    // why an explicit acquire_timeout: sqlx defaults to 30 seconds, and that
+    // default is what a starved pool actually looked like — half a minute of
+    // a frozen window and then a query that failed anyway. Failing in two
+    // seconds is not a fix for contention, but it turns an unexplained freeze
+    // into an error we can see and act on.
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(16)
+        .acquire_timeout(Duration::from_secs(2))
         .connect_with(options)
         .await?;
 
