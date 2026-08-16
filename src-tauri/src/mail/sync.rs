@@ -359,7 +359,13 @@ pub async fn prefetch_bodies(
 
 /// Older headers mirrored per batch before `on_batch` reports progress —
 /// big enough to move fast, small enough that the list visibly grows.
-const BACKFILL_BATCH: usize = 500;
+// why 100 and not 500: one batch is one write transaction, and each header
+// in it runs a key lookup, an insert (which reindexes the body for search)
+// and a handful of contact sightings — so 500 headers held SQLite's single
+// writer for seconds at a time. Everything else that wants to write waits
+// that long. Smaller batches give the writer up more often; the extra
+// commits are cheap next to the work inside them.
+const BACKFILL_BATCH: usize = 100;
 
 /// Mirror every folder's remaining older headers into the cache, newest
 /// first, until the account is complete. `on_batch` fires after each cached
