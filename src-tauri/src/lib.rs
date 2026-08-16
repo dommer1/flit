@@ -177,6 +177,7 @@ pub fn run() {
             commands::get_swipe_actions,
             commands::set_swipe_actions,
             commands::timing_enabled,
+            commands::log_timing,
             commands::get_thread_order,
             commands::set_thread_order,
             commands::get_date_time_format,

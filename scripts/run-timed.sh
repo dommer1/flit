@@ -16,7 +16,10 @@
 # and frontend lines interleaved in one stream.
 set -e
 
-app="src-tauri/target/release/bundle/macos/Flit.app/Contents/MacOS/Flit"
+# why lowercase "flit": the bundle is named from productName ("Flit"), the
+# binary inside it from the crate ("flit"). A case-insensitive volume hides
+# the difference locally — it would not stay hidden everywhere.
+app="src-tauri/target/release/bundle/macos/Flit.app/Contents/MacOS/flit"
 if [ ! -x "$app" ]; then
   echo "no release build yet — run: npm run tauri build" >&2
   exit 1

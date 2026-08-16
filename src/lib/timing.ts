@@ -1,3 +1,5 @@
+import { logTiming } from "./api";
+
 // Opt-in timing for the performance work, mirroring the backend's
 // FLIT_TIMING switch (src-tauri/src/timing.rs).
 //
@@ -37,6 +39,21 @@ export function formatLine(label: string, ms: number): string {
   return `[timing] ${label} ${ms.toFixed(1)} ms`;
 }
 
+/** Emit one line.
+ *
+ * why it goes to the backend as well as the console: a webview's console
+ * goes to the webview, and a release build — the only build worth measuring
+ * — has no devtools to open it with. Handing the line back puts it on the
+ * process's stderr, in the one stream `npm run timing` captures.
+ *
+ * why fire-and-forget: the line already carries its own measurement, so when
+ * it lands does not matter; waiting for it would add IPC latency to the very
+ * path being measured. */
+function report(line: string): void {
+  console.info(line);
+  if (backendTiming) void logTiming(line).catch(() => {});
+}
+
 /** Run `work`, reporting how long it took. Returns whatever it returns, and
  * still reports when it throws — a slow failure is a measurement too.
  *
@@ -49,7 +66,7 @@ export function timed<T>(label: string, work: () => Promise<T>): Promise<T> {
   if (!timingEnabled()) return work();
   const start = performance.now();
   return work().finally(() => {
-    console.info(formatLine(label, performance.now() - start));
+    report(formatLine(label, performance.now() - start));
   });
 }
 
@@ -60,6 +77,6 @@ export function markPaint(label: string): void {
   if (!timingEnabled()) return;
   const start = performance.now();
   requestAnimationFrame(() => {
-    console.info(formatLine(label, performance.now() - start));
+    report(formatLine(label, performance.now() - start));
   });
 }

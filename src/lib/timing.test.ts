@@ -1,9 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
+import * as api from "./api";
 import { adoptBackendTiming, formatLine, timed, timingEnabled } from "./timing";
+
+vi.mock("./api", () => ({ logTiming: vi.fn(() => Promise.resolve()) }));
 
 afterEach(() => {
   localStorage.removeItem("flit:timing");
   adoptBackendTiming(false);
+  vi.mocked(api.logTiming).mockClear();
   vi.restoreAllMocks();
 });
 
@@ -64,6 +68,31 @@ it("hands back the caller's own promise while switched off", () => {
   const promise = Promise.resolve("untouched");
 
   expect(timed("passthrough", () => promise)).toBe(promise);
+});
+
+it("hands its lines to the backend when the backend is what switched it on", async () => {
+  // why: the webview's console goes to the webview, and the release build we
+  // measure has no devtools to open it with. Without this the frontend half
+  // of every click is invisible exactly where it matters.
+  adoptBackendTiming(true);
+  vi.spyOn(console, "info").mockImplementation(() => {});
+
+  await timed("listThread", async () => null);
+
+  expect(vi.mocked(api.logTiming)).toHaveBeenCalledWith(
+    expect.stringMatching(/^\[timing\] listThread /),
+  );
+});
+
+it("keeps its lines local when only the local flag is set", async () => {
+  // A dev build with devtools open needs no round trip — and a backend that
+  // was not started with FLIT_TIMING would drop the line anyway.
+  localStorage.setItem("flit:timing", "1");
+  vi.spyOn(console, "info").mockImplementation(() => {});
+
+  await timed("listThread", async () => null);
+
+  expect(vi.mocked(api.logTiming)).not.toHaveBeenCalled();
 });
 
 it("reports once switched on, and still reports on failure", async () => {

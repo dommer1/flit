@@ -609,3 +609,10 @@ export function onSignaturesChanged(callback: () => void): Promise<UnlistenFn> {
 export function fetchTimingEnabled(): Promise<boolean> {
   return invoke<boolean>("timing_enabled");
 }
+
+/** Hand one timing line to the backend so it lands on the process's stderr —
+ * a webview's console goes to the webview, and a release build has no
+ * devtools to open. */
+export function logTiming(line: string): Promise<void> {
+  return invoke<void>("log_timing", { line });
+}

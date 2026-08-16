@@ -2107,6 +2107,22 @@ pub fn timing_enabled() -> bool {
     timing::enabled()
 }
 
+/// Print one of the webview's timing lines on the backend's stderr.
+///
+/// why it has to come back here: a webview's console goes to the webview,
+/// not to the process output, and a release build has no devtools to open.
+/// Routing the lines through the backend is what puts both halves of a click
+/// in the one stream `npm run timing` captures.
+///
+/// why the guard: with timing off this is a no-op, so nothing can use it as
+/// a way to write to the app's output.
+#[tauri::command]
+pub fn log_timing(line: String) {
+    if timing::enabled() {
+        eprintln!("{line}");
+    }
+}
+
 #[tauri::command]
 pub async fn get_thread_order(state: State<'_, AppState>) -> Result<ThreadOrder, AppError> {
     storage::settings::thread_order(&state.pool).await
