@@ -1,6 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import * as api from "./api";
-import { adoptBackendTiming, formatLine, timed, timingEnabled } from "./timing";
+import {
+  adoptBackendTiming,
+  formatLine,
+  markPaint,
+  timed,
+  timingEnabled,
+} from "./timing";
 
 vi.mock("./api", () => ({ logTiming: vi.fn(() => Promise.resolve()) }));
 
@@ -111,4 +117,39 @@ it("reports once switched on, and still reports on failure", async () => {
   expect(info).toHaveBeenCalledTimes(2);
   expect(info.mock.calls[0][0]).toMatch(/^\[timing\] ok /);
   expect(info.mock.calls[1][0]).toMatch(/^\[timing\] boom /);
+});
+
+/** Drive markPaint's frame callback with a controlled elapsed time. */
+function paintTaking(ms: number): string[] {
+  const lines: string[] = [];
+  vi.spyOn(console, "info").mockImplementation((line: string) =>
+    lines.push(line),
+  );
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+    now = ms;
+    cb(now);
+    return 1;
+  });
+
+  markPaint("list.paint");
+  return lines;
+}
+
+it("reports a real frame as render cost", () => {
+  localStorage.setItem("flit:timing", "1");
+
+  expect(paintTaking(13)).toEqual(["[timing] list.paint 13.0 ms"]);
+});
+
+it("labels a frame that never came as a stall, not as render cost", () => {
+  // why: macOS stops serving frames to a window that is not on screen, which
+  // produced "paint" readings of 38 and 171 SECONDS in a real measuring run.
+  // Reported plainly, a number like that invites exactly the wrong fix.
+  localStorage.setItem("flit:timing", "1");
+
+  expect(paintTaking(38100)).toEqual([
+    "[timing] list.paint stalled 38100 ms (window not rendering)",
+  ]);
 });

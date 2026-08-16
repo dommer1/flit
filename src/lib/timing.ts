@@ -70,13 +70,29 @@ export function timed<T>(label: string, work: () => Promise<T>): Promise<T> {
   });
 }
 
+/** Past this, the frame did not arrive because the window stopped
+ * rendering — backgrounded, occluded, or napped by the OS — not because the
+ * render was slow. No list render takes a second. */
+const PAINT_STALL_MS = 1000;
+
 /** Report how long the browser takes to reach its next frame. Called right
  * after a state assignment, it measures what that assignment cost to
- * render — the number FLI-23 (list virtualization) has to move. */
+ * render — the number FLI-23 (list virtualization) has to move.
+ *
+ * why the stall guard: macOS throttles requestAnimationFrame to nothing for
+ * a window that is not on screen, so a backgrounded app produced "paint"
+ * readings of 38 and 171 SECONDS. Reported plainly those numbers invite
+ * exactly the wrong conclusion, so a frame that never came is labelled as
+ * what it is rather than passed off as render cost. */
 export function markPaint(label: string): void {
   if (!timingEnabled()) return;
   const start = performance.now();
   requestAnimationFrame(() => {
-    report(formatLine(label, performance.now() - start));
+    const ms = performance.now() - start;
+    if (ms > PAINT_STALL_MS) {
+      report(`[timing] ${label} stalled ${ms.toFixed(0)} ms (window not rendering)`);
+      return;
+    }
+    report(formatLine(label, ms));
   });
 }
