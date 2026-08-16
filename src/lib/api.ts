@@ -603,3 +603,9 @@ export function setDefaultAlias(
 export function onSignaturesChanged(callback: () => void): Promise<UnlistenFn> {
   return listen("signatures-changed", callback);
 }
+
+/** Does the backend run with FLIT_TIMING set? Mirrored into the webview so
+ * one env var switches timing on across both processes. */
+export function fetchTimingEnabled(): Promise<boolean> {
+  return invoke<boolean>("timing_enabled");
+}

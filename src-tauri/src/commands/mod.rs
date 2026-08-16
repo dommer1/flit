@@ -2096,6 +2096,17 @@ pub async fn set_swipe_actions(
     Ok(())
 }
 
+/// Is timing output switched on for this process (`FLIT_TIMING`)?
+///
+/// why the frontend asks: one env var has to cover both halves of a click.
+/// A release build ships without devtools, so there is no console in which
+/// to flip the webview's own flag — and a release build is exactly what the
+/// measurements have to come from.
+#[tauri::command]
+pub fn timing_enabled() -> bool {
+    timing::enabled()
+}
+
 #[tauri::command]
 pub async fn get_thread_order(state: State<'_, AppState>) -> Result<ThreadOrder, AppError> {
     storage::settings::thread_order(&state.pool).await

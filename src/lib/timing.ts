@@ -7,8 +7,20 @@
 // rather than cached, so it can be flipped mid-session without a reload —
 // a localStorage read is nothing next to the IPC round trips being measured.
 
+// Whether the backend process runs with FLIT_TIMING set. Seeded once at
+// startup (see main.ts) so a single env var covers both halves of a click:
+// a release build has no devtools in which to set the local flag, and a
+// release build is where the numbers have to come from.
+let backendTiming = false;
+
+/** Adopt the backend's switch. */
+export function adoptBackendTiming(on: boolean): void {
+  backendTiming = on;
+}
+
 /** Is timing output switched on right now? */
 export function timingEnabled(): boolean {
+  if (backendTiming) return true;
   try {
     const flag = localStorage.getItem("flit:timing");
     return flag !== null && flag !== "" && flag !== "0";

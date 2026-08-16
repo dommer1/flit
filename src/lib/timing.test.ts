@@ -1,9 +1,32 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { formatLine, timed, timingEnabled } from "./timing";
+import { adoptBackendTiming, formatLine, timed, timingEnabled } from "./timing";
 
 afterEach(() => {
   localStorage.removeItem("flit:timing");
+  adoptBackendTiming(false);
   vi.restoreAllMocks();
+});
+
+it("follows the backend's FLIT_TIMING without any local flag", () => {
+  // why: a release build ships without devtools, so there is no console in
+  // which to set the localStorage flag — the env var has to reach the
+  // webview by itself or the frontend half is unmeasurable where it counts.
+  expect(timingEnabled()).toBe(false);
+
+  adoptBackendTiming(true);
+  expect(timingEnabled()).toBe(true);
+
+  adoptBackendTiming(false);
+  expect(timingEnabled()).toBe(false);
+});
+
+it("stays on when either side asks for it", () => {
+  // The local flag remains a manual override for dev builds, where flipping
+  // it in devtools beats restarting the app with a different environment.
+  localStorage.setItem("flit:timing", "1");
+  adoptBackendTiming(false);
+
+  expect(timingEnabled()).toBe(true);
 });
 
 it("is off unless the flag says otherwise", () => {
