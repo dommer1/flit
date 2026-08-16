@@ -550,3 +550,21 @@ it("gives every row a monogram tinted by the sender's domain", () => {
   expect(avatars[0].style.background).toBe(avatars[1].style.background);
   expect(avatars[2].style.background).not.toBe(avatars[0].style.background);
 });
+
+it("shows the sender and subject only — no body preview", () => {
+  // why: the list is for scanning, and a two-line preview of the body is the
+  // noisiest thing on the row. Dropping it also fixes the row height, which
+  // is what lets the list be virtualized by arithmetic alone.
+  renderList({
+    messages: [
+      {
+        ...header(1, "Alice <alice@example.com>", false),
+        snippet: "Are we still on for Saturday?",
+      },
+    ],
+  });
+
+  expect(screen.getByText("Alice")).toBeTruthy();
+  expect(screen.getByText("Subject 1")).toBeTruthy();
+  expect(screen.queryByText("Are we still on for Saturday?")).toBeNull();
+});

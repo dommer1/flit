@@ -453,7 +453,6 @@
                 </span>
               </span>
               <span class="subject">{message.subject}</span>
-              <span class="snippet">{message.snippet}</span>
             </span>
           </button>
         </div>
@@ -670,8 +669,9 @@
        backdrop. */
     position: relative;
     display: flex;
-    /* why flex-start: the monogram lines up with the sender row, so rows of
-       one, two and three lines all keep the avatars on one baseline. */
+    /* why flex-start: the monogram lines up with the sender row rather than
+       floating between it and the subject. Every row is now those same two
+       lines — a fixed height the list can later virtualize by arithmetic. */
     align-items: flex-start;
     gap: 10px;
     box-sizing: border-box;
@@ -851,19 +851,4 @@
     white-space: nowrap;
   }
 
-  .snippet {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow: hidden;
-    font-size: 12px;
-    line-height: 1.3;
-    color: var(--text-secondary);
-  }
-
-  .selected .snippet {
-    color: var(--accent-text);
-    opacity: 0.85;
-  }
 </style>
