@@ -55,10 +55,16 @@ pub async fn upsert_headers(
     mailbox: &str,
     headers: &[FetchedHeader],
 ) -> Result<(), AppError> {
-    // why one transaction: a backfill batch is 500 headers and each header
-    // runs several statements (key lookup, insert, contact sightings).
+    // why one transaction: a backfill batch is hundreds of headers and each
+    // header runs several statements (key lookup, insert, contact sightings).
     // Autocommit would WAL-sync every single one; one commit per batch is
     // far cheaper and makes the batch land atomically.
+    //
+    // why the lock comes first: accounts sync in parallel, so without it two
+    // of these transactions block each other on SQLite's single writer while
+    // each holds a pooled connection — which is how the pool ran dry and the
+    // UI's reads started failing. See storage::WRITE_LOCK.
+    let _write = super::WRITE_LOCK.lock().await;
     let mut tx = pool.begin().await?;
     for header in headers {
         let thread_key = assign_thread_key(&mut tx, account_id, header).await?;
@@ -1036,6 +1042,30 @@ mod tests {
         .await
         .unwrap()
         .id
+    }
+
+    #[tokio::test]
+    async fn concurrent_header_batches_all_land() {
+        // why: upsert_headers now takes storage::WRITE_LOCK before opening
+        // its transaction, and accounts sync in parallel — if anything on
+        // that path ever took the lock a second time, two overlapping syncs
+        // would deadlock and the app would simply stop syncing. This is the
+        // cheap guard against that.
+        let pool = crate::storage::test_pool().await;
+        let a = account(&pool, "a@example.com").await;
+        let b = account(&pool, "b@example.com").await;
+
+        let one = [header(1, "one", "2026-08-16T10:00:00Z", false)];
+        let two = [header(1, "two", "2026-08-16T10:01:00Z", false)];
+        let (first, second) = tokio::join!(
+            upsert_headers(&pool, a, "INBOX", &one),
+            upsert_headers(&pool, b, "INBOX", &two),
+        );
+        first.unwrap();
+        second.unwrap();
+
+        assert_eq!(list(&pool, Some(a), "INBOX", None).await.unwrap().len(), 1);
+        assert_eq!(list(&pool, Some(b), "INBOX", None).await.unwrap().len(), 1);
     }
 
     fn header(uid: i64, subject: &str, date: &str, read: bool) -> FetchedHeader {

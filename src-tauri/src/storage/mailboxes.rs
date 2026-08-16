@@ -26,6 +26,10 @@ pub async fn replace(
     account_id: i64,
     mailboxes: &[DiscoveredMailbox],
 ) -> Result<(), AppError> {
+    // why the lock: this opens a write transaction at the top of every sync
+    // pass, and passes for different accounts run at once — see
+    // storage::WRITE_LOCK for what that did to the pool.
+    let _write = super::WRITE_LOCK.lock().await;
     let mut tx = pool.begin().await?;
 
     // Prune first: a folder gone from the server takes its row with it.

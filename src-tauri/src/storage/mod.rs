@@ -17,6 +17,27 @@ use crate::error::AppError;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
+/// Serializes the app's bulk write transactions.
+///
+/// why this exists: SQLite has exactly one writer. Without it, several
+/// accounts syncing at once each open a write transaction and then sit
+/// blocked on that single writer — while still holding a connection from the
+/// pool. Enough of those and the pool is empty, so every read the UI needs
+/// waits out its acquire timeout and then fails. Measured on 2026-08-16: a
+/// run ended with twenty queries timing out at exactly 30s and the poller,
+/// the IDLE supervisor and the send-later sweep all reporting "pool timed
+/// out while waiting for an open connection".
+///
+/// Holding this costs no throughput — SQLite would serialize these writes
+/// anyway. The difference is that the waiting now happens here, holding
+/// nothing, instead of inside the pool holding a connection.
+///
+/// why a static rather than a field on the pool wrapper: every storage
+/// function takes `&SqlitePool`, and threading a second argument through all
+/// of them to express "there is one database" would be a lot of noise for no
+/// added truth.
+pub static WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Open the app database (creating the file if missing) and bring the schema
 /// up to date.
 pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
