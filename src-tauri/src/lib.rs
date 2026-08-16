@@ -9,6 +9,7 @@ mod poller;
 mod scheduler;
 pub mod state;
 pub mod storage;
+pub mod timing;
 
 use tauri::{Manager, Url};
 
