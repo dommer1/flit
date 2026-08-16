@@ -20,6 +20,9 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 /// Open the app database (creating the file if missing) and bring the schema
 /// up to date.
 pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
+    // why timed: this whole function sits between app launch and the first
+    // painted pixel (lib.rs block_on's it), so it is the cold-start budget.
+    let _t = crate::timing::start("storage::init");
     // why: filename() instead of a "sqlite://…" URL — the macOS app data dir
     // contains a space ("Application Support") and a plain path sidesteps URL
     // parsing entirely.
@@ -41,7 +44,10 @@ pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
         .connect_with(options)
         .await?;
 
-    MIGRATOR.run(&pool).await?;
+    {
+        let _t = crate::timing::start("storage::init/migrate");
+        MIGRATOR.run(&pool).await?;
+    }
 
     // why: data fix, not a schema change — migrations are pure SQL but the
     // snippet rules live in Rust, so a one-time backfill corrects previews
@@ -68,13 +74,16 @@ pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
     // why: rows cached before the has_attachments column existed know their
     // attachments only through the metadata table — adopt that once
     // (idempotent; new rows are kept in sync by upsert/set_body).
-    sqlx::query(
-        "UPDATE messages SET has_attachments = 1
-         WHERE has_attachments = 0
-           AND id IN (SELECT DISTINCT message_id FROM message_attachments)",
-    )
-    .execute(&pool)
-    .await?;
+    {
+        let _t = crate::timing::start("storage::init/adopt_attachment_flags");
+        sqlx::query(
+            "UPDATE messages SET has_attachments = 1
+             WHERE has_attachments = 0
+               AND id IN (SELECT DISTINCT message_id FROM message_attachments)",
+        )
+        .execute(&pool)
+        .await?;
+    }
 
     // why: sync only harvests headers it newly fetches — messages cached
     // before the contacts table existed seed it here, once (no-op after).

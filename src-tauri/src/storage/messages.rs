@@ -3,6 +3,7 @@ use sqlx::SqlitePool;
 use crate::error::AppError;
 use crate::mail::parse::{snippet_of, AttachmentMeta, InlineImage};
 use crate::models::{AuthResults, MessageAttachment, MessageHeader};
+use crate::timing;
 
 /// Header data as it arrives from an IMAP fetch, before it has a row id.
 #[derive(Debug, Clone, Default)]
@@ -226,6 +227,7 @@ pub async fn backfill_threading(
 /// work-list and the idempotency guard — a corrected snippet no longer matches,
 /// so a second startup finds nothing to do.
 pub async fn backfill_url_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
+    let _t = timing::start("storage::backfill_url_snippets");
     let stale: Vec<(i64, String)> = sqlx::query_as(
         "SELECT id, body_text FROM messages
          WHERE body_text IS NOT NULL AND snippet LIKE '%http%'",
@@ -252,6 +254,7 @@ pub async fn backfill_url_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
 /// snippet no longer matches it (fully-quoted bodies re-run, as cheap
 /// no-ops).
 pub async fn backfill_quoted_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
+    let _t = timing::start("storage::backfill_quoted_snippets");
     let stale: Vec<(i64, String)> = sqlx::query_as(
         "SELECT id, body_text FROM messages
          WHERE body_text IS NOT NULL
@@ -281,6 +284,7 @@ pub async fn backfill_quoted_snippets(pool: &SqlitePool) -> Result<u64, AppError
 /// snippet no longer matches it (rows with legit "&#" prose re-run, as
 /// cheap no-ops).
 pub async fn backfill_entity_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
+    let _t = timing::start("storage::backfill_entity_snippets");
     let stale: Vec<(i64, String)> = sqlx::query_as(
         "SELECT id, body_text FROM messages
          WHERE body_text IS NOT NULL
@@ -314,6 +318,7 @@ pub async fn list(
     mailbox: &str,
     limit: Option<i64>,
 ) -> Result<Vec<MessageHeader>, AppError> {
+    let _t = timing::start("storage::list");
     // why unwrap_or(-1): SQLite treats a negative LIMIT as "no limit", which
     // keeps the query one static string (sqlx 0.9 rejects runtime-built SQL).
     let limit = limit.unwrap_or(-1);
@@ -372,6 +377,7 @@ pub async fn list_threaded(
     mailbox: &str,
     limit: Option<i64>,
 ) -> Result<Vec<MessageHeader>, AppError> {
+    let _t = timing::start("storage::list_threaded");
     let rows = sqlx::query_as(
         r#"WITH visible AS (
              SELECT t.account_id,
@@ -435,6 +441,7 @@ pub async fn list_threaded(
 /// Sent under two names) — the conversation shows it once, preferring the
 /// copy outside the all/archive containers.
 pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<MessageHeader>, AppError> {
+    let _t = timing::start("storage::thread_of");
     let rows = sqlx::query_as(
         r#"SELECT id, account_id, mailbox, "from", "to", cc, reply_to, bcc, subject, snippet,
                   date, read, has_attachments, message_id, "references", is_draft
@@ -523,6 +530,7 @@ pub async fn view_status(
     mailbox: &str,
     threaded: bool,
 ) -> Result<crate::models::ViewStatus, AppError> {
+    let _t = timing::start("storage::view_status");
     let (view_count, unread): (i64, i64) = sqlx::query_as(
         "SELECT count(*), COALESCE(SUM(read = 0), 0) FROM messages
          WHERE mailbox = ?2 AND (?1 IS NULL OR account_id = ?1)",

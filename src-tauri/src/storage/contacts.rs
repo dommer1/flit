@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 
 use crate::error::AppError;
 use crate::models::{Contact, SenderAnomaly};
+use crate::timing;
 
 /// One display-formatted address list ("Ann <a@x>, b@y") split into
 /// `(name, email)` pairs.
@@ -109,6 +110,7 @@ pub async fn harvest_sent(pool: &SqlitePool, lists: &[&str]) -> Result<(), AppEr
 /// contacts table is still empty (rows cached before the table existed would
 /// otherwise never be harvested — sync only touches new headers).
 pub async fn backfill(pool: &SqlitePool) -> Result<u64, AppError> {
+    let _t = timing::start("storage::contacts::backfill");
     let empty: i64 = sqlx::query_scalar("SELECT count(*) FROM contacts")
         .fetch_one(pool)
         .await?;
