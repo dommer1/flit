@@ -9,6 +9,7 @@ use crate::models::{
     ThreadOrder,
 };
 use crate::state::AppState;
+use crate::timing;
 use crate::{auth, mail, storage};
 
 // why: commands stay thin — validate/orchestrate, call a module, return
@@ -604,6 +605,7 @@ async fn move_rows_to_mailbox(
     rows: &[(i64, i64)],
     dest: &str,
 ) -> Result<(), AppError> {
+    let _t = timing::start("cmd::move_rows_to_mailbox");
     // why: moving a message into the folder it already lives in is a no-op
     // (and some servers error on it) — just leave it be.
     if source == dest || rows.is_empty() {
@@ -667,6 +669,7 @@ async fn push_seen_flags(
     uids: &[i64],
     seen: bool,
 ) -> Result<(), AppError> {
+    let _t = timing::start("cmd::push_seen_flags");
     let mut session = mail::imap::connect(
         &account.imap_host,
         account.imap_port,
@@ -1381,6 +1384,7 @@ pub async fn get_message_body(
     message_id: i64,
     load_remote: Option<bool>,
 ) -> Result<MessageBody, AppError> {
+    let _t = timing::start("cmd::get_message_body");
     let loaded = load_body(&app, &state, message_id).await?;
 
     let policy = storage::settings::remote_image_policy(&state.pool).await?;
@@ -1413,6 +1417,7 @@ async fn quote_repeats_thread(
     message_id: i64,
     text: Option<&str>,
 ) -> Result<bool, AppError> {
+    let _t = timing::start("cmd::quote_repeats_thread");
     let Some(text) = text else { return Ok(false) };
     let (_, Some(quoted)) = mail::quote::split_text_quote(text) else {
         return Ok(false);
@@ -1527,6 +1532,7 @@ pub async fn thread_bodies(
     state: State<'_, AppState>,
     message_id: i64,
 ) -> Result<std::collections::HashMap<i64, MessageBody>, AppError> {
+    let _t = timing::start("cmd::thread_bodies");
     let thread = storage::messages::thread_of(&state.pool, message_id).await?;
 
     // Members whose body is not cached yet, grouped by the folder to select.

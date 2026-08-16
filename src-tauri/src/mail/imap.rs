@@ -14,6 +14,7 @@ use tokio::net::TcpStream;
 
 use crate::error::AppError;
 use crate::storage::mailboxes::DiscoveredMailbox;
+use crate::timing;
 
 pub type ImapSession = Session<TlsStream<TcpStream>>;
 
@@ -40,6 +41,7 @@ pub async fn connect(
     username: &str,
     password: &str,
 ) -> Result<ImapSession, AppError> {
+    let _t = timing::start("imap::connect");
     tokio::time::timeout(CONNECT_TIMEOUT, async {
         let tcp = TcpStream::connect((host, port))
             .await
