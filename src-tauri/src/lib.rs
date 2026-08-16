@@ -36,6 +36,18 @@ pub fn run() {
             // init (open + migrate) before any command can fire — commands may
             // then assume the pool always exists in state.
             let pool = tauri::async_runtime::block_on(storage::init(&data_dir.join("flit.db")))?;
+
+            // why spawned instead of awaited in here: these are one-off
+            // repairs of data that is already cached, so nothing on screen
+            // waits for them — while block_on'ing them cost 1.6 s of a 1.7 s
+            // cold start on a real mailbox, every launch. See run_maintenance.
+            let maintenance = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = storage::run_maintenance(&maintenance).await {
+                    eprintln!("database maintenance failed: {err}");
+                }
+            });
+
             app.manage(AppState::new(pool));
 
             // SECURITY (message-body rendering): the main window is built here

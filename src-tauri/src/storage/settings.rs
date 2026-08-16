@@ -17,6 +17,7 @@ const PUSH_ENABLED_KEY: &str = "push_enabled";
 const SWIPE_LEFT_KEY: &str = "swipe_left";
 const SWIPE_RIGHT_KEY: &str = "swipe_right";
 const AVATAR_LOOKUP_KEY: &str = "avatar_lookup";
+const MAINTENANCE_REV_KEY: &str = "maintenance_rev";
 
 async fn value(pool: &SqlitePool, key: &str) -> Result<Option<String>, AppError> {
     Ok(
@@ -37,6 +38,20 @@ async fn upsert(pool: &SqlitePool, key: &str, value: &str) -> Result<(), AppErro
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Which round of one-off data repairs this database has already had.
+/// Missing or unparsable reads as 0, so a database that has never been
+/// through maintenance gets it.
+pub async fn maintenance_rev(pool: &SqlitePool) -> Result<i64, AppError> {
+    Ok(value(pool, MAINTENANCE_REV_KEY)
+        .await?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0))
+}
+
+pub async fn set_maintenance_rev(pool: &SqlitePool, rev: i64) -> Result<(), AppError> {
+    upsert(pool, MAINTENANCE_REV_KEY, &rev.to_string()).await
 }
 
 /// Stored notification settings. Each field that is missing or unparsable

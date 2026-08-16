@@ -79,24 +79,47 @@ pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
         MIGRATOR.run(&pool).await?;
     }
 
+    Ok(pool)
+}
+
+/// The round of one-off data repairs this build knows about. Bump it when a
+/// new repair is added below.
+pub const MAINTENANCE_REV: i64 = 1;
+
+/// One-off repairs of already-cached data, run at most once per revision.
+///
+/// why not in `init`: every one of these scans the whole message table, and
+/// `init` is block_on'd before the window exists. Measured on a real mailbox:
+/// 1.6 s of a 1.7 s cold start, on every single launch.
+///
+/// why a stored revision and not the LIKE filters: those filters were meant
+/// to double as the idempotency guard, but a snippet that legitimately
+/// contains "http" mid-text matches forever — so 699 rows were rewritten at
+/// every launch, each rewrite reindexing that message's body for search.
+pub async fn run_maintenance(pool: &SqlitePool) -> Result<(), AppError> {
+    let _t = crate::timing::start("storage::run_maintenance");
+    if settings::maintenance_rev(pool).await? >= MAINTENANCE_REV {
+        return Ok(());
+    }
+
     // why: data fix, not a schema change — migrations are pure SQL but the
     // snippet rules live in Rust, so a one-time backfill corrects previews
     // cached by older builds (idempotent; see backfill_url_snippets).
-    let fixed = messages::backfill_url_snippets(&pool).await?;
+    let fixed = messages::backfill_url_snippets(pool).await?;
     if fixed > 0 {
         eprintln!("backfilled {fixed} message snippet(s) to strip leading URLs");
     }
 
     // why: same idea for snippets polluted by quoted reply history — the
     // quote splitter now stops before it, so cached previews catch up once.
-    let fixed = messages::backfill_quoted_snippets(&pool).await?;
+    let fixed = messages::backfill_quoted_snippets(pool).await?;
     if fixed > 0 {
         eprintln!("backfilled {fixed} message snippet(s) to stop before quoted history");
     }
 
     // why: same idea for snippets carrying literal "&zwnj;" entity padding —
     // the parser now strips it, so cached previews catch up once.
-    let fixed = messages::backfill_entity_snippets(&pool).await?;
+    let fixed = messages::backfill_entity_snippets(pool).await?;
     if fixed > 0 {
         eprintln!("backfilled {fixed} message snippet(s) to drop entity padding");
     }
@@ -105,24 +128,25 @@ pub async fn init(db_path: &Path) -> Result<SqlitePool, AppError> {
     // attachments only through the metadata table — adopt that once
     // (idempotent; new rows are kept in sync by upsert/set_body).
     {
-        let _t = crate::timing::start("storage::init/adopt_attachment_flags");
+        let _t = crate::timing::start("storage::maintenance/adopt_attachment_flags");
         sqlx::query(
             "UPDATE messages SET has_attachments = 1
              WHERE has_attachments = 0
                AND id IN (SELECT DISTINCT message_id FROM message_attachments)",
         )
-        .execute(&pool)
+        .execute(pool)
         .await?;
     }
 
     // why: sync only harvests headers it newly fetches — messages cached
     // before the contacts table existed seed it here, once (no-op after).
-    let seeded = contacts::backfill(&pool).await?;
+    let seeded = contacts::backfill(pool).await?;
     if seeded > 0 {
         eprintln!("seeded contacts from {seeded} cached message(s)");
     }
 
-    Ok(pool)
+    settings::set_maintenance_rev(pool, MAINTENANCE_REV).await?;
+    Ok(())
 }
 
 /// In-memory database with migrations applied, for tests.
@@ -147,6 +171,57 @@ pub(crate) async fn test_pool() -> SqlitePool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn maintenance_repairs_once_and_then_leaves_the_data_alone() {
+        let pool = test_pool().await;
+        let account = crate::storage::accounts::insert(&pool, &sample_account())
+            .await
+            .unwrap();
+        // How an older build cached it: the snippet still leads with the URL
+        // the current rules strip.
+        let seed = |uid: i64| {
+            sqlx::query(
+                "INSERT INTO messages (account_id, uid, uid_validity, date, body_text, snippet)
+                 VALUES (?, ?, 1, '2026-08-16T10:00:00Z', ?, ?)",
+            )
+            .bind(account.id)
+            .bind(uid)
+            .bind("https://example.com/x Assigned you to a task")
+            .bind("https://example.com/x Assigned you to a task")
+            .execute(&pool)
+        };
+        seed(1).await.unwrap();
+
+        run_maintenance(&pool).await.unwrap();
+
+        let snippet = |pool: SqlitePool| async move {
+            sqlx::query_scalar::<_, String>("SELECT snippet FROM messages WHERE uid = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        assert_eq!(snippet(pool.clone()).await, "Assigned you to a task");
+
+        // why put it back and run again: the LIKE filters used to be the only
+        // guard, so a snippet that still matched them was rewritten on every
+        // single launch — 699 rows a launch on a real mailbox, each one
+        // reindexing a message body for search. The stored revision is what
+        // makes the second run free.
+        sqlx::query("UPDATE messages SET snippet = ? WHERE uid = 1")
+            .bind("https://example.com/x Assigned you to a task")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        run_maintenance(&pool).await.unwrap();
+
+        assert_eq!(
+            snippet(pool.clone()).await,
+            "https://example.com/x Assigned you to a task",
+            "a database already at this revision must not be scanned again"
+        );
+    }
 
     #[tokio::test]
     async fn migrations_create_accounts_table() {
