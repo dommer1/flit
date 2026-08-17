@@ -568,3 +568,48 @@ it("shows the sender and subject only — no body preview", () => {
   expect(screen.getByText("Subject 1")).toBeTruthy();
   expect(screen.queryByText("Are we still on for Saturday?")).toBeNull();
 });
+
+/** A folder's worth of rows — what a big mailbox actually hands the list. */
+function manyRows(count: number) {
+  return Array.from({ length: count }, (_, i) =>
+    header(i + 1, `Sender ${i} <s${i}@example.com>`, true),
+  );
+}
+
+it("puts only a window of a long list in the DOM", () => {
+  // why this matters: drawing all 500 rows of a page measured 85-878 ms on a
+  // real mailbox — in one folder more than the query that produced them.
+  renderList({ messages: manyRows(500) });
+
+  const drawn = document.querySelectorAll('[role="option"]');
+
+  expect(drawn.length).toBeGreaterThan(0);
+  expect(drawn.length).toBeLessThan(60);
+});
+
+it("keeps the scroll height of the whole list, not just the window", () => {
+  // The spacers stand in for the undrawn rows, so the scrollbar reflects how
+  // much there is to scroll rather than how much is currently rendered.
+  renderList({ messages: manyRows(500) });
+
+  const spacers = [...document.querySelectorAll<HTMLElement>(".spacer")];
+  const padding = spacers.reduce(
+    (total, el) => total + parseFloat(el.style.height),
+    0,
+  );
+
+  expect(spacers).toHaveLength(2);
+  expect(padding).toBeGreaterThan(20_000);
+});
+
+it("draws later rows once the list is scrolled", async () => {
+  renderList({ messages: manyRows(500) });
+  const list = document.querySelector<HTMLElement>(".list")!;
+  const before = document.querySelectorAll('[role="option"]')[0].textContent;
+
+  list.scrollTop = 12_000;
+  await fireEvent.scroll(list);
+
+  const after = document.querySelectorAll('[role="option"]')[0].textContent;
+  expect(after).not.toBe(before);
+});

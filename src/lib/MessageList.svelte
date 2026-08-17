@@ -16,6 +16,7 @@
     isHorizontal,
   } from "./swipe";
   import { modeFor, type SelectMode } from "./selection";
+  import { offsetsFor, windowFor } from "./virtualList";
   import type {
     MessageHeader,
     SwipeAction,
@@ -255,11 +256,53 @@
     });
   });
 
+  // Only the rows near the viewport go into the DOM. A big folder hands this
+  // component 500 rows and drawing them all measured 85-878 ms — in one
+  // folder more than the query that produced them.
+  //
+  // why a row and its date header count as one item: the header always
+  // renders directly above its row, so the two scroll as a unit and the
+  // existing markup needs no restructuring — only a taller item.
+  const OVERSCAN = 6;
+  /** Fallbacks until the first row has been measured. */
+  const ROW_FALLBACK = 62;
+  const HEADER_FALLBACK = 30;
+
+  let rowHeight = $state(ROW_FALLBACK);
+  let headerHeight = $state(HEADER_FALLBACK);
+  let scrollTop = $state(0);
+  let viewportHeight = $state(0);
+
+  let offsets = $derived(
+    offsetsFor(rows.map((r) => rowHeight + (r.opens ? headerHeight : 0))),
+  );
+  let visible = $derived(
+    windowFor(offsets, scrollTop, viewportHeight, OVERSCAN),
+  );
+  let windowRows = $derived(rows.slice(visible.start, visible.end));
+
+  // why measured rather than hard-coded: the row's height comes out of type
+  // and padding, and a stylesheet edit that silently disagreed with a
+  // constant here would misplace every row below the fold.
+  function measure() {
+    if (listEl === null) return;
+    viewportHeight = listEl.clientHeight;
+    // why the > 0 guard: an element that has not laid out yet — and every
+    // element under jsdom — reports zero. Believing that would make every
+    // row zero-tall, and the window would collapse onto the last row.
+    const row = listEl.querySelector<HTMLElement>(".swipe-row");
+    if (row && row.offsetHeight > 0) rowHeight = row.offsetHeight;
+    const header = listEl.querySelector<HTMLElement>(".section");
+    if (header && header.offsetHeight > 0) headerHeight = header.offsetHeight;
+  }
+
   /** How close to the bottom (px) the scroll gets before asking for more. */
   const LOAD_MORE_THRESHOLD = 300;
 
   function handleScroll() {
-    if (!hasMore || !onLoadMore || listEl === null) return;
+    if (listEl === null) return;
+    scrollTop = listEl.scrollTop;
+    if (!hasMore || !onLoadMore) return;
     const remaining =
       listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
     // Duplicate fires are fine — the parent's reveal logic is idempotent
@@ -273,10 +316,22 @@
   // one worth keeping in view is the end the user just moved to.
   let listEl = $state<HTMLElement | null>(null);
   $effect(() => {
-    if (selectedId === null || listEl === null) return;
-    listEl
-      .querySelector<HTMLElement>("[data-lead]")
-      ?.scrollIntoView({ block: "nearest" });
+    if (listEl === null) return;
+    measure();
+    if (selectedId === null) return;
+    const lead = listEl.querySelector<HTMLElement>("[data-lead]");
+    if (lead) {
+      lead.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    // why by offset: the lead row is outside the drawn window, so there is
+    // no element to scroll to. Jumping to where it will be brings it into
+    // the window, and the row renders there.
+    const index = rows.findIndex((r) => r.message.id === selectedId);
+    if (index >= 0) {
+      listEl.scrollTop = Math.max(0, offsets[index] - listEl.clientHeight / 2);
+      scrollTop = listEl.scrollTop;
+    }
   });
 </script>
 
@@ -334,7 +389,10 @@
     {#if messages.length === 0}
       <p class="empty">No Messages</p>
     {:else}
-      {#each rows as { message, section, opens } (message.id)}
+      <!-- Stand-ins for the rows above and below the drawn window, so the
+           scrollbar and the scroll position match the whole list. -->
+      <div class="spacer" style:height={`${visible.padTop}px`}></div>
+      {#each windowRows as { message, section, opens } (message.id)}
         {@const color = accountColors[message.accountId] ?? null}
         {@const domain = senderDomain(message.from)}
         {@const icon = domain ? avatars[domain] : undefined}
@@ -457,6 +515,7 @@
           </button>
         </div>
       {/each}
+      <div class="spacer" style:height={`${visible.padBottom}px`}></div>
     {/if}
   </div>
 
@@ -500,6 +559,12 @@
     margin: 1px 0 0;
     font-size: 11px;
     color: var(--text-secondary);
+  }
+
+  /* why flex-shrink 0: the list is a flex column, and without it the
+     spacers would be squeezed and the scroll height would be wrong. */
+  .spacer {
+    flex-shrink: 0;
   }
 
   .list {
