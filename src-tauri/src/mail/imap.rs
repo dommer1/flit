@@ -92,6 +92,7 @@ pub async fn fetch_headers_by_uid(
 
 /// All selectable folders on the server, with their special-use roles.
 pub async fn list_mailboxes(session: &mut ImapSession) -> Result<Vec<DiscoveredMailbox>, AppError> {
+    let _t = timing::start("imap::list_mailboxes");
     let stream = session.list(Some(""), Some("*")).await.map_err(imap_err)?;
     let names: Vec<Name> = stream.try_collect().await.map_err(imap_err)?;
     Ok(names

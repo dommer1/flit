@@ -4,6 +4,7 @@ use crate::error::AppError;
 use crate::mail::{imap, parse};
 use crate::models::Account;
 use crate::storage::messages::{self, FetchedHeader};
+use crate::timing;
 
 const INITIAL_FETCH: u32 = 50;
 
@@ -86,6 +87,7 @@ pub async fn sync_account(
     account: &Account,
     session: &mut imap::ImapSession,
 ) -> Result<Vec<NewMail>, AppError> {
+    let _t = timing::start("mail::sync_account");
     let found = imap::list_mailboxes(session).await?;
     crate::storage::mailboxes::replace(pool, account.id, &found).await?;
 
@@ -125,6 +127,7 @@ pub(crate) async fn sync_mailbox(
     session: &mut imap::ImapSession,
     mailbox: &str,
 ) -> Result<Vec<FetchedHeader>, AppError> {
+    let _t = timing::start("mail::sync_mailbox");
     let selected = session
         .select(mailbox)
         .await
@@ -212,6 +215,7 @@ async fn backfill_thread_headers(
     session: &mut imap::ImapSession,
     mailbox: &str,
 ) -> Result<(), AppError> {
+    let _t = timing::start("mail::backfill_thread_headers");
     let missing = messages::rows_missing_threading(pool, account_id, mailbox).await?;
     if missing.is_empty() {
         return Ok(());
