@@ -386,10 +386,11 @@ pub async fn list(
 /// rows in 13 ms. Verified against a copy of a 96,910-message database
 /// across the unified inbox, a single account's inbox, Sent and All Mail.
 ///
-/// Still slow on a folder that is itself huge: Gmail's "All Mail" with
-/// 45,119 conversations takes ~80 s either way, because the page is then
-/// nearly the whole account. Bounding that needs the sort key — which is
-/// the thread's date, not the row's — and is tracked separately.
+/// The stats are still computed for every conversation in the folder, not
+/// just the page's worth, because the sort key is the thread's date rather
+/// than the row's — so which conversations make the first page is not known
+/// until they are. On Gmail's "All Mail" (45,119 conversations) that costs
+/// ~0.96 s; bounding it properly would mean storing the thread date.
 pub async fn list_threaded(
     pool: &SqlitePool,
     account_id: Option<i64>,
@@ -407,7 +408,12 @@ pub async fn list_threaded(
              WHERE m.mailbox = ?2 AND (?1 IS NULL OR m.account_id = ?1)
            ),
            -- One row per conversation, already narrowed to this folder.
-           page AS (SELECT * FROM ranked WHERE rn = 1),
+           --
+           -- why tkey is a column here and not an expression in the join
+           -- below: SQLite indexes a materialised CTE on plain columns only,
+           -- and an expression left it indexing account_id alone.
+           page AS (SELECT *, COALESCE(thread_key, 'row:' || id) AS tkey
+                    FROM ranked WHERE rn = 1),
            -- Thread members, gathered per conversation ON THE PAGE rather
            -- than by scanning every cached message. The two branches exist so
            -- the join is a plain equality the (account_id, thread_key) index
@@ -456,9 +462,16 @@ pub async fn list_threaded(
                   COALESCE(r.message_id_hdr, '') AS message_id,
                   r.references_hdr AS "references",
                   s.thread_count, s.thread_unread, s.thread_has_draft
+           -- why CROSS JOIN: in SQLite this is not a cartesian product, it
+           -- is the one way to pin join order. Left to choose, the planner
+           -- drove from stats and indexed the page by account_id alone —
+           -- every row of one side scanning all of the other. On Gmail's
+           -- "All Mail" (45,119 conversations, all one account) that is
+           -- 45,119 squared, and the folder took 80 seconds to open. Driving
+           -- from the page instead lets stats be indexed on both columns:
+           -- same rows, 0.96 s.
            FROM page r
-           JOIN stats s ON s.account_id = r.account_id
-                       AND s.tkey = COALESCE(r.thread_key, 'row:' || r.id)
+           CROSS JOIN stats s ON s.account_id = r.account_id AND s.tkey = r.tkey
            ORDER BY date DESC, r.id DESC LIMIT ?3"#,
     )
     .bind(account_id)
