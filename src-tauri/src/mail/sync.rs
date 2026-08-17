@@ -71,34 +71,68 @@ pub struct NewMail {
     pub subject: String,
 }
 
-/// One full sync pass for an account: discover folders, mirror them into
-/// the mailboxes table, then sync each folder over the caller's connection.
-/// Folders run in sidebar order, so INBOX is fresh before slower ones.
+/// Mirror the account's folder list, then sync its inbox — the part a
+/// "check for new mail" is actually waiting for.
 ///
-/// The caller owns the session — and so owns closing it — because one pass
-/// is followed by the body prefetch and the header backfill against the
-/// same server.
+/// The caller owns the session — and so owns closing it — because the inbox
+/// is followed by the other folders, the body prefetch and the header
+/// backfill, all against the same server.
 ///
 /// Returns the new unread inbox messages this pass brought in — only those
 /// can warrant a notification. Initial and reset fetches report nothing:
 /// a freshly added account must not fire fifty notifications at once.
-pub async fn sync_account(
+///
+/// why the inbox is split off from the rest: a pass walks every folder in
+/// turn, and 26 folders across three accounts measured 30.2 s of per-folder
+/// work — the user waiting on it was waiting for Spam, Trash and archives
+/// they did not ask about. The inbox alone is one SELECT.
+pub async fn sync_inbox(
     pool: &SqlitePool,
     account: &Account,
     session: &mut imap::ImapSession,
 ) -> Result<Vec<NewMail>, AppError> {
-    let _t = timing::start("mail::sync_account");
+    let _t = timing::start("mail::sync_inbox");
     let found = imap::list_mailboxes(session).await?;
     crate::storage::mailboxes::replace(pool, account.id, &found).await?;
 
     let mut new_mail = Vec::new();
-    for mailbox in crate::storage::mailboxes::list(pool, account.id).await? {
-        let fetched = sync_mailbox(pool, account.id, session, &mailbox.name).await?;
-        if mailbox.role.as_deref() == Some("inbox") {
-            new_mail.extend(notifiable(&fetched));
-        }
+    for mailbox in inbox_folders(pool, account.id, true).await? {
+        let fetched = sync_mailbox(pool, account.id, session, &mailbox).await?;
+        new_mail.extend(notifiable(&fetched));
     }
     Ok(new_mail)
+}
+
+/// Every folder of the account except the inbox, in sidebar order. Runs
+/// after the inbox has already been reported, so nothing on screen waits
+/// for it.
+pub async fn sync_other_folders(
+    pool: &SqlitePool,
+    account: &Account,
+    session: &mut imap::ImapSession,
+) -> Result<(), AppError> {
+    let _t = timing::start("mail::sync_other_folders");
+    for mailbox in inbox_folders(pool, account.id, false).await? {
+        sync_mailbox(pool, account.id, session, &mailbox).await?;
+    }
+    Ok(())
+}
+
+/// The account's folder names, either the inbox or everything else.
+///
+/// why by role and not by name: servers localise the inbox's siblings, and
+/// the role is what folder discovery already resolved.
+async fn inbox_folders(
+    pool: &SqlitePool,
+    account_id: i64,
+    want_inbox: bool,
+) -> Result<Vec<String>, AppError> {
+    Ok(crate::storage::mailboxes::list(pool, account_id)
+        .await?
+        .into_iter()
+        .filter(|mailbox| (mailbox.role.as_deref() == Some("inbox")) == want_inbox)
+        .map(|mailbox| mailbox.name)
+        .collect())
 }
 
 /// The headers that deserve a notification: unread ones, as payloads.

@@ -160,11 +160,45 @@ const BACKGROUND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3
 /// The sync pass behind the command, callable from background tasks (the
 /// poller) that have an AppHandle but no `State` extractor.
 pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), AppError> {
+    // why the whole pass runs in one spawned task while the caller waits only
+    // for the inbox stage: the sync slot is what stops an account opening two
+    // IMAP sessions at once, and it borrows AppState, so it cannot be handed
+    // across a spawn. Keeping every stage inside one task keeps the slot held
+    // for all of them — and the oneshot still lets "check for new mail" report
+    // done as soon as the inbox has landed, instead of after all 26 folders.
+    let (report, inbox_done) = tokio::sync::oneshot::channel();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        run_pass(&app, account_id, report).await;
+    });
+    // why Ok on a dropped sender: the task only drops it by panicking, and a
+    // failed pass has already recorded its own status for settings to show.
+    inbox_done.await.unwrap_or(Ok(()))
+}
+
+/// One whole sync pass. `report` is answered as soon as the inbox stage is
+/// finished; everything after it is background work the user never waits on.
+async fn run_pass(
+    app: &AppHandle,
+    account_id: i64,
+    report: tokio::sync::oneshot::Sender<Result<(), AppError>>,
+) {
+    if let Err(err) = run_pass_inner(app, account_id, report).await {
+        eprintln!("sync pass failed for account {account_id}: {err}");
+    }
+}
+
+async fn run_pass_inner(
+    app: &AppHandle,
+    account_id: i64,
+    report: tokio::sync::oneshot::Sender<Result<(), AppError>>,
+) -> Result<(), AppError> {
     let state = app.state::<AppState>();
-    // why: held (RAII) until this function returns — a manual refresh racing
-    // the background poll must not open a second IMAP session for the same
+    // why: held (RAII) for the whole pass — a manual refresh racing the
+    // background poll must not open a second IMAP session for the same
     // account or double-fire notifications. The loser skips silently.
     let Some(_slot) = state.try_begin_sync(account_id) else {
+        let _ = report.send(Ok(()));
         return Ok(());
     };
     let account = storage::accounts::get(&state.pool, account_id).await?;
@@ -175,7 +209,7 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
     let result = mail::with_timeout(SYNC_LABEL, SYNC_TIMEOUT, async {
         let password = state.password(account_id).await?;
         let mut session = connect_account(&account, &password).await?;
-        let new_mail = mail::sync::sync_account(&state.pool, &account, &mut session).await?;
+        let new_mail = mail::sync::sync_inbox(&state.pool, &account, &mut session).await?;
         Ok::<(mail::imap::ImapSession, Vec<mail::sync::NewMail>), AppError>((session, new_mail))
     })
     .await;
@@ -187,7 +221,16 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
         .await?;
     app.emit("accounts-changed", ())?;
 
-    let (session, new_mail) = result?;
+    let (session, new_mail) = match result {
+        Ok(pair) => pair,
+        // why hand the error over rather than just returning: the caller is
+        // blocked on the inbox stage, and a failed check must surface as a
+        // failure rather than as a silent success.
+        Err(err) => {
+            let _ = report.send(Err(err));
+            return Ok(());
+        }
+    };
     app.emit("messages-changed", MessagesChanged::reload(account_id))?;
 
     // why: after the emit — banners are cosmetic, the fresh list is not.
@@ -195,13 +238,36 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
     let defaults = storage::settings::notification_settings(&state.pool).await?;
     crate::notify::show(app, &crate::notify::plan(&account, &defaults, &new_mail));
 
-    // why: bodies download in the background AFTER the command returns — the
-    // header list is already usable, and each cached body feeds the FTS index
-    // so search covers unopened mail.
+    // The inbox is in and on screen — whoever asked for a check has their
+    // answer. Everything below runs on with the sync slot still held.
+    let _ = report.send(Ok(()));
+
     let pool = state.pool.clone();
     let app = app.clone();
-    tauri::async_runtime::spawn(async move {
+    {
         let mut session = session;
+        // The rest of the account's folders. Measured at 30.2 s across 26
+        // folders, which is why the user is no longer kept waiting for it.
+        let others = mail::with_timeout(
+            "other folders",
+            BACKGROUND_TIMEOUT,
+            mail::sync::sync_other_folders(&pool, &account, &mut session),
+        );
+        match others.await {
+            Ok(()) => {
+                let _ = app.emit("messages-changed", MessagesChanged::reload(account_id));
+            }
+            Err(err) => {
+                eprintln!("folder sync failed for account {account_id}: {err}");
+                // Same reasoning as the prefetch below: a timed-out command
+                // leaves the session mid-stream, so drop it rather than carry
+                // on over a desynced protocol.
+                return Ok(());
+            }
+        }
+
+        // why: bodies download after the list is already usable, and each
+        // cached body feeds the FTS index so search covers unopened mail.
         let prefetch = mail::with_timeout(
             "body prefetch",
             BACKGROUND_TIMEOUT,
@@ -220,7 +286,7 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
                 // mistaken for the answer to the next one. Drop it — the next
                 // pass reconnects — rather than backfilling over a desynced
                 // protocol.
-                return;
+                return Ok(());
             }
         }
 
@@ -230,7 +296,7 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
         // slot makes a refresh mid-backfill a no-op instead of a second loop.
         let state = app.state::<AppState>();
         let Some(_slot) = state.try_begin_backfill(account_id) else {
-            return;
+            return Ok(());
         };
         // Each cached batch refreshes the list (and its progress line) live —
         // but no faster than Progress allows.
@@ -255,7 +321,7 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
             }
             Err(err) => eprintln!("header backfill failed for account {account_id}: {err}"),
         }
-    });
+    }
     Ok(())
 }
 
