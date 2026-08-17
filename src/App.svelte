@@ -773,6 +773,53 @@
     mailboxesByAccount = Object.fromEntries(entries);
   }
 
+  // Patch a read-flag change straight into the rows already on screen.
+  //
+  // why not just re-query: the list query is a full scan (~250 ms measured on
+  // a real mailbox) and clicking an unread message fired one every time. A
+  // dot clearing can neither add nor remove a row, so there is nothing to ask
+  // for — only rows to correct.
+  function applyReadChange(ids: number[], read: boolean) {
+    const wanted = new Set(ids);
+    let seen = 0;
+    let flipped = 0;
+    messages = messages.map((message) => {
+      if (!wanted.has(message.id)) return message;
+      seen += 1;
+      if (message.read === read) return message;
+      flipped += 1;
+      // why threadUnread only for a lone message: it answers "is anything in
+      // this conversation still unread", which this window cannot decide for
+      // a conversation it holds one row of. Left alone it errs towards
+      // showing the dot, and the next real reload settles it.
+      return message.threadCount > 1
+        ? { ...message, read }
+        : { ...message, read, threadUnread: !read };
+    });
+    // why the fallback: ids we cannot see still count towards the view's
+    // unread tally — a thread member in another folder, a row past the loaded
+    // page — so the number can only be adjusted here when every id was on
+    // screen. Even then this skips the list query, which is the expensive half.
+    if (seen < wanted.size) {
+      void refreshStatus().catch((err: unknown) =>
+        console.error("failed to refresh view status:", err),
+      );
+      return;
+    }
+    if (listStatus && flipped > 0) {
+      listStatus = {
+        ...listStatus,
+        unread: Math.max(0, listStatus.unread + (read ? -flipped : flipped)),
+      };
+    }
+  }
+
+  /** The view's counts alone — no list query. */
+  async function refreshStatus() {
+    if (searchQuery.trim()) return;
+    listStatus = await viewStatus(selectedAccountId, selectedMailbox);
+  }
+
   // why 200ms: long enough to collapse a typing burst into one query, short
   // enough that results still feel live (search is a local SQLite hit).
   const refreshDebounced = debounce(() => void refreshMessages(), 200);
@@ -876,7 +923,14 @@
     // why: account CRUD lives in the settings window (its own JS context) —
     // this window finds out through the backend's accounts-changed event.
     const unlistenAccounts = onAccountsChanged(() => void refreshAccounts());
-    const unlistenMessages = onMessagesChanged(refreshOnMessagesChanged);
+    const unlistenMessages = onMessagesChanged((change) => {
+      // A read flag is the one change the window can settle by itself.
+      if (change.read) {
+        applyReadChange(change.read.ids, change.read.read);
+        return;
+      }
+      refreshOnMessagesChanged();
+    });
     // why: compose windows queue sends in the backend; this window only
     // mirrors the send-* events into badges.
     const unlistenQueued = onSendQueued((e) =>

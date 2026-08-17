@@ -344,3 +344,13 @@ export interface MessageHeader {
    * row's "Draft" pill. Computed by threaded lists only. */
   threadHasDraft: boolean;
 }
+
+/** What a `messages-changed` event carries. Mirrors `MessagesChanged` in
+ * models.rs. */
+export interface MessagesChanged {
+  accountId: number;
+  /** Set only when nothing but read flags changed, so the list can be
+   * patched in place. `null` means rows may have appeared or gone and the
+   * view has to ask again. */
+  read: { ids: number[]; read: boolean } | null;
+}

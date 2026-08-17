@@ -11,6 +11,7 @@ import type {
   Account,
   DateTimeFormat,
   MessageHeader,
+  MessagesChanged,
   ScheduledMessage,
   SendEvent,
   SwipeActions,
@@ -123,6 +124,9 @@ const archivedMessages: MessageHeader[] = [
   },
 ];
 
+/** "Something other than a read flag changed" — the view has to re-query. */
+const RELOAD: MessagesChanged = { accountId: 1, read: null };
+
 // why: mutable + captured by the mock factory, so tests can simulate the
 // backend changing state and firing change events.
 let currentAccounts: Account[] = [];
@@ -130,7 +134,7 @@ let currentAliases: Alias[] = [];
 let currentMessages: MessageHeader[] = [];
 let currentScheduled: ScheduledMessage[] = [];
 let accountsChanged: (() => void) | undefined;
-let messagesChanged: (() => void) | undefined;
+let messagesChanged: ((change: MessagesChanged) => void) | undefined;
 let sendQueued: ((e: SendEvent) => void) | undefined;
 let sendFinished: ((e: SendEvent) => void) | undefined;
 let sendUndone: ((e: SendEvent) => void) | undefined;
@@ -249,7 +253,7 @@ vi.mock("./lib/api", () => ({
     accountsChanged = callback;
     return () => {};
   }),
-  onMessagesChanged: vi.fn(async (callback: () => void) => {
+  onMessagesChanged: vi.fn(async (callback: (change: MessagesChanged) => void) => {
     messagesChanged = callback;
     return () => {};
   }),
@@ -683,7 +687,7 @@ it("refreshes the list on messages-changed and keeps the selection", async () =>
     hasAttachments: false,
     },
   ];
-  messagesChanged?.();
+  messagesChanged?.(RELOAD);
 
   expect(await screen.findByText("Brand new")).toBeInTheDocument();
   expect(
@@ -706,9 +710,9 @@ it("collapses a burst of messages-changed events into one refresh", async () => 
   // why fake timers mid-test: the initial load must run on real timers
   // (findBy* polls with them), only the debounce window itself is faked.
   vi.useFakeTimers();
-  messagesChanged?.();
-  messagesChanged?.();
-  messagesChanged?.();
+  messagesChanged?.(RELOAD);
+  messagesChanged?.(RELOAD);
+  messagesChanged?.(RELOAD);
   await vi.advanceTimersByTimeAsync(250);
   vi.useRealTimers();
 
@@ -1134,7 +1138,7 @@ it("keeps an evicted row out of the list while the server move is pending", asyn
     ...allMessages,
     { ...allMessages[0], id: 3, subject: "Brand new" },
   ];
-  messagesChanged?.();
+  messagesChanged?.(RELOAD);
   await screen.findByText("Brand new");
   expect(screen.queryByText("Weekend plans")).not.toBeInTheDocument();
 
@@ -1480,4 +1484,47 @@ it("does not mark a message read when shift-arrowing onto it", async () => {
   await fireEvent.keyDown(document.body, { key: "ArrowUp", shiftKey: true });
 
   expect(api.setMessageRead).not.toHaveBeenCalled();
+});
+
+it("patches a read-flag change in place instead of re-querying the list", async () => {
+  // why this matters: the list query is a full scan (~250 ms measured), and
+  // clicking an unread message fired one every single time. Nothing about a
+  // dot clearing can add or remove a row, so there is nothing to re-query.
+  render(App);
+  await screen.findByText("Weekend plans");
+  vi.mocked(api.listMessages).mockClear();
+  vi.mocked(api.viewStatus).mockClear();
+  vi.mocked(api.listMailboxes).mockClear();
+
+  messagesChanged?.({
+    accountId: 1,
+    read: { ids: [allMessages[0].id], read: true },
+  });
+
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: /Weekend plans/ })).not.toHaveClass(
+      "unread",
+    ),
+  );
+  expect(api.listMessages).not.toHaveBeenCalled();
+  expect(api.viewStatus).not.toHaveBeenCalled();
+  expect(api.listMailboxes).not.toHaveBeenCalled();
+});
+
+it("asks for fresh counts when a read change names rows it cannot see", async () => {
+  // A whole-thread mark-read names members that are not list rows, so the
+  // view's unread tally cannot be adjusted locally — but the expensive list
+  // query is still skipped.
+  render(App);
+  await screen.findByText("Weekend plans");
+  vi.mocked(api.listMessages).mockClear();
+  vi.mocked(api.viewStatus).mockClear();
+
+  messagesChanged?.({
+    accountId: 1,
+    read: { ids: [allMessages[0].id, 9999], read: true },
+  });
+
+  await waitFor(() => expect(api.viewStatus).toHaveBeenCalledTimes(1));
+  expect(api.listMessages).not.toHaveBeenCalled();
 });

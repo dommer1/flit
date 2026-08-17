@@ -13,6 +13,7 @@ import type {
   MessageBody,
   MessageQuote,
   MessageHeader,
+  MessagesChanged,
   NewAccount,
   NotificationSettings,
   OutgoingMessage,
@@ -434,8 +435,12 @@ export function closeCompose(): Promise<void> {
 }
 
 /** Fires whenever the message cache changes (any account, any window). */
-export function onMessagesChanged(callback: () => void): Promise<UnlistenFn> {
-  return listen("messages-changed", callback);
+export function onMessagesChanged(
+  callback: (change: MessagesChanged) => void,
+): Promise<UnlistenFn> {
+  return listen<MessagesChanged>("messages-changed", (event) =>
+    callback(event.payload),
+  );
 }
 
 /** Current remote-image policy ("ask" until the user picks otherwise). */

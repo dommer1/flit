@@ -645,6 +645,48 @@ pub struct MessageHeader {
     pub thread_has_draft: bool,
 }
 
+/// What a `messages-changed` event carries.
+///
+/// why typed instead of a bare account id: a read flag flipping and new mail
+/// arriving mean very different things to the window. The first can be
+/// patched straight into the rows it already holds; the second needs the list
+/// query again — and that query is a full scan (~250 ms measured), so running
+/// it every time a dot clears is a good part of what makes clicking through
+/// mail feel heavy.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagesChanged {
+    pub account_id: i64,
+    /// Set only when nothing but read flags changed. Anything else — new
+    /// mail, a move, a delete — leaves this `None`, which means "re-query".
+    pub read: Option<ReadChange>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadChange {
+    pub ids: Vec<i64>,
+    pub read: bool,
+}
+
+impl MessagesChanged {
+    /// The view has to ask again — rows may have appeared or gone.
+    pub fn reload(account_id: i64) -> Self {
+        Self {
+            account_id,
+            read: None,
+        }
+    }
+
+    /// Only these messages' read flags moved.
+    pub fn read(account_id: i64, ids: Vec<i64>, read: bool) -> Self {
+        Self {
+            account_id,
+            read: Some(ReadChange { ids, read }),
+        }
+    }
+}
+
 /// Counts for one list view (a folder, or a mailbox name across all
 /// accounts) — what the list header and the backfill progress line show.
 #[derive(Debug, PartialEq, Serialize)]

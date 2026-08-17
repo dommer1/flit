@@ -5,8 +5,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::error::AppError;
 use crate::models::{
     Account, Alias, AuthResults, DateTimeFormat, Mailbox, MessageBody, MessageHeader, MessageQuote,
-    NewAccount, NotificationSettings, OutgoingMessage, RemoteImagePolicy, Signature, SwipeActions,
-    ThreadOrder,
+    MessagesChanged, NewAccount, NotificationSettings, OutgoingMessage, RemoteImagePolicy,
+    Signature, SwipeActions, ThreadOrder,
 };
 use crate::state::AppState;
 use crate::timing;
@@ -188,7 +188,7 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
     app.emit("accounts-changed", ())?;
 
     let (session, new_mail) = result?;
-    app.emit("messages-changed", account_id)?;
+    app.emit("messages-changed", MessagesChanged::reload(account_id))?;
 
     // why: after the emit — banners are cosmetic, the fresh list is not.
     // Settings are re-read per sync so a toggle applies to the next pass.
@@ -210,7 +210,7 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
         match prefetch.await {
             // why: snippets just became real — lists and searches should see them.
             Ok(cached) if cached > 0 => {
-                let _ = app.emit("messages-changed", account_id);
+                let _ = app.emit("messages-changed", MessagesChanged::reload(account_id));
             }
             Ok(_) => {}
             Err(err) => {
@@ -237,7 +237,7 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
         let progress = Progress::new();
         let on_batch = || {
             if progress.due(std::time::Instant::now()) {
-                let _ = app.emit("messages-changed", account_id);
+                let _ = app.emit("messages-changed", MessagesChanged::reload(account_id));
             }
         };
         let backfill = mail::with_timeout(
@@ -250,7 +250,7 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
                 // why a final event: the throttle above can swallow the last
                 // batch's notice, and the newest headers would then sit in
                 // the cache unshown until something else refreshed.
-                let _ = app.emit("messages-changed", account_id);
+                let _ = app.emit("messages-changed", MessagesChanged::reload(account_id));
                 let _ = session.logout().await;
             }
             Err(err) => eprintln!("header backfill failed for account {account_id}: {err}"),
@@ -271,7 +271,12 @@ pub async fn set_message_read(
 ) -> Result<(), AppError> {
     let loc = storage::messages::location(&state.pool, message_id).await?;
     storage::messages::set_read(&state.pool, message_id, read).await?;
-    app.emit("messages-changed", loc.account_id)?;
+    // why the ids rather than a plain reload: the window patches this row in
+    // place instead of re-running the whole list query for one dot.
+    app.emit(
+        "messages-changed",
+        MessagesChanged::read(loc.account_id, vec![message_id], read),
+    )?;
 
     // why: fetch account + password on the command path (cheap, from the
     // session cache) so the spawned task owns everything it needs.
@@ -303,7 +308,11 @@ pub async fn set_messages_read(
         storage::messages::set_read(&state.pool, *batch, read).await?;
     }
     for batch in &batches {
-        app.emit("messages-changed", batch.account_id)?;
+        let ids: Vec<i64> = batch.rows.iter().map(|(id, _)| *id).collect();
+        app.emit(
+            "messages-changed",
+            MessagesChanged::read(batch.account_id, ids, read),
+        )?;
     }
 
     for batch in batches {
@@ -691,7 +700,7 @@ async fn move_rows_to_mailbox(
         storage::messages::delete_by_id(&state.pool, row_id).await?;
     }
     if emit {
-        app.emit("messages-changed", account_id)?;
+        app.emit("messages-changed", MessagesChanged::reload(account_id))?;
     }
     outcome
 }
@@ -1124,7 +1133,7 @@ async fn delete_sent_draft(
         return Ok(()); // no drafts folder, nothing to clean up
     };
     storage::messages::delete_by_message_id(&state.pool, account.id, draft_id).await?;
-    let _ = app.emit("messages-changed", account.id);
+    let _ = app.emit("messages-changed", MessagesChanged::reload(account.id));
     let lock = state.draft_push_lock(account.id);
     let _guard = lock.lock().await;
     delete_draft_on_server(app, &state.pool, account, password, &drafts, draft_id).await
@@ -1221,7 +1230,7 @@ pub async fn save_draft(
     if let Some(old_id) = &previous_draft_id {
         storage::messages::delete_by_message_id(&state.pool, account.id, old_id).await?;
     }
-    let _ = app.emit("messages-changed", account.id);
+    let _ = app.emit("messages-changed", MessagesChanged::reload(account.id));
 
     // Server push in the background, serialized per account (FIFO lock) so
     // an autosave burst appends and deletes in save order.
@@ -1304,7 +1313,7 @@ async fn push_draft(
                 {
                     eprintln!("could not adopt provisional draft {message_id}: {err}");
                 }
-                let _ = app.emit("messages-changed", account.id);
+                let _ = app.emit("messages-changed", MessagesChanged::reload(account.id));
             }
             Err(err) => eprintln!("drafts sync after save failed: {err}"),
         }
@@ -1331,7 +1340,7 @@ pub async fn discard_draft(
     };
     // LOCAL-FIRST: the card leaves the conversation and the list now.
     storage::messages::delete_by_message_id(&state.pool, account_id, &draft_message_id).await?;
-    let _ = app.emit("messages-changed", account_id);
+    let _ = app.emit("messages-changed", MessagesChanged::reload(account_id));
 
     // Behind the same FIFO lock as saves — a discard must never overtake
     // the push that is still appending the version it deletes.
@@ -1372,7 +1381,7 @@ async fn delete_draft_on_server(
     if result.is_ok() {
         match mail::sync::sync_mailbox(pool, account.id, &mut session, drafts).await {
             Ok(_) => {
-                let _ = app.emit("messages-changed", account.id);
+                let _ = app.emit("messages-changed", MessagesChanged::reload(account.id));
             }
             Err(err) => eprintln!("drafts sync after delete failed: {err}"),
         }
@@ -1558,7 +1567,7 @@ async fn load_body(
     )
     .await?;
     // why: the snippet just became real — lists should refresh.
-    app.emit("messages-changed", row.account_id)?;
+    app.emit("messages-changed", MessagesChanged::reload(row.account_id))?;
     Ok(LoadedBody {
         html: parsed.html,
         text: parsed.text,
@@ -1637,7 +1646,7 @@ pub async fn thread_bodies(
         let _ = session.logout().await;
         fetched?;
         // why: snippets just became real — lists should refresh.
-        app.emit("messages-changed", account_id)?;
+        app.emit("messages-changed", MessagesChanged::reload(account_id))?;
     }
 
     let policy = storage::settings::remote_image_policy(&state.pool).await?;
