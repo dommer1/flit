@@ -1,0 +1,12 @@
+-- The list query opens with "the rows of this folder, newest first", and
+-- until now nothing indexed that: SQLite scanned all 96,910 cached rows and
+-- sorted them in a temp b-tree on every mailbox switch and every sync event.
+--
+-- id is in the key because the list breaks date ties by id, so the index can
+-- satisfy the whole ORDER BY without a sort.
+--
+-- why not also (account_id, mailbox, date): measured, it takes the unified
+-- inbox from 13 ms to 2 ms — real, but not worth a second index to maintain
+-- on every insert, and inserts are exactly where the write lock is held
+-- (see storage::WRITE_LOCK).
+CREATE INDEX idx_messages_mailbox_date ON messages (mailbox, date DESC, id DESC);

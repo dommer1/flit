@@ -375,8 +375,21 @@ pub async fn list(
 /// thread, so each groups under a synthetic key only it can match.
 /// why COUNT(DISTINCT mkey): servers list one RFC message in several folders
 /// (Gmail's All Mail, aliased Sent) — copies share a Message-ID and must
-/// count once. Stats come from one GROUP BY pass instead of two correlated
-/// subqueries per row, which re-scanned the whole account for every row.
+/// count once.
+///
+/// why the page is built before the stats: an earlier shape grouped every
+/// cached message first and joined the folder's rows onto that. On a real
+/// mailbox that meant computing stats for 49,487 conversations to show the
+/// inbox's 33 — 197 ms, of which 184 ms was that one grouping, on every
+/// mailbox switch and every sync event. Narrowing to the folder first and
+/// then looking up only those conversations' members returns byte-identical
+/// rows in 13 ms. Verified against a copy of a 96,910-message database
+/// across the unified inbox, a single account's inbox, Sent and All Mail.
+///
+/// Still slow on a folder that is itself huge: Gmail's "All Mail" with
+/// 45,119 conversations takes ~80 s either way, because the page is then
+/// nearly the whole account. Bounding that needs the sort key — which is
+/// the thread's date, not the row's — and is tracked separately.
 pub async fn list_threaded(
     pool: &SqlitePool,
     account_id: Option<i64>,
@@ -385,15 +398,43 @@ pub async fn list_threaded(
 ) -> Result<Vec<MessageHeader>, AppError> {
     let _t = timing::start("storage::list_threaded");
     let rows = sqlx::query_as(
-        r#"WITH visible AS (
-             SELECT t.account_id,
-                    COALESCE(t.thread_key, 'row:' || t.id) AS tkey,
+        r#"WITH ranked AS (
+             SELECT m.*, ROW_NUMBER() OVER (
+                      PARTITION BY m.account_id, COALESCE(m.thread_key, 'row:' || m.id)
+                      ORDER BY m.date DESC, m.id DESC
+                    ) AS rn
+             FROM messages m
+             WHERE m.mailbox = ?2 AND (?1 IS NULL OR m.account_id = ?1)
+           ),
+           -- One row per conversation, already narrowed to this folder.
+           page AS (SELECT * FROM ranked WHERE rn = 1),
+           -- Thread members, gathered per conversation ON THE PAGE rather
+           -- than by scanning every cached message. The two branches exist so
+           -- the join is a plain equality the (account_id, thread_key) index
+           -- can serve — folded into one with OR, SQLite gives up on the
+           -- index and drives the join from a full table scan instead.
+           visible AS (
+             SELECT p.account_id AS account_id, p.thread_key AS tkey,
                     COALESCE(NULLIF(t.message_id_hdr, ''), 'row:' || t.id) AS mkey,
                     t.date, t.read, t.has_attachments,
                     (COALESCE(b.role, '') = 'drafts') AS is_draft
-             FROM messages t
+             FROM page p
+             CROSS JOIN messages t
+               ON t.account_id = p.account_id AND t.thread_key = p.thread_key
              LEFT JOIN mailboxes b ON b.account_id = t.account_id AND b.name = t.mailbox
-             WHERE COALESCE(b.role, '') NOT IN ('trash', 'junk')
+             WHERE p.thread_key IS NOT NULL
+               AND COALESCE(b.role, '') NOT IN ('trash', 'junk')
+             UNION ALL
+             -- A row without a Message-ID can never thread, so it is its own
+             -- conversation and needs no lookup at all.
+             SELECT p.account_id, 'row:' || p.id,
+                    COALESCE(NULLIF(p.message_id_hdr, ''), 'row:' || p.id),
+                    p.date, p.read, p.has_attachments,
+                    (COALESCE(b.role, '') = 'drafts')
+             FROM page p
+             LEFT JOIN mailboxes b ON b.account_id = p.account_id AND b.name = p.mailbox
+             WHERE p.thread_key IS NULL
+               AND COALESCE(b.role, '') NOT IN ('trash', 'junk')
            ),
            stats AS (
              -- Drafts only feed the has-draft flag: an unsent reply is not
@@ -406,14 +447,6 @@ pub async fn list_threaded(
                     MAX(is_draft) AS thread_has_draft
              FROM visible
              GROUP BY account_id, tkey
-           ),
-           ranked AS (
-             SELECT m.*, ROW_NUMBER() OVER (
-                      PARTITION BY m.account_id, COALESCE(m.thread_key, 'row:' || m.id)
-                      ORDER BY m.date DESC, m.id DESC
-                    ) AS rn
-             FROM messages m
-             WHERE m.mailbox = ?2 AND (?1 IS NULL OR m.account_id = ?1)
            )
            SELECT r.id, r.account_id, r.mailbox, r.from_addr AS "from", r.to_addr AS "to",
                   r.cc_addr AS cc, r.reply_to_addr AS reply_to, r.bcc_addr AS bcc,
@@ -423,10 +456,10 @@ pub async fn list_threaded(
                   COALESCE(r.message_id_hdr, '') AS message_id,
                   r.references_hdr AS "references",
                   s.thread_count, s.thread_unread, s.thread_has_draft
-           FROM ranked r
+           FROM page r
            JOIN stats s ON s.account_id = r.account_id
                        AND s.tkey = COALESCE(r.thread_key, 'row:' || r.id)
-           WHERE r.rn = 1 ORDER BY date DESC, r.id DESC LIMIT ?3"#,
+           ORDER BY date DESC, r.id DESC LIMIT ?3"#,
     )
     .bind(account_id)
     .bind(mailbox)
