@@ -91,9 +91,25 @@ fn tokenize(input: &str) -> Vec<String> {
 /// payload — the full match set stays in SQLite.
 const RESULT_LIMIT: i64 = 200;
 
+/// How many matched rows the dedup pass looks at, before it collapses them
+/// to at most `RESULT_LIMIT` messages.
+///
+/// why bounded at all: the copies of one message can only be found by
+/// comparing rows, and comparing every row a broad query matches is what
+/// made this slow — ranking all matches of `from:a` on a 97k-message cache
+/// took 2.5 s against 8 ms for the plain query. Ranking a fixed window of
+/// the newest matches instead costs 56 ms there, and 32 ms on a real
+/// `from:` search.
+///
+/// why 5×: copies of a message carry the same date, so they land in the
+/// same window; five folders per message is already more than Gmail's
+/// inbox + All Mail + Important + label. A message duplicated beyond that
+/// only costs the search a few rows of its 200, never a wrong result.
+const CANDIDATE_LIMIT: i64 = RESULT_LIMIT * 5;
+
 /// Run a parsed query against the cache. `account_id = None` searches all
 /// accounts (unified inbox); operators filter columns, free text goes to the
-/// FTS5 index. Newest first.
+/// FTS5 index. Newest first, one row per message.
 pub async fn search(
     pool: &SqlitePool,
     account_id: Option<i64>,
@@ -107,25 +123,68 @@ pub async fn search(
     // but "after:2026-07-10" means the user's own day. SQLite reads the bare
     // date as local time and shifts it to the UTC instant that day begins at,
     // using the OS zone rules for THAT date — so the boundary follows DST.
+    //
+    // why the dedup pass: a search spans every folder, and an IMAP server
+    // files one RFC message in several — Gmail's labels are folders, so a
+    // mail in the inbox is also in All Mail, Important and each of its
+    // labels. Measured on a real cache: 67,533 of 97,782 rows were copies,
+    // which is why one hit showed up four times in the result list. The
+    // folder lists never saw this: they are scoped to one folder.
+    //
+    // why the dedup only looks at the matched rows, not the whole table:
+    // an `in:` search must still show that folder's copy — if the ranking
+    // could reach outside the match set it would drop the archived copy in
+    // favour of an inbox copy the user did not ask for, and return nothing.
     let rows = sqlx::query_as(
-        r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
+        r#"WITH candidates AS (
+             SELECT * FROM messages
+             WHERE (?1 IS NULL OR account_id = ?1)
+               AND (?2 IS NULL OR from_addr LIKE '%' || ?2 || '%' ESCAPE '\')
+               AND (?3 IS NULL OR to_addr LIKE '%' || ?3 || '%' ESCAPE '\'
+                              OR cc_addr LIKE '%' || ?3 || '%' ESCAPE '\')
+               AND (?4 IS NULL OR subject LIKE '%' || ?4 || '%' ESCAPE '\')
+               AND (?5 IS NULL OR read = ?5)
+               AND (?6 IS NULL OR date >= strftime('%Y-%m-%dT%H:%M:%SZ', ?6, 'utc'))
+               AND (?7 IS NULL OR date < strftime('%Y-%m-%dT%H:%M:%SZ', ?7, 'utc'))
+               AND (?8 IS NULL OR mailbox = ?8 COLLATE NOCASE)
+               AND (?9 IS NULL OR id IN
+                    (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?9))
+             ORDER BY date DESC
+             LIMIT ?10
+           ),
+           -- One row per message: copies share a Message-ID within an
+           -- account, and the copy in the most meaningful folder speaks for
+           -- them — the folder the user thinks of the mail as living in, and
+           -- the one where opening it and acting on it does what they mean.
+           -- A row whose sender set no Message-ID can never be matched to
+           -- another row, so it stands alone under a key only it can have.
+           deduped AS (
+             SELECT c.*, ROW_NUMBER() OVER (
+                      PARTITION BY c.account_id,
+                                   COALESCE(NULLIF(c.message_id_hdr, ''), 'row:' || c.id)
+                      ORDER BY CASE COALESCE(b.role, '')
+                                 WHEN 'inbox' THEN 0
+                                 WHEN 'sent' THEN 1
+                                 WHEN 'drafts' THEN 2
+                                 WHEN 'archive' THEN 3
+                                 WHEN 'all' THEN 4
+                                 WHEN 'junk' THEN 6
+                                 WHEN 'trash' THEN 7
+                                 ELSE 5
+                               END, c.id
+                    ) AS rn
+             FROM candidates c
+             LEFT JOIN mailboxes b
+               ON b.account_id = c.account_id AND b.name = c.mailbox
+           )
+           SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
                   reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read, has_attachments,
                   COALESCE(message_id_hdr, '') AS message_id,
                   references_hdr AS "references"
-           FROM messages
-           WHERE (?1 IS NULL OR account_id = ?1)
-             AND (?2 IS NULL OR from_addr LIKE '%' || ?2 || '%' ESCAPE '\')
-             AND (?3 IS NULL OR to_addr LIKE '%' || ?3 || '%' ESCAPE '\'
-                            OR cc_addr LIKE '%' || ?3 || '%' ESCAPE '\')
-             AND (?4 IS NULL OR subject LIKE '%' || ?4 || '%' ESCAPE '\')
-             AND (?5 IS NULL OR read = ?5)
-             AND (?6 IS NULL OR date >= strftime('%Y-%m-%dT%H:%M:%SZ', ?6, 'utc'))
-             AND (?7 IS NULL OR date < strftime('%Y-%m-%dT%H:%M:%SZ', ?7, 'utc'))
-             AND (?8 IS NULL OR mailbox = ?8 COLLATE NOCASE)
-             AND (?9 IS NULL OR id IN
-                  (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?9))
+           FROM deduped
+           WHERE rn = 1
            ORDER BY date DESC
-           LIMIT ?10"#,
+           LIMIT ?11"#,
     )
     .bind(account_id)
     .bind(query.from.as_deref().map(escape_like))
@@ -136,6 +195,7 @@ pub async fn search(
     .bind(query.before.as_deref())
     .bind(query.mailbox.as_deref())
     .bind(fts_match_expr(&query.text))
+    .bind(CANDIDATE_LIMIT)
     .bind(RESULT_LIMIT)
     .fetch_all(pool)
     .await?;
@@ -245,6 +305,224 @@ mod tests {
             .into_iter()
             .map(|m| m.subject)
             .collect()
+    }
+
+    /// One folder's copy of a message: the same RFC message filed under two
+    /// Gmail labels is two rows sharing a Message-ID.
+    async fn insert_copy(
+        pool: &SqlitePool,
+        account_id: i64,
+        uid: i64,
+        mailbox: &str,
+        message_id: &str,
+        subject: &str,
+        date: &str,
+    ) {
+        sqlx::query(
+            "INSERT INTO messages
+               (account_id, mailbox, uid, uid_validity, from_addr, subject, date, message_id_hdr)
+             VALUES (?, ?, ?, 1, 'm.gasparek@example.com', ?, ?, ?)",
+        )
+        .bind(account_id)
+        .bind(mailbox)
+        .bind(uid)
+        .bind(subject)
+        .bind(date)
+        .bind(message_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn folders(pool: &SqlitePool, account_id: i64, folders: &[(&str, Option<&str>)]) {
+        let discovered: Vec<_> = folders
+            .iter()
+            .map(
+                |(name, role)| crate::storage::mailboxes::DiscoveredMailbox {
+                    name: name.to_string(),
+                    role: role.map(str::to_string),
+                },
+            )
+            .collect();
+        crate::storage::mailboxes::replace(pool, account_id, &discovered)
+            .await
+            .unwrap();
+    }
+
+    async fn mailboxes_for(pool: &SqlitePool, input: &str) -> Vec<String> {
+        search(pool, None, &parse_query(input))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.mailbox)
+            .collect()
+    }
+
+    /// Gmail files one message under every label it carries, so a flat
+    /// search across folders saw the same mail four times.
+    #[tokio::test]
+    async fn folder_copies_of_one_message_collapse_to_a_single_hit() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Work").await;
+        folders(
+            &pool,
+            id,
+            &[
+                ("INBOX", Some("inbox")),
+                ("[Gmail]/All Mail", Some("all")),
+                ("[Gmail]/Important", None),
+            ],
+        )
+        .await;
+        for (uid, mailbox) in [
+            (1, "[Gmail]/All Mail"),
+            (2, "[Gmail]/Important"),
+            (3, "INBOX"),
+        ] {
+            insert_copy(
+                &pool,
+                id,
+                uid,
+                mailbox,
+                "abc@example.com",
+                "kontrola",
+                "2026-09-03T05:27:45Z",
+            )
+            .await;
+        }
+
+        // One row per real message, and the inbox copy represents it — that
+        // is the folder the user thinks of the mail as living in.
+        assert_eq!(mailboxes_for(&pool, "gasparek").await, vec!["INBOX"]);
+        assert_eq!(mailboxes_for(&pool, "from:gasparek").await, vec!["INBOX"]);
+    }
+
+    /// Ranking, not row order: the archived copy wins over a bare label even
+    /// when the label's row was cached first.
+    #[tokio::test]
+    async fn the_most_meaningful_folder_represents_the_message() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Work").await;
+        folders(
+            &pool,
+            id,
+            &[
+                ("[Gmail]/Important", None),
+                ("[Gmail]/All Mail", Some("all")),
+                ("[Gmail]/Trash", Some("trash")),
+            ],
+        )
+        .await;
+        insert_copy(
+            &pool,
+            id,
+            1,
+            "[Gmail]/Trash",
+            "abc@x.sk",
+            "kontrola",
+            "2026-09-03T05:27:45Z",
+        )
+        .await;
+        insert_copy(
+            &pool,
+            id,
+            2,
+            "[Gmail]/Important",
+            "abc@x.sk",
+            "kontrola",
+            "2026-09-03T05:27:45Z",
+        )
+        .await;
+        insert_copy(
+            &pool,
+            id,
+            3,
+            "[Gmail]/All Mail",
+            "abc@x.sk",
+            "kontrola",
+            "2026-09-03T05:27:45Z",
+        )
+        .await;
+
+        assert_eq!(
+            mailboxes_for(&pool, "gasparek").await,
+            vec!["[Gmail]/All Mail"]
+        );
+    }
+
+    /// The dedup looks only at the rows a search actually matched, so a
+    /// folder-scoped search still shows that folder's copy.
+    #[tokio::test]
+    async fn a_folder_scoped_search_keeps_that_folders_copy() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Work").await;
+        folders(
+            &pool,
+            id,
+            &[("INBOX", Some("inbox")), ("[Gmail]/All Mail", Some("all"))],
+        )
+        .await;
+        insert_copy(
+            &pool,
+            id,
+            1,
+            "INBOX",
+            "abc@x.sk",
+            "kontrola",
+            "2026-09-03T05:27:45Z",
+        )
+        .await;
+        insert_copy(
+            &pool,
+            id,
+            2,
+            "[Gmail]/All Mail",
+            "abc@x.sk",
+            "kontrola",
+            "2026-09-03T05:27:45Z",
+        )
+        .await;
+
+        assert_eq!(
+            mailboxes_for(&pool, "in:\"[Gmail]/All Mail\" gasparek").await,
+            vec!["[Gmail]/All Mail"]
+        );
+    }
+
+    /// Same subject, different messages — a thread is not a duplicate.
+    #[tokio::test]
+    async fn distinct_messages_are_never_merged() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Work").await;
+        folders(&pool, id, &[("INBOX", Some("inbox"))]).await;
+        insert_copy(
+            &pool,
+            id,
+            1,
+            "INBOX",
+            "one@x.sk",
+            "kontrola",
+            "2026-09-03T05:00:00Z",
+        )
+        .await;
+        insert_copy(
+            &pool,
+            id,
+            2,
+            "INBOX",
+            "two@x.sk",
+            "kontrola",
+            "2026-09-03T06:00:00Z",
+        )
+        .await;
+        // A message whose sender set no Message-ID can never be matched to
+        // another row, so both such rows stand on their own.
+        sqlx::query("UPDATE messages SET message_id_hdr = '' WHERE uid IN (1, 2)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(mailboxes_for(&pool, "gasparek").await.len(), 2);
     }
 
     #[tokio::test]
