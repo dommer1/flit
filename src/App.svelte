@@ -104,6 +104,11 @@
   let visibleLimit = $state(LIST_PAGE);
   // Whole-view totals + backfill progress; null while a search is active.
   let listStatus = $state<ViewStatus | null>(null);
+  // Whether `messages` currently holds search hits rather than a folder's
+  // rows — a search hit is a row for one message, not for its thread, so
+  // the reading pane must open that message rather than the thread's
+  // newest (which is what a folder row stands for).
+  let showingSearchHits = $state(false);
 
   function handleLoadMore() {
     // Fires repeatedly while the user sits near the bottom — bump once and
@@ -746,6 +751,7 @@
       // Search results are their own universe — whole-view totals and the
       // load-more trigger don't apply to them.
       listStatus = null;
+      showingSearchHits = true;
       markPaint("list.paint");
       return;
     }
@@ -757,6 +763,7 @@
     );
     messages = withoutPending(list);
     listStatus = status;
+    showingSearchHits = false;
     // why here: the assignment above is what re-renders the rows, so the
     // frame that follows it is the list's render cost.
     markPaint("list.paint");
@@ -1057,6 +1064,7 @@
       <MessageView
         message={selectedMessage}
         selectedCount={visibleSelection.ids.length}
+        focusSelected={showingSearchHits}
         {accountEmails}
         {accountColors}
         {threadOrder}

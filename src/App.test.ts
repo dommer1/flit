@@ -761,6 +761,48 @@ it("clearing the search restores the plain list", async () => {
   expect(api.searchMessages).toHaveBeenCalledTimes(1);
 });
 
+it("opens the search hit that was clicked, not the newest of its thread", async () => {
+  // The clicked hit's own id (999) is deliberately absent from the thread —
+  // the server-side-copy dedup situation — so only its Message-ID finds it.
+  vi.mocked(api.searchMessages).mockResolvedValueOnce([
+    { ...allMessages[1], id: 999, messageId: "old@x", snippet: "older hit" },
+  ]);
+  vi.mocked(api.listThread).mockResolvedValueOnce([
+    { ...allMessages[1], id: 50, messageId: "old@x" },
+    { ...allMessages[1], id: 51, messageId: "new@x", date: "2026-07-09T00:00:00Z" },
+  ]);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    50: {
+      html: null,
+      text: "older body",
+      quotedText: null,
+      blockedImages: 0,
+      canLoadRemote: false,
+      attachments: [],
+      auth: null,
+      senderAnomaly: null,
+    },
+    51: {
+      html: null,
+      text: "newer body",
+      quotedText: null,
+      blockedImages: 0,
+      canLoadRemote: false,
+      attachments: [],
+      auth: null,
+      senderAnomaly: null,
+    },
+  });
+
+  render(App);
+  await screen.findByText("Weekend plans");
+  await typeIntoSearch("invoice");
+  await fireEvent.click(await screen.findByText("Re: Invoice"));
+
+  expect(await screen.findByText("older body")).toBeInTheDocument();
+  expect(screen.queryByText("newer body")).not.toBeInTheDocument();
+});
+
 it("scopes the search to the selected account", async () => {
   render(App);
   await screen.findByText("Weekend plans");
