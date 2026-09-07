@@ -212,7 +212,7 @@
   }
 </script>
 
-<section class="card" class:last>
+<section class="card" class:last data-message-id={message.id}>
   {#if expanded && !trustDismissed && (shown?.senderAnomaly || failedChecks.length > 0)}
     <!-- Full-width strip above the header; .card's overflow:hidden clips it
          to the rounded corners. Dismissal is per card instance only — the

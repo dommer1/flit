@@ -517,6 +517,73 @@ it("falls back to the newest message when the clicked one is not in the thread",
   expect(await screen.findByText("their answer in full")).toBeInTheDocument();
 });
 
+it("scrolls the focused message's card into view", async () => {
+  const scrolled: Element[] = [];
+  const spy = vi
+    .spyOn(Element.prototype, "scrollIntoView")
+    .mockImplementation(function (this: Element) {
+      scrolled.push(this);
+    });
+
+  vi.mocked(api.listThread).mockResolvedValueOnce(searchConversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(searchConversationBodies);
+
+  renderView({
+    message: { ...message, id: 999, messageId: "m1@x" },
+    focusSelected: true,
+  });
+
+  await screen.findByText("the original in full");
+  // The card is empty on the first pass and only grows once its body lands,
+  // so the scroll that counts is the one after bodies resolve.
+  await waitFor(() => expect(scrolled.length).toBeGreaterThan(0));
+  expect((scrolled.at(-1) as HTMLElement).dataset.messageId).toBe("101");
+
+  spy.mockRestore();
+});
+
+it("does not scroll again when the same conversation just refreshes", async () => {
+  const scrolled: Element[] = [];
+  const spy = vi
+    .spyOn(Element.prototype, "scrollIntoView")
+    .mockImplementation(function (this: Element) {
+      scrolled.push(this);
+    });
+
+  vi.mocked(api.listThread).mockResolvedValueOnce(searchConversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(searchConversationBodies);
+
+  const { rerender } = renderView({
+    message: { ...message, id: 999, messageId: "m1@x" },
+    focusSelected: true,
+  });
+  await screen.findByText("the original in full");
+  await waitFor(() => expect(scrolled.length).toBeGreaterThan(0));
+  scrolled.length = 0;
+
+  const grown = [
+    ...searchConversation,
+    { ...message, id: 104, messageId: "m4@x", snippet: "a later reply" },
+  ];
+  vi.mocked(api.listThread).mockResolvedValueOnce(grown);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    ...searchConversationBodies,
+    104: body({ text: "a later reply in full" }),
+  });
+
+  // Same message id — a refresh of the same conversation, not a fresh
+  // selection — must not reset the open card or scroll again.
+  await rerender({ message: { ...message, id: 999, messageId: "m1@x" } });
+
+  // The new reply lands as a collapsed preview — the open card stays the
+  // one the user was reading, not whatever just arrived.
+  expect(await screen.findByText("a later reply")).toBeInTheDocument();
+  expect(screen.getByText("the original in full")).toBeInTheDocument();
+  expect(scrolled).toHaveLength(0);
+
+  spy.mockRestore();
+});
+
 // ── Drafts in the conversation ─────────────────────────────────────────
 
 const conversationWithDraft: MessageHeader[] = [

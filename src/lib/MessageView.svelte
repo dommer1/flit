@@ -52,6 +52,10 @@
   // why plain: only steers whether a reload resets the open state — nothing
   // renders from it.
   let anchorId: number | null = null;
+  // The pane's scroll container, and the card (if any) to scroll into view
+  // once it has grown to its final size.
+  let threadEl = $state<HTMLDivElement | null>(null);
+  let scrollTargetId = $state<number | null>(null);
 
   $effect(() => {
     if (message === null) {
@@ -59,6 +63,7 @@
       bodies = {};
       expandedIds = new Set();
       anchorId = null;
+      scrollTargetId = null;
       return;
     }
     const id = message.id;
@@ -72,9 +77,13 @@
           // newest, for an ordinary folder row), load all bodies.
           anchorId = id;
           bodies = {};
-          openMessage(
-            focusSelected ? anchorMessage(thread, fallback) : newestMessage(thread),
-          );
+          const anchor = focusSelected
+            ? anchorMessage(thread, fallback)
+            : newestMessage(thread);
+          openMessage(anchor);
+          // Only a focused selection needs to scroll anywhere — an ordinary
+          // folder row's newest card is unconditionally the one just opened.
+          scrollTargetId = focusSelected ? anchor.id : null;
           fetchBodies(id);
         } else if (thread.some((entry) => !(entry.id in bodies))) {
           // Same conversation refreshed and grew (a reply just synced in) —
@@ -90,10 +99,23 @@
             anchorId = id;
             bodies = {};
             openMessage(fallback);
+            scrollTargetId = null;
             fetchBodies(id);
           }
         }
       });
+  });
+
+  // Scroll the focused card into view once its body has landed — it starts
+  // out empty and grows to full height only then, so scrolling any earlier
+  // would leave the pane short of where the card ends up.
+  $effect(() => {
+    if (scrollTargetId === null || bodiesLoading) return;
+    const id = scrollTargetId;
+    threadEl
+      ?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+    scrollTargetId = null;
   });
 
   function fetchBodies(anchor: number) {
@@ -190,7 +212,7 @@
         : "Select a message"}
     </p>
   {:else}
-    <div class="thread">
+    <div class="thread" bind:this={threadEl}>
       <div class="stack">
         <div class="thread-head">
           <h2 class="subject">{message.subject}</h2>
