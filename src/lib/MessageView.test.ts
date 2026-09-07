@@ -425,6 +425,98 @@ it("opens a reply draft for the message whose card action was clicked", async ()
   );
 });
 
+// ── Focusing a specific message (search hits) ──────────────────────────
+//
+// A search result is a row for one message, not for its thread — clicking
+// it should open that message, not whichever is newest. The clicked row's
+// own id is often not even present in the thread (server-side copies of one
+// RFC message are deduped by Message-ID on the backend, and the copy that
+// survives can be a different folder's row), so the match has to go through
+// `messageId`, with the row `id` as a fallback and "newest" as the last
+// resort — never `focusSelected` on by default, so ordinary folder browsing
+// is untouched.
+
+const searchConversation: MessageHeader[] = [
+  { ...message, id: 101, messageId: "m1@x", snippet: "the original", read: false },
+  {
+    ...message,
+    id: 102,
+    messageId: "m2@x",
+    from: "Me <me@example.com>",
+    mailbox: "Sent",
+    snippet: "my reply",
+    read: true,
+  },
+  { ...message, id: 103, messageId: "m3@x", snippet: "their answer", read: false },
+];
+
+const searchConversationBodies = {
+  101: body({ text: "the original in full" }),
+  102: body({ text: "my reply in full" }),
+  103: body({ text: "their answer in full" }),
+};
+
+it("opens the clicked message, not the newest, when focusSelected is set", async () => {
+  vi.mocked(api.setMessageRead).mockClear();
+  vi.mocked(api.listThread).mockResolvedValueOnce(searchConversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(searchConversationBodies);
+
+  // The clicked row's id (999) is deliberately absent from the thread — the
+  // dedup situation — so only messageId can find it.
+  renderView({
+    message: { ...message, id: 999, messageId: "m1@x" },
+    focusSelected: true,
+  });
+
+  expect(await screen.findByText("the original in full")).toBeInTheDocument();
+  expect(screen.queryByText("their answer in full")).not.toBeInTheDocument();
+  expect(api.setMessageRead).toHaveBeenCalledWith(101, true);
+  expect(api.setMessageRead).not.toHaveBeenCalledWith(103, true);
+});
+
+it("still opens the newest message when focusSelected is not set", async () => {
+  vi.mocked(api.listThread).mockResolvedValueOnce(searchConversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(searchConversationBodies);
+
+  renderView({ message: { ...message, id: 101, messageId: "m1@x" } });
+
+  expect(await screen.findByText("their answer in full")).toBeInTheDocument();
+  expect(screen.queryByText("the original in full")).not.toBeInTheDocument();
+});
+
+it("does not let a blank messageId match another blank messageId", async () => {
+  const blankIdConversation: MessageHeader[] = [
+    { ...message, id: 201, messageId: "", snippet: "the original", read: true },
+    { ...message, id: 202, messageId: "", snippet: "their answer", read: false },
+  ];
+  vi.mocked(api.listThread).mockResolvedValueOnce(blankIdConversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce({
+    201: body({ text: "the original in full" }),
+    202: body({ text: "their answer in full" }),
+  });
+
+  renderView({
+    message: { ...message, id: 201, messageId: "" },
+    focusSelected: true,
+  });
+
+  // Falls through to the id match (201), not a spurious messageId match.
+  expect(await screen.findByText("the original in full")).toBeInTheDocument();
+  expect(screen.queryByText("their answer in full")).not.toBeInTheDocument();
+});
+
+it("falls back to the newest message when the clicked one is not in the thread", async () => {
+  vi.mocked(api.listThread).mockResolvedValueOnce(searchConversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(searchConversationBodies);
+
+  renderView({
+    message: { ...message, id: 999, messageId: "gone@x" },
+    focusSelected: true,
+  });
+
+  expect(await screen.findByText("their answer in full")).toBeInTheDocument();
+});
+
 // ── Drafts in the conversation ─────────────────────────────────────────
 
 const conversationWithDraft: MessageHeader[] = [
@@ -444,6 +536,22 @@ const draftBodies = {
   1: body({ text: "the original in full" }),
   9: body({ text: "half-written answer in full" }),
 };
+
+it("never anchors a focused selection on a draft", async () => {
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversationWithDraft);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(draftBodies);
+
+  // The draft's own id (9) is what a click landed on — a draft card renders
+  // expanded regardless (see the badge test below), so the only way to see
+  // whether it was chosen as the anchor is whether the OTHER card opens: if
+  // the draft had won, id 1 would sit collapsed as a snippet, not its body.
+  renderView({
+    message: { ...message, id: 9, messageId: "" },
+    focusSelected: true,
+  });
+
+  expect(await screen.findByText("the original in full")).toBeInTheDocument();
+});
 
 it("badges a saved draft and shows its full text without a click", async () => {
   vi.mocked(api.listThread).mockResolvedValueOnce(conversationWithDraft);
