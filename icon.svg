@@ -35,11 +35,19 @@
       <stop offset="1" stop-color="#e9e0fb"/>
     </linearGradient>
   </defs>
-  <path class="st1" d="M228,0c112,0,152,6,188,42s40,76,40,186-4,150-40,186-76,42-188,42-152-6-188-42S0,338,0,228,4,78,40,42,116,0,228,0Z"/>
-  <path class="st2" d="M76,321h96"/>
-  <path class="st2" d="M54,267h74"/>
-  <path class="st2" d="M90,375h60"/>
-  <path class="st0" d="M416,109L160,253l70,40,186-184Z"/>
-  <path class="st4" d="M416,109l-174,198,108,62,66-260Z"/>
-  <path class="st3" d="M416,109l-186,184,12,76,40-56,134-204Z"/>
+  <!-- why: Apple's macOS icon template insets the squircle ~10% from the
+       canvas edge (e.g. Mail, Photos). Without this margin, Dock/Finder
+       compositing sometimes applies its own compensating shrink+shadow to
+       "full bleed" icons, and it does so inconsistently across displays
+       with different scale factors — this group bakes in that margin so
+       the OS renders our icon as-is. -->
+  <g transform="translate(44.53125, 44.53125) scale(0.8046875)">
+    <path class="st1" d="M228,0c112,0,152,6,188,42s40,76,40,186-4,150-40,186-76,42-188,42-152-6-188-42S0,338,0,228,4,78,40,42,116,0,228,0Z"/>
+    <path class="st2" d="M76,321h96"/>
+    <path class="st2" d="M54,267h74"/>
+    <path class="st2" d="M90,375h60"/>
+    <path class="st0" d="M416,109L160,253l70,40,186-184Z"/>
+    <path class="st4" d="M416,109l-174,198,108,62,66-260Z"/>
+    <path class="st3" d="M416,109l-186,184,12,76,40-56,134-204Z"/>
+  </g>
 </svg>
