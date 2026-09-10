@@ -45,11 +45,32 @@ A minimal, privacy-first desktop email client for macOS (multiplatform later), m
 | Rust lint | `cargo clippy -- -D warnings` (in `src-tauri/`) |
 | Rust format | `cargo fmt` (in `src-tauri/`) |
 | Regenerate app icons | `npm run tauri icon -- icon.svg` |
+| Regenerate the macOS 26+ Liquid Glass icon | `scripts/build-icon-assets-car.sh` |
 
 The app icon's source of truth is `icon.svg` in the repo root; everything under
 `src-tauri/icons/` is generated from it. Edit the SVG, never the PNGs. The
 generator also writes `icons/android/` and `icons/ios/` — gitignored, this is a
 desktop app.
+
+**macOS 26 (Tahoe) Liquid Glass icon:** `src-tauri/icons/AppIcon.icon/` is a
+separate, hand-authored Icon Composer source (foreground glyph only — no
+squircle/background, macOS composites that from `icon.json`'s
+`automatic-gradient` fill plus its own glass/shadow treatment). It compiles to
+`src-tauri/icons/AppIcon.car`, which `tauri.conf.json`'s `bundle.icon` lists
+directly — **not** the `.icon` source. Run
+`scripts/build-icon-assets-car.sh` after editing `AppIcon.icon/` and commit
+the regenerated `.car`.
+
+Why pre-built instead of letting Tauri compile it: Tauri (≥2.11) can compile a
+`.icon` source into `Assets.car` during `tauri build` via `actool`, but on
+this machine `actool` (invoked through the cargo/tauri-cli process tree)
+crashes deterministically with an internal `NSPlaceholderArray`/nil-object
+exception in `ibtoold`, its asset-compiler XPC daemon. The exact same
+`actool` invocation against the exact same files succeeds every time when run
+directly from an interactive shell (which is what the script does — it also
+kills any stale `ibtoold` first, another flaky-XPC-daemon symptom). Without
+the `.icns` fallback (`CFBundleIconFile`, still generated from `icon.svg`),
+pre-Tahoe macOS would show no icon at all.
 
 `npm run tauri` goes through `scripts/tauri.sh`, which loads `.env` (see
 `.env.example`) and signs macOS builds — dev binaries and release bundles alike
