@@ -259,9 +259,12 @@
 
   // The selected rows themselves — the toolbar needs their read state, and
   // the bulk commands their ids.
-  let selectedRows = $derived(
-    messages.filter((m) => visibleSelection.ids.includes(m.id)),
-  );
+  // why a Set: a shift-range can hold hundreds of ids, and an Array.includes
+  // per row would rescan it for every message in the list.
+  let selectedRows = $derived.by(() => {
+    const ids = new Set(visibleSelection.ids);
+    return messages.filter((m) => ids.has(m.id));
+  });
 
   /** A toolbar action covers the selection only once it holds more than one
    * row; a single row keeps the existing per-message commands. */
@@ -281,7 +284,8 @@
   // like the single-row path.
   function evictMessages(ids: number[], action: () => Promise<void>) {
     for (const id of ids) pendingEvictions.add(id);
-    messages = messages.filter((m) => !ids.includes(m.id));
+    const evicted = new Set(ids);
+    messages = messages.filter((m) => !evicted.has(m.id));
     selection = EMPTY_SELECTION;
     selectedMessageId = null;
     void action().then(
