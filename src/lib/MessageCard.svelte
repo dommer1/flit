@@ -180,6 +180,18 @@
     // (Re)attach to the current document: the srcdoc replaces the initial
     // about:blank document ("Load Images" swaps it again later), orphaning
     // anything bound to the previous document's body.
+    // Images currently carrying the `load` listener. why track them: every
+    // load re-runs hook(), and a document that survives it (the initial
+    // about:blank, or a load the observer already covered) would otherwise
+    // collect one more listener per run — and keep them past destroy.
+    let hookedImages: HTMLImageElement[] = [];
+    const unhookImages = () => {
+      for (const image of hookedImages) {
+        image.removeEventListener("load", size);
+      }
+      hookedImages = [];
+    };
+
     const hook = () => {
       size();
       bodyObserver?.disconnect();
@@ -190,7 +202,9 @@
       // document's load event — each late decode reflows the body, so every
       // finished image re-measures. Parent-attached listeners work without
       // any script running inside the frame.
-      for (const image of Array.from(doc?.images ?? [])) {
+      unhookImages();
+      hookedImages = Array.from(doc?.images ?? []);
+      for (const image of hookedImages) {
         image.addEventListener("load", size);
       }
     };
@@ -205,6 +219,8 @@
     frameObserver.observe(frame);
     return {
       destroy() {
+        frame.removeEventListener("load", hook);
+        unhookImages();
         bodyObserver?.disconnect();
         frameObserver.disconnect();
       },
