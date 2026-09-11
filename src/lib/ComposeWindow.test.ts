@@ -366,6 +366,45 @@ it("autosaves the draft after the idle window", async () => {
   }
 });
 
+it("autosaves after a formatting-only edit", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    accountId: 1,
+    to: "alice@example.com",
+    subject: "Lists",
+    body: "hello",
+  });
+  closeHandler = null;
+  render(ComposeWindow);
+  // why wait for the close handler: dirty tracking only starts once the
+  // whole mount sequence settled, and that handler is its last step.
+  await waitFor(() => expect(closeHandler).not.toBeNull());
+
+  // why: the toolbar focuses the editor on the next animation frame, and
+  // that frame runs Tiptap's scroll-into-view against jsdom, which lacks
+  // the geometry it needs — the focus is irrelevant here, so drop it.
+  const raf = vi
+    .spyOn(window, "requestAnimationFrame")
+    .mockImplementation(() => 0);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    // Bulleting the single paragraph changes the html rendering only —
+    // the plain text stays "hello".
+    await fireEvent.click(screen.getByRole("button", { name: "Bullet list" }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(api.saveDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "hello",
+        bodyHtml: expect.stringContaining("<ul"),
+      }),
+      null,
+    );
+  } finally {
+    vi.useRealTimers();
+    raf.mockRestore();
+  }
+});
+
 it("replaces the previous draft version on the next autosave", async () => {
   await renderLoaded();
 

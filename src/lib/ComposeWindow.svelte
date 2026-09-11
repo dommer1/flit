@@ -316,7 +316,9 @@
   const scheduleAutosave = debounce(() => void saveNow(), AUTOSAVE_MS);
 
   $effect(() => {
-    void [to, cc, bcc, subject, body, attachments, quote];
+    // why bodyHtml too: bold/list formatting changes the html rendering
+    // while the plain text stays put — it is an edit all the same.
+    void [to, cc, bcc, subject, body, bodyHtml, attachments, quote];
     if (!watching) return;
     dirty = true;
     everDirty = true;
