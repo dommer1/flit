@@ -1821,7 +1821,8 @@ pub async fn save_all_attachments(
         let path = unique_path(
             std::path::Path::new(&dir),
             &mail::parse::safe_filename(&meta.filename),
-        );
+        )
+        .await?;
         tokio::fs::write(&path, data).await?;
     }
     Ok(())
@@ -1829,19 +1830,30 @@ pub async fn save_all_attachments(
 
 /// `dir/name`, with " (n)" inserted before the extension while taken —
 /// Save All picks only a directory, so it must not silently overwrite.
-fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+///
+/// why async: `Path::exists` is a blocking stat, and this runs on the
+/// async executor inside a command; `tokio::fs::try_exists` yields
+/// instead, and reports a directory it cannot read rather than treating
+/// it as free.
+async fn unique_path(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, AppError> {
     let candidate = dir.join(name);
-    if !candidate.exists() {
-        return candidate;
+    if !tokio::fs::try_exists(&candidate).await? {
+        return Ok(candidate);
     }
     let (stem, ext) = match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
         _ => (name.to_string(), String::new()),
     };
-    (2..)
-        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
-        .find(|p| !p.exists())
-        .expect("unbounded counter always finds a free name")
+    // why a loop and not an iterator: `find` cannot await, and a loop that
+    // only leaves by returning needs no `expect` to convince the compiler.
+    let mut n = 2;
+    loop {
+        let numbered = dir.join(format!("{stem} ({n}){ext}"));
+        if !tokio::fs::try_exists(&numbered).await? {
+            return Ok(numbered);
+        }
+        n += 1;
+    }
 }
 
 // SECURITY: the single place message HTML is prepared for the frontend —
@@ -2469,6 +2481,42 @@ pub async fn close_settings(app: AppHandle) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unique_path_numbers_past_every_taken_name() {
+        let dir = std::env::temp_dir().join(format!("flit-unique-path-{}", std::process::id()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        assert_eq!(
+            unique_path(&dir, "report.pdf").await.unwrap(),
+            dir.join("report.pdf")
+        );
+
+        tokio::fs::write(dir.join("report.pdf"), b"").await.unwrap();
+        tokio::fs::write(dir.join("report (2).pdf"), b"")
+            .await
+            .unwrap();
+        assert_eq!(
+            unique_path(&dir, "report.pdf").await.unwrap(),
+            dir.join("report (3).pdf")
+        );
+
+        // No extension: the counter goes on the end.
+        tokio::fs::write(dir.join("README"), b"").await.unwrap();
+        assert_eq!(
+            unique_path(&dir, "README").await.unwrap(),
+            dir.join("README (2)")
+        );
+
+        // A dotfile keeps its name whole rather than becoming " (2).env".
+        tokio::fs::write(dir.join(".env"), b"").await.unwrap();
+        assert_eq!(
+            unique_path(&dir, ".env").await.unwrap(),
+            dir.join(".env (2)")
+        );
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
 
     #[test]
     fn progress_fires_once_then_waits_out_the_interval() {
