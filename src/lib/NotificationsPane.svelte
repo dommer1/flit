@@ -299,6 +299,6 @@
   .error {
     margin: 0;
     font-size: 12px;
-    color: #d9302c;
+    color: var(--danger);
   }
 </style>

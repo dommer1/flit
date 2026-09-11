@@ -384,6 +384,6 @@
     flex-shrink: 0;
     margin: 0;
     font-size: 12px;
-    color: #d9302c;
+    color: var(--danger);
   }
 </style>

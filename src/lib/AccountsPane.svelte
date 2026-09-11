@@ -366,7 +366,7 @@
   }
 
   .status.broken {
-    color: #d9302c;
+    color: var(--danger);
   }
 
   .status.unknown::before {
@@ -474,8 +474,8 @@
     background: linear-gradient(
       to top right,
       transparent 45%,
-      #d9302c 45%,
-      #d9302c 55%,
+      var(--danger) 45%,
+      var(--danger) 55%,
       transparent 55%
     );
   }
@@ -557,7 +557,7 @@
   }
 
   .remove:hover {
-    color: #d9302c;
+    color: var(--danger);
   }
 
   /* Keeps the primary row's columns aligned with deletable rows below. */
