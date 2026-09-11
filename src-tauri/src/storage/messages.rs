@@ -226,6 +226,38 @@ pub async fn backfill_threading(
     Ok(())
 }
 
+/// Recompute the snippets of every row with a body whose stored snippet
+/// matches `filter` (a SQL predicate over `snippet`), using the current
+/// `snippet_of` rules. Returns how many rows actually changed.
+///
+/// why the `snippet <> ?` guard: the LIKE filters below are broad on
+/// purpose (legit "&#" prose, fully-quoted bodies, "httpd" in a word), so
+/// most matches recompute to the very same string. Skipping those keeps
+/// the count honest and, more importantly, leaves the FTS index alone —
+/// every UPDATE of a snippet re-triggers it, even to an identical value.
+async fn backfill_snippets(pool: &SqlitePool, filter: &'static str) -> Result<u64, AppError> {
+    // why AssertSqlSafe: sqlx 0.9 only runs `&'static str` SQL unless told
+    // the string was audited. `filter` is `&'static str` too, so it can only
+    // be one of the literals written below — never user input.
+    let sql = sqlx::AssertSqlSafe(format!(
+        "SELECT id, body_text FROM messages WHERE body_text IS NOT NULL AND ({filter})"
+    ));
+    let stale: Vec<(i64, String)> = sqlx::query_as(sql).fetch_all(pool).await?;
+
+    let mut fixed = 0;
+    for (id, body_text) in stale {
+        let snippet = snippet_of(&body_text);
+        let changed = sqlx::query("UPDATE messages SET snippet = ? WHERE id = ? AND snippet <> ?")
+            .bind(&snippet)
+            .bind(id)
+            .bind(&snippet)
+            .execute(pool)
+            .await?;
+        fixed += changed.rows_affected();
+    }
+    Ok(fixed)
+}
+
 /// Recompute stored snippets that still carry a URL, using the current
 /// `snippet_of` rules. Runs once at startup: rows already cached by an older
 /// build kept the raw URL the parser now strips, and a re-fetch would never
@@ -234,24 +266,7 @@ pub async fn backfill_threading(
 /// so a second startup finds nothing to do.
 pub async fn backfill_url_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
     let _t = timing::start("storage::backfill_url_snippets");
-    let stale: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, body_text FROM messages
-         WHERE body_text IS NOT NULL AND snippet LIKE '%http%'",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let mut fixed = 0;
-    for (id, body_text) in stale {
-        let snippet = snippet_of(&body_text);
-        sqlx::query("UPDATE messages SET snippet = ? WHERE id = ?")
-            .bind(&snippet)
-            .bind(id)
-            .execute(pool)
-            .await?;
-        fixed += 1;
-    }
-    Ok(fixed)
+    backfill_snippets(pool, "snippet LIKE '%http%'").await
 }
 
 /// Recompute stored snippets that still carry quoted history ("Uhradené.
@@ -261,27 +276,12 @@ pub async fn backfill_url_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
 /// no-ops).
 pub async fn backfill_quoted_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
     let _t = timing::start("storage::backfill_quoted_snippets");
-    let stale: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, body_text FROM messages
-         WHERE body_text IS NOT NULL
-           AND (snippet LIKE '%> %' OR snippet LIKE '%wrote:%'
-                OR snippet LIKE '%napísal%' OR snippet LIKE '%Original Message%')",
+    backfill_snippets(
+        pool,
+        "snippet LIKE '%> %' OR snippet LIKE '%wrote:%'
+         OR snippet LIKE '%napísal%' OR snippet LIKE '%Original Message%'",
     )
-    .fetch_all(pool)
-    .await?;
-
-    let mut fixed = 0;
-    for (id, body_text) in stale {
-        let snippet = snippet_of(&body_text);
-        let changed = sqlx::query("UPDATE messages SET snippet = ? WHERE id = ? AND snippet <> ?")
-            .bind(&snippet)
-            .bind(id)
-            .bind(&snippet)
-            .execute(pool)
-            .await?;
-        fixed += changed.rows_affected();
-    }
-    Ok(fixed)
+    .await
 }
 
 /// Recompute stored snippets that still carry literal entity padding
@@ -291,28 +291,13 @@ pub async fn backfill_quoted_snippets(pool: &SqlitePool) -> Result<u64, AppError
 /// cheap no-ops).
 pub async fn backfill_entity_snippets(pool: &SqlitePool) -> Result<u64, AppError> {
     let _t = timing::start("storage::backfill_entity_snippets");
-    let stale: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, body_text FROM messages
-         WHERE body_text IS NOT NULL
-           AND (snippet LIKE '%&zwnj;%' OR snippet LIKE '%&zwj;%'
-                OR snippet LIKE '%&shy;%' OR snippet LIKE '%&nbsp;%'
-                OR snippet LIKE '%&#%')",
+    backfill_snippets(
+        pool,
+        "snippet LIKE '%&zwnj;%' OR snippet LIKE '%&zwj;%'
+         OR snippet LIKE '%&shy;%' OR snippet LIKE '%&nbsp;%'
+         OR snippet LIKE '%&#%'",
     )
-    .fetch_all(pool)
-    .await?;
-
-    let mut fixed = 0;
-    for (id, body_text) in stale {
-        let snippet = snippet_of(&body_text);
-        let changed = sqlx::query("UPDATE messages SET snippet = ? WHERE id = ? AND snippet <> ?")
-            .bind(&snippet)
-            .bind(id)
-            .bind(&snippet)
-            .execute(pool)
-            .await?;
-        fixed += changed.rows_affected();
-    }
-    Ok(fixed)
+    .await
 }
 
 /// Headers of one mailbox for one account — or across all accounts when
@@ -3199,5 +3184,61 @@ mod tests {
         let remaining = list(&pool, Some(id), "Archive", None).await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].subject, "Archived");
+    }
+
+    #[tokio::test]
+    async fn url_backfill_counts_only_rows_it_actually_changed() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(1, "stale", "2026-07-01T00:00:00Z", false),
+                header(2, "fine", "2026-07-02T00:00:00Z", false),
+            ],
+        )
+        .await
+        .unwrap();
+        let rows = list(&pool, Some(id), "INBOX", None).await.unwrap();
+        let (fine, stale) = (rows[0].id, rows[1].id);
+        // An older build kept the raw URL in the snippet.
+        let stale_body = "see https://example.com/x now";
+        set_body(
+            &pool,
+            stale,
+            Some(stale_body),
+            None,
+            stale_body,
+            &[],
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+        // Matches the LIKE filter, but the snippet is already what the
+        // current rules produce — it is only re-examined, never rewritten.
+        let fine_body = "httpd restarted fine";
+        set_body(
+            &pool,
+            fine,
+            Some(fine_body),
+            None,
+            fine_body,
+            &[],
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(backfill_url_snippets(&pool).await.unwrap(), 1);
+
+        let rows = list(&pool, Some(id), "INBOX", None).await.unwrap();
+        assert_eq!(rows[1].snippet, "see now");
+        assert_eq!(rows[0].snippet, fine_body);
+        // A second run finds the URL row corrected and the other unchanged.
+        assert_eq!(backfill_url_snippets(&pool).await.unwrap(), 0);
     }
 }
