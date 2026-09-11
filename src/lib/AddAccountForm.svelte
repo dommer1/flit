@@ -88,7 +88,7 @@
     gap: 0.2rem;
     flex: 1;
     font-size: 0.75rem;
-    color: #444;
+    color: var(--text-secondary);
   }
 
   .pair {
@@ -102,7 +102,7 @@
 
   input {
     padding: 0.375rem 0.5rem;
-    border: 1px solid #d4d4d4;
+    border: 1px solid var(--card-border-strong);
     border-radius: 0.375rem;
     font: inherit;
     color: inherit;
@@ -117,16 +117,18 @@
 
   button {
     padding: 0.375rem 0.875rem;
-    border: 1px solid #d4d4d4;
+    border: 1px solid var(--card-border-strong);
     border-radius: 0.375rem;
-    background: #fff;
+    background: var(--bg-card);
     font: inherit;
     cursor: pointer;
   }
 
+  /* why accent, not the old black: the other settings panes fill their
+     primary button with the accent, and black has no dark-mode reading. */
   button[type="submit"] {
-    background: #1a1a1a;
-    border-color: #1a1a1a;
-    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
   }
 </style>
