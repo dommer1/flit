@@ -61,12 +61,16 @@ let dropCallbacks: {
 type CloseEvent = { preventDefault: () => void };
 let closeHandler: ((event: CloseEvent) => Promise<void>) | null = null;
 const destroyWindow = vi.fn(async (): Promise<void> => undefined);
+const unlistenClose = vi.fn();
+/** Held open by a test to make the close listener register late. */
+let closeListenerReady: Promise<void> = Promise.resolve();
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     onCloseRequested: async (handler: (event: CloseEvent) => Promise<void>) => {
       closeHandler = handler;
-      return () => {};
+      await closeListenerReady;
+      return unlistenClose;
     },
     destroy: destroyWindow,
   }),
@@ -113,6 +117,7 @@ import ComposeWindow from "./ComposeWindow.svelte";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  closeListenerReady = Promise.resolve();
 });
 
 it("prefills the form from the parked draft", async () => {
@@ -345,6 +350,38 @@ it("shows the failure and stays open when queueing fails", async () => {
   expect(api.closeCompose).not.toHaveBeenCalled();
   expect(screen.getByLabelText("To")).toBeEnabled();
   expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+});
+
+it("unlistens a drop listener that registered after a fast close", async () => {
+  // The window is torn down while the listener registration is still in
+  // flight — the handle arriving afterwards must be released, not leaked.
+  const unlistenDrop = vi.fn();
+  let registerDrop!: (unlisten: () => void) => void;
+  vi.mocked(api.onFileDrop).mockReturnValueOnce(
+    new Promise<() => void>((resolve) => (registerDrop = resolve)),
+  );
+  const { unmount } = render(ComposeWindow);
+  await waitFor(() => expect(api.onFileDrop).toHaveBeenCalled());
+
+  unmount();
+  registerDrop(unlistenDrop);
+
+  await waitFor(() => expect(unlistenDrop).toHaveBeenCalled());
+});
+
+it("unlistens a close listener that registered after a fast close", async () => {
+  let registerClose!: () => void;
+  closeListenerReady = new Promise<void>(
+    (resolve) => (registerClose = resolve),
+  );
+  closeHandler = null;
+  const { unmount } = render(ComposeWindow);
+  await waitFor(() => expect(closeHandler).not.toBeNull());
+
+  unmount();
+  registerClose();
+
+  await waitFor(() => expect(unlistenClose).toHaveBeenCalled());
 });
 
 it("autosaves the draft after the idle window", async () => {

@@ -186,6 +186,10 @@
   onMount(() => {
     let unlisten: (() => void) | undefined;
     let unlistenClose: (() => void) | undefined;
+    // why: a listener can finish registering after the component is
+    // already gone — teardown would then see no handle and the listener
+    // would live on for the webview's life.
+    let destroyed = false;
     void (async () => {
       const [loadedAccounts, draft, loadedSignatures, loadedAliases] =
         await Promise.all([
@@ -252,11 +256,16 @@
       if (draft?.attachments?.length) {
         await addAttachments(draft.attachments.map((a) => a.path));
       }
-      unlisten = await onFileDrop({
+      const unlistenDrop = await onFileDrop({
         onHover: (hovering) => (dropHover = hovering),
         onDrop: (paths) => void addAttachments(paths),
       });
-      unlistenClose = await getCurrentWindow().onCloseRequested(
+      if (destroyed) {
+        unlistenDrop();
+        return;
+      }
+      unlisten = unlistenDrop;
+      const unlistenCloseRequested = await getCurrentWindow().onCloseRequested(
         async (event) => {
           if (sent || discarded) return;
           const message = currentMessage();
@@ -281,9 +290,15 @@
           await getCurrentWindow().destroy();
         },
       );
+      if (destroyed) {
+        unlistenCloseRequested();
+        return;
+      }
+      unlistenClose = unlistenCloseRequested;
       watching = true;
     })();
     return () => {
+      destroyed = true;
       unlisten?.();
       unlistenClose?.();
     };
