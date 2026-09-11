@@ -172,7 +172,7 @@
   .send {
     border-color: transparent;
     background: var(--accent);
-    color: #ffffff;
+    color: var(--on-accent);
   }
 
   .send:hover {

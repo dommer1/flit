@@ -149,18 +149,18 @@
 
   .check path {
     fill: none;
-    stroke: #ffffff;
+    stroke: var(--on-accent);
     stroke-width: 2;
     stroke-linecap: round;
     stroke-linejoin: round;
   }
 
   .fail circle {
-    fill: #d9302c;
+    fill: var(--danger);
   }
 
   .fail path {
-    stroke: #ffffff;
+    stroke: var(--on-accent);
     stroke-width: 2;
     stroke-linecap: round;
   }
@@ -179,7 +179,7 @@
   }
 
   .badge.failed .text {
-    color: #d9302c;
+    color: var(--danger);
   }
 
   .badge.failed .detail {

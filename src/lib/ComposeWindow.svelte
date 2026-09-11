@@ -924,7 +924,7 @@
     font: inherit;
     font-size: 12px;
     font-weight: 600;
-    color: #ffffff;
+    color: var(--on-accent);
     cursor: pointer;
   }
 
@@ -1203,7 +1203,7 @@
     padding: 8px 20px;
     border-bottom: 1px solid var(--hairline);
     font-size: 12px;
-    color: #d9302c;
+    color: var(--danger);
   }
 
   .body-area {
@@ -1318,7 +1318,7 @@
   .close-dialog button.primary {
     background: var(--accent);
     font-weight: 600;
-    color: #ffffff;
+    color: var(--on-accent);
   }
 
   .close-dialog button.primary:hover {
