@@ -488,6 +488,39 @@ it("deletes the autosaved server version on Don't Save", async () => {
   expect(api.saveDraft).toHaveBeenCalledTimes(1);
 });
 
+it("waits for an in-flight autosave before Don't Save deletes it", async () => {
+  await renderLoaded();
+
+  // The autosave fires but its round trip is still open when the user
+  // closes — the discard must target the version it is about to create.
+  let finishSave!: (id: string) => void;
+  vi.mocked(api.saveDraft).mockReturnValueOnce(
+    new Promise<string>((resolve) => (finishSave = resolve)),
+  );
+  vi.useFakeTimers();
+  try {
+    await fireEvent.input(screen.getByLabelText("Subject"), {
+      target: { value: "Rozpísané" },
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+  } finally {
+    vi.useRealTimers();
+  }
+  expect(api.saveDraft).toHaveBeenCalledTimes(1);
+
+  await closeHandler!({ preventDefault: vi.fn() });
+  await fireEvent.click(screen.getByRole("button", { name: "Don't Save" }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  expect(api.discardDraft).not.toHaveBeenCalled();
+  expect(destroyWindow).not.toHaveBeenCalled();
+
+  finishSave("draft-id-9@flit.local");
+
+  await waitFor(() => expect(destroyWindow).toHaveBeenCalled());
+  expect(api.discardDraft).toHaveBeenCalledWith(1, "draft-id-9@flit.local");
+});
+
 it("skips the server round trip when Don't Save has nothing to delete", async () => {
   await renderLoaded();
 

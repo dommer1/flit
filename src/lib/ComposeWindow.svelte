@@ -159,7 +159,9 @@
   let everDirty = false;
   /** Don't Save was chosen — no save may run from here to teardown. */
   let discarded = false;
-  let saving = false;
+  /** The save round trip in flight, or null — closers await it rather than
+   * race it. */
+  let saving: Promise<void> | null = null;
   let sent = false;
 
   /** The Save / Don't Save / Cancel prompt shown by a close request. */
@@ -298,18 +300,23 @@
     // An untouched-then-cleared window has nothing worth a server round
     // trip; once a version exists it keeps being replaced, even by "".
     if (isDraftEmpty(message) && draftMessageId === null) return;
-    saving = true;
     // why clear before the await: keystrokes landing during the save must
     // re-mark the draft dirty, not be swallowed by a stale flag.
     dirty = false;
+    saving = saveDraft(message, draftMessageId).then(
+      (id) => {
+        draftMessageId = id;
+        saveError = null;
+      },
+      (err) => {
+        dirty = true;
+        saveError = String(err);
+      },
+    );
     try {
-      draftMessageId = await saveDraft(message, draftMessageId);
-      saveError = null;
-    } catch (err) {
-      dirty = true;
-      saveError = String(err);
+      await saving;
     } finally {
-      saving = false;
+      saving = null;
     }
   }
 
@@ -328,7 +335,7 @@
   /** Resolve once no save is in flight — an autosave can overlap the close
    * dialog, and both outcomes below must act on its result, not race it. */
   async function saveSettled() {
-    while (saving) await new Promise((resolve) => setTimeout(resolve, 25));
+    await saving;
   }
 
   async function saveAndClose() {
