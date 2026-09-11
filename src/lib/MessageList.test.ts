@@ -70,6 +70,20 @@ it("archives a row once a full swipe left settles", async () => {
   expect(onArchive).toHaveBeenCalledWith(1);
 });
 
+it("fires nothing for a swipe still in flight when the list is torn down", async () => {
+  const onArchive = vi.fn();
+  const { unmount } = renderList({ onArchive });
+  const row = screen.getByRole("option", { name: /Alice/ });
+
+  await swipe(row, 60);
+  await swipe(row, 60);
+  // A folder switch replaces the list mid-gesture.
+  unmount();
+
+  vi.advanceTimersByTime(200);
+  expect(onArchive).not.toHaveBeenCalled();
+});
+
 it("toggles read state once a full swipe right settles", async () => {
   const onSetRead = vi.fn();
   renderList({ onSetRead });
@@ -354,6 +368,19 @@ it("starts a refresh once a deep pull at the top settles", async () => {
 
   vi.advanceTimersByTime(200);
   expect(onRefresh).toHaveBeenCalledOnce();
+});
+
+it("fires nothing for a pull still in flight when the list is torn down", async () => {
+  const onRefresh = vi.fn();
+  const { unmount } = renderList({ onRefresh });
+  const list = screen.getByRole("listbox");
+
+  await swipe(list, 0, -80);
+  await swipe(list, 0, -80);
+  unmount();
+
+  vi.advanceTimersByTime(200);
+  expect(onRefresh).not.toHaveBeenCalled();
 });
 
 it("arms the hint only past the trigger line", async () => {

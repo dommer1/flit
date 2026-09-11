@@ -227,6 +227,15 @@
     pullDepth = 0;
   }
 
+  // why: a folder switch can replace the list while a swipe or pull is still
+  // in flight; the pending settle would then fire its action (archive,
+  // refresh…) from a torn-down component. The effect reads no state, so it
+  // runs once and its teardown runs exactly at destroy.
+  $effect(() => () => {
+    clearTimeout(settleTimer);
+    clearTimeout(pullTimer);
+  });
+
   let unreadCount = $derived(
     status?.unread ?? messages.filter((m) => !m.read).length,
   );
