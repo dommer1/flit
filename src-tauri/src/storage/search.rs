@@ -5,6 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::error::AppError;
 use crate::models::MessageHeader;
+use crate::storage::messages::header_columns;
 
 /// A search query broken into structured filters plus free text.
 ///
@@ -135,7 +136,7 @@ pub async fn search(
     // an `in:` search must still show that folder's copy — if the ranking
     // could reach outside the match set it would drop the archived copy in
     // favour of an inbox copy the user did not ask for, and return nothing.
-    let rows = sqlx::query_as(
+    let rows = sqlx::query_as(concat!(
         r#"WITH candidates AS (
              SELECT * FROM messages
              WHERE (?1 IS NULL OR account_id = ?1)
@@ -177,15 +178,13 @@ pub async fn search(
              LEFT JOIN mailboxes b
                ON b.account_id = c.account_id AND b.name = c.mailbox
            )
-           SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to", cc_addr AS cc,
-                  reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read, has_attachments,
-                  COALESCE(message_id_hdr, '') AS message_id,
-                  references_hdr AS "references"
-           FROM deduped
-           WHERE rn = 1
-           ORDER BY date DESC
-           LIMIT ?11"#,
-    )
+           SELECT "#,
+        header_columns!("m"),
+        r#" FROM deduped m
+           WHERE m.rn = 1
+           ORDER BY m.date DESC
+           LIMIT ?11"#
+    ))
     .bind(account_id)
     .bind(query.from.as_deref().map(escape_like))
     .bind(query.to.as_deref().map(escape_like))

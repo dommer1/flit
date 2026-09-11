@@ -5,6 +5,52 @@ use crate::mail::parse::{snippet_of, AttachmentMeta, InlineImage};
 use crate::models::{AuthResults, MessageAttachment, MessageHeader};
 use crate::timing;
 
+/// The columns every `MessageHeader` query projects from a `messages` row
+/// aliased `$t`, in `MessageHeader` field order.
+///
+/// why a macro and not a `const`: sqlx 0.9 only runs `&'static str` SQL
+/// (`SqlSafeStr`), and `concat!` splices a macro's literal into one at
+/// compile time — a `const` would need `format!` plus an `AssertSqlSafe`
+/// bypass at every call site.
+macro_rules! header_columns {
+    ($t:literal) => {
+        concat!(
+            $t,
+            ".id, ",
+            $t,
+            ".account_id, ",
+            $t,
+            ".mailbox, ",
+            $t,
+            ".from_addr AS \"from\", ",
+            $t,
+            ".to_addr AS \"to\", ",
+            $t,
+            ".cc_addr AS cc, ",
+            $t,
+            ".reply_to_addr AS reply_to, ",
+            $t,
+            ".bcc_addr AS bcc, ",
+            $t,
+            ".subject, ",
+            $t,
+            ".snippet, ",
+            $t,
+            ".date, ",
+            $t,
+            ".read, ",
+            $t,
+            ".has_attachments, ",
+            "COALESCE(",
+            $t,
+            ".message_id_hdr, '') AS message_id, ",
+            $t,
+            ".references_hdr AS \"references\""
+        )
+    };
+}
+pub(crate) use header_columns;
+
 /// Header data as it arrives from an IMAP fetch, before it has a row id.
 #[derive(Debug, Clone, Default)]
 pub struct FetchedHeader {
@@ -315,13 +361,11 @@ pub async fn list(
     let limit = limit.unwrap_or(-1);
     let headers = match account_id {
         Some(id) => {
-            sqlx::query_as(
-                r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
-                          cc_addr AS cc, reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read, has_attachments,
-                          COALESCE(message_id_hdr, '') AS message_id,
-                          references_hdr AS "references"
-                   FROM messages WHERE account_id = ? AND mailbox = ? ORDER BY date DESC LIMIT ?"#,
-            )
+            sqlx::query_as(concat!(
+                "SELECT ",
+                header_columns!("m"),
+                " FROM messages m WHERE m.account_id = ? AND m.mailbox = ? ORDER BY m.date DESC LIMIT ?"
+            ))
             .bind(id)
             .bind(mailbox)
             .bind(limit)
@@ -329,13 +373,11 @@ pub async fn list(
             .await?
         }
         None => {
-            sqlx::query_as(
-                r#"SELECT id, account_id, mailbox, from_addr AS "from", to_addr AS "to",
-                          cc_addr AS cc, reply_to_addr AS reply_to, bcc_addr AS bcc, subject, snippet, date, read, has_attachments,
-                          COALESCE(message_id_hdr, '') AS message_id,
-                          references_hdr AS "references"
-                   FROM messages WHERE mailbox = ? ORDER BY date DESC LIMIT ?"#,
-            )
+            sqlx::query_as(concat!(
+                "SELECT ",
+                header_columns!("m"),
+                " FROM messages m WHERE m.mailbox = ? ORDER BY m.date DESC LIMIT ?"
+            ))
             .bind(mailbox)
             .bind(limit)
             .fetch_all(pool)
@@ -439,6 +481,8 @@ pub async fn list_threaded(
              FROM visible
              GROUP BY account_id, tkey
            )
+           -- Not header_columns!: date and has_attachments come from the
+           -- thread stats here, not the row.
            SELECT r.id, r.account_id, r.mailbox, r.from_addr AS "from", r.to_addr AS "to",
                   r.cc_addr AS cc, r.reply_to_addr AS reply_to, r.bcc_addr AS bcc,
                   r.subject, r.snippet,
@@ -479,16 +523,13 @@ pub async fn list_threaded(
 /// copy outside the all/archive containers.
 pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<MessageHeader>, AppError> {
     let _t = timing::start("storage::thread_of");
-    let rows = sqlx::query_as(
+    let rows = sqlx::query_as(concat!(
         r#"SELECT id, account_id, mailbox, "from", "to", cc, reply_to, bcc, subject, snippet,
                   date, read, has_attachments, message_id, "references", is_draft
            FROM (
-             SELECT m.id, m.account_id, m.mailbox, m.from_addr AS "from", m.to_addr AS "to",
-                    m.cc_addr AS cc, m.reply_to_addr AS reply_to, m.bcc_addr AS bcc,
-                    m.subject, m.snippet,
-                    m.date, m.read, m.has_attachments,
-                    COALESCE(m.message_id_hdr, '') AS message_id,
-                    m.references_hdr AS "references",
+             SELECT "#,
+        header_columns!("m"),
+        r#",
                     (COALESCE(b.role, '') = 'drafts') AS is_draft,
                     ROW_NUMBER() OVER (
                       PARTITION BY COALESCE(NULLIF(m.message_id_hdr, ''), 'row:' || m.id)
@@ -502,8 +543,8 @@ pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<Message
                     AND COALESCE(b.role, '') NOT IN ('trash', 'junk'))
            )
            WHERE copy_rank = 1
-           ORDER BY date ASC, id ASC"#,
-    )
+           ORDER BY date ASC, id ASC"#
+    ))
     .bind(message_id)
     .fetch_all(pool)
     .await?;
