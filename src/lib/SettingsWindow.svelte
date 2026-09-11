@@ -492,13 +492,7 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
-    background: #f5f5f7;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .window {
-      background: #232326;
-    }
+    background: var(--bg-settings);
   }
 
   /* macOS-preferences chrome: same gradient strip as the main toolbar,

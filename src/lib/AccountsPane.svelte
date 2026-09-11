@@ -448,16 +448,8 @@
   /* The selected swatch gets a ring: a canvas-colored gap, then the accent. */
   .swatch.selected {
     box-shadow:
-      0 0 0 2px #f5f5f7,
+      0 0 0 2px var(--bg-settings),
       0 0 0 3.5px var(--accent);
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .swatch.selected {
-      box-shadow:
-        0 0 0 2px #232326,
-        0 0 0 3.5px var(--accent);
-    }
   }
 
   .swatch.none {
@@ -481,7 +473,7 @@
   }
 
   .empty {
-    color: #666;
+    color: var(--text-secondary);
   }
 
   /* One box per identity row, like the mockup's grouped list. */
