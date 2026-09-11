@@ -502,6 +502,13 @@ fn first_error(current: Result<(), AppError>, next: Result<(), AppError>) -> Res
     }
 }
 
+/// `first_error` over a whole run of batch outcomes, in batch order — so a
+/// selection that ran concurrently still reports the same error a
+/// sequential loop would have.
+fn first_error_of(outcomes: Vec<Result<(), AppError>>) -> Result<(), AppError> {
+    outcomes.into_iter().fold(Ok(()), first_error)
+}
+
 /// Look every selected id up, then group them into per-folder batches.
 ///
 /// `threads` mirrors what the row on screen stands for: in the conversation
@@ -549,12 +556,23 @@ pub async fn move_messages(
     mailbox: String,
     threads: bool,
 ) -> Result<(), AppError> {
-    let mut outcome = Ok(());
-    for batch in locate_batches(&state, &message_ids, threads).await? {
+    let batches = locate_batches(&state, &message_ids, threads).await?;
+    // why every account is checked before any move: the batches run
+    // together below, so a folder found missing halfway could no longer
+    // stop the earlier ones — refusing up front keeps "no folder" from
+    // moving anything at all.
+    for batch in &batches {
         if !storage::mailboxes::exists(&state.pool, batch.account_id, &mailbox).await? {
             return Err(AppError::Imap(format!("no folder named {mailbox}")));
         }
-        let moved = move_rows_to_mailbox(
+    }
+    // why join_all: each batch is one account folder on its own IMAP
+    // connection, so run in sequence they only ever waited on each other's
+    // round trips. Each batch still reconciles its own cache only after
+    // its server confirms, exactly as before; join_all keeps the outcomes
+    // in batch order, so the first error reported is the same one.
+    let outcomes = futures::future::join_all(batches.iter().map(|batch| {
+        move_rows_to_mailbox(
             &app,
             &state,
             batch.account_id,
@@ -562,10 +580,9 @@ pub async fn move_messages(
             &batch.rows,
             &mailbox,
         )
-        .await;
-        outcome = first_error(outcome, moved);
-    }
-    outcome
+    }))
+    .await;
+    first_error_of(outcomes)
 }
 
 /// The bulk counterpart of `move_to_special_folder`: each batch resolves the
@@ -579,21 +596,26 @@ async fn move_batches_to_special_folder(
     roles: &[&str],
     label: &str,
 ) -> Result<(), AppError> {
-    let mut outcome = Ok(());
-    for batch in locate_batches(state, message_ids, threads).await? {
-        let dest = special_folder_dest(state, batch.account_id, roles, label).await?;
-        let moved = move_rows_to_mailbox(
+    let batches = locate_batches(state, message_ids, threads).await?;
+    // why the destinations are resolved first: same as move_messages — an
+    // account without the folder must refuse the whole selection, not
+    // whatever batches happened to finish before it was noticed.
+    let mut dests = Vec::with_capacity(batches.len());
+    for batch in &batches {
+        dests.push(special_folder_dest(state, batch.account_id, roles, label).await?);
+    }
+    let outcomes = futures::future::join_all(batches.iter().zip(&dests).map(|(batch, dest)| {
+        move_rows_to_mailbox(
             app,
             state,
             batch.account_id,
             &batch.mailbox,
             &batch.rows,
-            &dest,
+            dest,
         )
-        .await;
-        outcome = first_error(outcome, moved);
-    }
-    outcome
+    }))
+    .await;
+    first_error_of(outcomes)
 }
 
 /// Trash a whole selection — each account's own Trash folder.
@@ -2560,6 +2582,18 @@ mod tests {
 
     fn imap_err(text: &str) -> Result<(), AppError> {
         Err(AppError::Imap(text.to_string()))
+    }
+
+    #[test]
+    fn first_error_of_reports_the_earliest_failure_in_batch_order() {
+        assert!(first_error_of(vec![]).is_ok());
+        assert!(first_error_of(vec![Ok(()), Ok(())]).is_ok());
+        assert_eq!(
+            first_error_of(vec![Ok(()), imap_err("second"), imap_err("third")])
+                .unwrap_err()
+                .to_string(),
+            imap_err("second").unwrap_err().to_string()
+        );
     }
 
     #[test]
