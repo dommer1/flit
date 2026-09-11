@@ -15,6 +15,7 @@
     scheduleSend,
     takeComposeDraft,
   } from "./api";
+  import { fileExt } from "./attachments";
   import { debounce } from "./debounce";
   import {
     composeHtmlBody,
@@ -23,6 +24,7 @@
     quoteEditorHtml,
     splitComposedHtml,
   } from "./draft";
+  import { formatFileSize } from "./format";
   import { textToHtml } from "./richtext";
   import type {
     Account,
@@ -427,18 +429,6 @@
     delete previews[path];
   }
 
-  /** Placeholder label for cards without a thumbnail: "PDF", "ZIP", … */
-  function extLabel(name: string): string {
-    const dot = name.lastIndexOf(".");
-    return dot > 0 ? name.slice(dot + 1).toUpperCase().slice(0, 5) : "FILE";
-  }
-
-  function formatSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
   function buildMessage(accountId: number) {
     return {
       accountId,
@@ -784,11 +774,13 @@
             />
           {:else}
             <span class="thumb ext" aria-hidden="true">
-              {extLabel(attachment.name)}
+              <!-- why "?": the same tile the reading pane shows for a file
+                   without an extension. -->
+              {fileExt(attachment.name) || "?"}
             </span>
           {/if}
           <span class="card-name">{attachment.name}</span>
-          <span class="card-size">{formatSize(attachment.size)}</span>
+          <span class="card-size">{formatFileSize(attachment.size)}</span>
         </li>
       {/each}
     </ul>

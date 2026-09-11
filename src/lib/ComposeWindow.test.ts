@@ -262,7 +262,8 @@ it("attaches dropped files and sends them with the message", async () => {
 
   expect(await screen.findByText("report.pdf")).toBeInTheDocument();
   expect(screen.getByText("photo.jpg")).toBeInTheDocument();
-  expect(screen.getAllByText("2 KB")).toHaveLength(2);
+  // Decimal units, the same rendering the reading pane gives the file.
+  expect(screen.getAllByText("2.0 kB")).toHaveLength(2);
 
   await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
@@ -316,10 +317,12 @@ it("shows an image thumbnail on the attachment card", async () => {
 it("shows an extension placeholder when there is no preview", async () => {
   await renderLoaded();
 
-  dropCallbacks!.onDrop(["/tmp/report.pdf"]);
+  dropCallbacks!.onDrop(["/tmp/report.pdf", "/tmp/README"]);
 
   expect(await screen.findByText("PDF")).toBeInTheDocument();
   expect(screen.queryByRole("img", { name: "report.pdf" })).toBeNull();
+  // No extension: the same "?" tile the reading pane shows.
+  expect(screen.getByText("?")).toBeInTheDocument();
 });
 
 it("restores a reopened draft's attachments as chips", async () => {
