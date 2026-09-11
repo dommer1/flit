@@ -871,7 +871,7 @@
     background: rgba(178, 134, 14, 0.12);
     font-size: 10px;
     font-weight: 600;
-    color: #9c7c10;
+    color: var(--warning);
   }
 
   /* On the accent-filled selected row the amber pill would vanish —

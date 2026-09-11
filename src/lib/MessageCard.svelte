@@ -628,7 +628,7 @@
     background: rgba(178, 134, 14, 0.12);
     font-size: 10.5px;
     font-weight: 600;
-    color: #9c7c10;
+    color: var(--warning);
   }
 
   .preview,
@@ -760,7 +760,7 @@
   .attachment-error {
     margin: 8px 0 0;
     font-size: 12px;
-    color: #d9302c;
+    color: var(--danger);
   }
 
   /* Amber, not red: "unusual, look twice", not "confirmed malicious". */
@@ -773,7 +773,7 @@
     border-bottom: 1px solid rgba(178, 134, 14, 0.28);
     font-size: 12px;
     font-weight: 600;
-    color: #9c7c10;
+    color: var(--warning);
   }
 
   .trust-banner svg {
@@ -835,7 +835,7 @@
 
   .error {
     margin: 12px 0 0;
-    color: #d9302c;
+    color: var(--danger);
   }
 
   .body {
