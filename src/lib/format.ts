@@ -8,6 +8,26 @@
 import { dateTimeFormat } from "./datetime.svelte";
 import { type DateFormat, type DateTimeFormat, type TimeFormat } from "./types";
 
+// why a cache: the list calls these for every row on every refresh, and
+// Intl.DateTimeFormat construction (locale data lookup) costs far more than
+// a format() call. The options are literal objects with a fixed key order,
+// so their JSON is a stable key; the locale joins it so a pinned one never
+// shares a formatter with the system default.
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(
+  options: Intl.DateTimeFormatOptions,
+  locale?: string,
+): Intl.DateTimeFormat {
+  const key = `${locale ?? ""}|${JSON.stringify(options)}`;
+  let cached = formatters.get(key);
+  if (!cached) {
+    cached = new Intl.DateTimeFormat(locale, options);
+    formatters.set(key, cached);
+  }
+  return cached;
+}
+
 export function senderName(from: string): string {
   const match = from.match(/^\s*"?(.*?)"?\s*<[^<>]*>\s*$/);
   const name = match?.[1]?.trim();
@@ -32,7 +52,7 @@ function clock(date: Date, time: TimeFormat): string {
       : time === "12h"
         ? { hour: "numeric", minute: "2-digit", hour12: true }
         : { timeStyle: "short" };
-  return new Intl.DateTimeFormat(undefined, options).format(date);
+  return formatter(options).format(date);
 }
 
 /** The date as a bare numeric pattern, or null when the locale decides.
@@ -75,17 +95,13 @@ export function formatListDate(
   if (dayDiff <= 0) return clock(date, format.time);
   if (dayDiff === 1) return "Yesterday";
   if (dayDiff < 7) {
-    return new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(
-      date,
-    );
+    return formatter({ weekday: "long" }).format(date);
   }
   return (
     numericDate(date, format.date) ??
-    new Intl.DateTimeFormat(undefined, {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(date)
+    formatter({ year: "numeric", month: "2-digit", day: "2-digit" }).format(
+      date,
+    )
   );
 }
 
@@ -115,10 +131,7 @@ export function sectionFor(iso: string, now: Date = new Date()): string {
   if (date.getTime() >= lastWeek.getTime()) return "Last Week";
   if (date.getFullYear() === now.getFullYear()) {
     if (date.getMonth() === now.getMonth()) return "This Month";
-    return new Intl.DateTimeFormat(undefined, {
-      month: "long",
-      year: "numeric",
-    }).format(date);
+    return formatter({ month: "long", year: "numeric" }).format(date);
   }
   return String(date.getFullYear());
 }
@@ -147,13 +160,10 @@ export function formatFullDate(
   // dateStyle next to explicit hour options — so date and time can only be
   // combined by hand once either half is pinned.
   if (format.date === "system" && format.time === "system") {
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: "long",
-      timeStyle: "short",
-    }).format(date);
+    return formatter({ dateStyle: "long", timeStyle: "short" }).format(date);
   }
   const day =
     numericDate(date, format.date) ??
-    new Intl.DateTimeFormat(undefined, { dateStyle: "long" }).format(date);
+    formatter({ dateStyle: "long" }).format(date);
   return `${day} ${clock(date, format.time)}`;
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   formatFileSize,
   formatFullDate,
@@ -218,5 +218,38 @@ describe("formatFileSize", () => {
     expect(formatFileSize(2_400_000)).toBe("2.4 MB");
     expect(formatFileSize(123_000_000)).toBe("123 MB");
     expect(formatFileSize(1_100_000_000)).toBe("1.1 GB");
+  });
+});
+
+describe("formatter caching", () => {
+  // why a fresh module: the cache is module-level, so an import shared with
+  // the tests above would already be warm and the constructor never called.
+  async function freshFormat() {
+    vi.resetModules();
+    return await import("./format");
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("builds one Intl.DateTimeFormat for repeated calls with the same options", async () => {
+    const mod = await freshFormat();
+    const ctor = vi.spyOn(Intl, "DateTimeFormat");
+    const format = { date: "system", time: "system" } as const;
+    for (let i = 0; i < 5; i++) {
+      mod.formatListDate("2026-07-09T09:15:00", now, format);
+    }
+    expect(ctor).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a separate formatter per distinct options", async () => {
+    const mod = await freshFormat();
+    const ctor = vi.spyOn(Intl, "DateTimeFormat");
+    const format = { date: "system", time: "system" } as const;
+    mod.formatListDate("2026-07-09T09:15:00", now, format); // time
+    mod.formatListDate("2026-07-07T09:15:00", now, format); // weekday
+    mod.formatListDate("2026-07-07T09:15:00", now, format);
+    expect(ctor).toHaveBeenCalledTimes(2);
   });
 });
