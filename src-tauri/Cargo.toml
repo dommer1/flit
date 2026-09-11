@@ -65,3 +65,11 @@ mail-builder = "0.4"
 # the webview never gets the notification IPC permission.
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-opener = "2.5.4"
+
+# why: a desktop binary is built once and shipped many times, so the slower
+# release compile buys a smaller, faster app: lto and one codegen unit let
+# the optimiser see the whole program, strip drops symbols nobody ships.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
