@@ -4,13 +4,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::models::{
-    Account, Alias, Appearance, AuthResults, DateTimeFormat, Mailbox, MessageBody, MessageHeader,
-    MessageQuote, MessagesChanged, NewAccount, NotificationSettings, OutgoingMessage,
-    RemoteImagePolicy, ShortcutAction, ShortcutBinding, Signature, SwipeActions, ThreadOrder,
+    Account, Alias, Appearance, AuthResults, DateTimeFormat, LlmStatus, Mailbox, MessageBody,
+    MessageHeader, MessageQuote, MessagesChanged, NewAccount, NotificationSettings,
+    OutgoingMessage, RemoteImagePolicy, ShortcutAction, ShortcutBinding, Signature, SwipeActions,
+    ThreadOrder,
 };
 use crate::state::AppState;
 use crate::timing;
-use crate::{auth, mail, storage};
+use crate::{auth, llm, mail, storage};
 
 // why: commands stay thin — validate/orchestrate, call a module, return
 // Result. Business logic lives in storage/ and auth/, which are unit-tested.
@@ -2209,6 +2210,25 @@ pub async fn set_llm_summary_enabled(
     enabled: bool,
 ) -> Result<(), AppError> {
     storage::settings::set_llm_summary_enabled(&state.pool, enabled).await?;
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn llm_status(app: AppHandle, state: State<'_, AppState>) -> Result<LlmStatus, AppError> {
+    llm::status(&app, &state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_llm_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), AppError> {
+    if llm::catalog::find(&id).is_none() {
+        return Err(AppError::Invalid(format!("Unknown model: {id}")));
+    }
+    storage::settings::set_llm_model(&state.pool, &id).await?;
     app.emit("settings-changed", ())?;
     Ok(())
 }

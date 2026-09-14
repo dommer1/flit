@@ -7,6 +7,7 @@ import type {
   Alias,
   AttachmentInfo,
   Contact,
+  LlmStatus,
   DateTimeFormat,
   Mailbox,
   MessageAttachment,
@@ -473,6 +474,16 @@ export function getLlmSummaryEnabled(): Promise<boolean> {
 
 export function setLlmSummaryEnabled(enabled: boolean): Promise<void> {
   return invoke<void>("set_llm_summary_enabled", { enabled });
+}
+
+/** State of the on-device summaries: the switch, the picked model, and
+ *  every catalog model with its download state. */
+export function llmStatus(): Promise<LlmStatus> {
+  return invoke<LlmStatus>("llm_status");
+}
+
+export function setLlmModel(id: string): Promise<void> {
+  return invoke<void>("set_llm_model", { id });
 }
 
 /** Icons for sender domains, keyed by domain and ready to use as an img src.

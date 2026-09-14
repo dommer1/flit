@@ -21,6 +21,7 @@ const SWIPE_LEFT_KEY: &str = "swipe_left";
 const SWIPE_RIGHT_KEY: &str = "swipe_right";
 const AVATAR_LOOKUP_KEY: &str = "avatar_lookup";
 const LLM_SUMMARY_KEY: &str = "llm_summary";
+const LLM_MODEL_KEY: &str = "llm_model";
 const MAINTENANCE_REV_KEY: &str = "maintenance_rev";
 
 async fn value(pool: &SqlitePool, key: &str) -> Result<Option<String>, AppError> {
@@ -144,6 +145,19 @@ pub async fn set_llm_summary_enabled(pool: &SqlitePool, enabled: bool) -> Result
         if enabled { "true" } else { "false" },
     )
     .await
+}
+
+/// The model picked for summaries, or None when nothing was picked yet or
+/// the stored id is one this build does not know (written by another
+/// version) — an unknown pick must not be trusted as "ready".
+pub async fn llm_model(pool: &SqlitePool) -> Result<Option<String>, AppError> {
+    Ok(value(pool, LLM_MODEL_KEY)
+        .await?
+        .filter(|id| crate::llm::catalog::find(id).is_some()))
+}
+
+pub async fn set_llm_model(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
+    upsert(pool, LLM_MODEL_KEY, id).await
 }
 
 /// The stored remote-image policy, falling back to the default (Ask) when
@@ -511,6 +525,30 @@ mod tests {
             .unwrap();
 
         assert!(!llm_summary_enabled(&pool).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn llm_model_is_unset_until_picked() {
+        let pool = test_pool().await;
+
+        assert_eq!(llm_model(&pool).await.unwrap(), None);
+
+        set_llm_model(&pool, "qwen3.5-2b").await.unwrap();
+        assert_eq!(
+            llm_model(&pool).await.unwrap(),
+            Some("qwen3.5-2b".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_llm_model_id_reads_as_unset() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('llm_model', 'gpt-5')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(llm_model(&pool).await.unwrap(), None);
     }
 
     #[tokio::test]

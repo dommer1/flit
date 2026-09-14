@@ -191,6 +191,8 @@ pub fn run() {
             commands::load_domain_avatars,
             commands::get_llm_summary_enabled,
             commands::set_llm_summary_enabled,
+            commands::llm_status,
+            commands::set_llm_model,
             commands::get_notification_settings,
             commands::set_notification_settings,
             commands::set_account_notifications,

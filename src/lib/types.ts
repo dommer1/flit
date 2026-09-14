@@ -174,6 +174,30 @@ export interface NotificationSettings {
   pushEnabled: boolean;
 }
 
+/** Mirrors LlmStatus in models.rs. */
+export interface LlmStatus {
+  /** The Experimental switch. */
+  enabled: boolean;
+  /** Id of the picked model, if any. */
+  activeModel: string | null;
+  /** Switched on and the picked model's file is complete on disk. */
+  ready: boolean;
+  models: LlmModel[];
+}
+
+/** Mirrors LlmModel in models.rs: a catalog entry plus its local state. */
+export interface LlmModel {
+  id: string;
+  name: string;
+  description: string;
+  /** Download size in bytes. */
+  size: number;
+  recommended: boolean;
+  state: LlmModelState;
+}
+
+export type LlmModelState = { kind: "missing" } | { kind: "ready" };
+
 /** What one direction of the message-list swipe gesture does;
  * "none" disables that direction. */
 export type SwipeAction = "none" | "toggleRead" | "archive" | "trash" | "reply";
