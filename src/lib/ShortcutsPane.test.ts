@@ -122,14 +122,14 @@ it("cancels recording on Escape without closing the window", async () => {
 it("shows a rejected combination inline", async () => {
   render(ShortcutsPane);
   vi.mocked(api.setShortcut).mockRejectedValueOnce(
-    "That shortcut is reserved by the app.",
+    "macOS already uses this shortcut.",
   );
 
   await fireEvent.click(await chipFor("Reply"));
   await fireEvent.keyDown(document.body, { key: "q", metaKey: true });
 
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "⌘Q: That shortcut is reserved by the app.",
+    "⌘Q: macOS already uses this shortcut.",
   );
   expect(await chipFor("Reply")).toHaveTextContent("⌘R");
 });

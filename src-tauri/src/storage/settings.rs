@@ -253,10 +253,9 @@ const SHORTCUT_KEYS: &[&str] = &[
     "Backquote",
 ];
 
-/// Combos something else already owns: Tauri's default macOS menu (checked
-/// against tauri 2.11.5's `menu.rs`), the custom ⌘, Settings item, and the
-/// fixed list navigation. Escape and Tab are refused in any combination.
-const RESERVED_COMBOS: &[&str] = &[
+/// Combos Tauri's default macOS menu already owns (checked against tauri
+/// 2.11.5's `menu.rs`) — Quit, Hide, Undo, Copy and the rest.
+const MACOS_COMBOS: &[&str] = &[
     "Meta+Q",
     "Meta+W",
     "Meta+H",
@@ -269,6 +268,11 @@ const RESERVED_COMBOS: &[&str] = &[
     "Meta+V",
     "Meta+A",
     "Ctrl+Meta+F",
+];
+
+/// Combos Flit itself keeps fixed: the custom ⌘, Settings item and the list
+/// navigation. Escape and Tab are refused in any combination as well.
+const FIXED_COMBOS: &[&str] = &[
     "Meta+Comma",
     "ArrowUp",
     "ArrowDown",
@@ -310,9 +314,16 @@ fn check_combo(combo: &str) -> Result<(), AppError> {
     if !is_shortcut_key(key) {
         return Err(malformed());
     }
-    if key == "Escape" || key == "Tab" || RESERVED_COMBOS.contains(&combo) {
+    // why two messages: "reserved" alone left the user guessing whether
+    // macOS or Flit holds the combo — and only Flit's own can never move.
+    if MACOS_COMBOS.contains(&combo) {
         return Err(AppError::Invalid(
-            "That shortcut is reserved by the app.".into(),
+            "macOS already uses this shortcut.".into(),
+        ));
+    }
+    if key == "Escape" || key == "Tab" || FIXED_COMBOS.contains(&combo) {
+        return Err(AppError::Invalid(
+            "Flit already uses this shortcut, and it can't be changed.".into(),
         ));
     }
     Ok(())
@@ -792,6 +803,42 @@ mod tests {
             Some("Alt+Meta+F")
         );
         assert_eq!(combo_of(&bindings, ShortcutAction::Trash), None);
+    }
+
+    #[tokio::test]
+    async fn a_reserved_combo_says_who_owns_it() {
+        let pool = test_pool().await;
+        let message = |combo: &str| {
+            let pool = pool.clone();
+            let combo = combo.to_string();
+            async move {
+                set_shortcut(&pool, ShortcutAction::Reply, Some(combo))
+                    .await
+                    .unwrap_err()
+                    .to_string()
+            }
+        };
+
+        for combo in ["Meta+C", "Meta+Q", "Ctrl+Meta+F"] {
+            assert_eq!(
+                message(combo).await,
+                "macOS already uses this shortcut.",
+                "{combo}"
+            );
+        }
+        for combo in [
+            "Meta+Comma",
+            "ArrowDown",
+            "Shift+ArrowUp",
+            "Escape",
+            "Meta+Tab",
+        ] {
+            assert_eq!(
+                message(combo).await,
+                "Flit already uses this shortcut, and it can't be changed.",
+                "{combo}"
+            );
+        }
     }
 
     #[tokio::test]
