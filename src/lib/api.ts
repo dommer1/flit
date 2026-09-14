@@ -518,6 +518,16 @@ export function summarizeThread(
   return invoke<string>("summarize_thread", { messageId, fresh, requestId });
 }
 
+/** A summary already written for the message — or, with `thread`, for its
+ *  conversation — without generating anything. Null when there is none or
+ *  the feature is not ready. */
+export function cachedSummary(
+  messageId: number,
+  thread = false,
+): Promise<string | null> {
+  return invoke<string | null>("cached_summary", { messageId, thread });
+}
+
 /** Stop a summary being written; a no-op once it has finished. */
 export function cancelSummary(requestId: string): Promise<void> {
   return invoke<void>("cancel_summary", { requestId });

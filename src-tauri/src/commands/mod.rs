@@ -2261,13 +2261,61 @@ pub async fn summarize_message(
     fresh: bool,
     request_id: String,
 ) -> Result<String, AppError> {
+    let (header, text) = message_source(&app, &state, message_id).await?;
+    llm::summarize_message(&app, &header, &text, fresh, &request_id).await
+}
+
+/// A summary already written for the message (or, with `thread`, for its
+/// conversation), without generating anything — what an opened card shows
+/// straight away. None when there is none, or the feature is not ready.
+#[tauri::command]
+pub async fn cached_summary(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+    thread: bool,
+) -> Result<Option<String>, AppError> {
+    if thread {
+        let messages = thread_sources(&app, &state, message_id).await?;
+        llm::cached_thread_summary(&app, &messages).await
+    } else {
+        let (header, text) = message_source(&app, &state, message_id).await?;
+        llm::cached_message_summary(&app, &header, &text).await
+    }
+}
+
+/// The message's header and stored text.
+async fn message_source(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    message_id: i64,
+) -> Result<(MessageHeader, String), AppError> {
     let header = storage::messages::thread_of(&state.pool, message_id)
         .await?
         .into_iter()
         .find(|h| h.id == message_id)
         .ok_or_else(|| AppError::Invalid("Message not found.".to_string()))?;
-    let text = summarizable_text(&app, &state, message_id).await?;
-    llm::summarize_message(&app, &header, &text, fresh, &request_id).await
+    let text = summarizable_text(app, state, message_id).await?;
+    Ok((header, text))
+}
+
+/// Every non-draft member of the message's conversation with its stored
+/// text, oldest first.
+async fn thread_sources(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    message_id: i64,
+) -> Result<Vec<(MessageHeader, String)>, AppError> {
+    let thread = storage::messages::thread_of(&state.pool, message_id).await?;
+    let mut messages = Vec::with_capacity(thread.len());
+    // why one by one: the conversation view has already pulled every body
+    // through thread_bodies by the time its button is clicked, so these
+    // are cache hits — a cold thread would open a session per message.
+    for header in thread.into_iter().filter(|h| !h.is_draft) {
+        let text = summarizable_text(app, state, header.id).await?;
+        messages.push((header, text));
+    }
+    Ok(messages)
 }
 
 /// A summary of the whole conversation the message belongs to (drafts
@@ -2280,15 +2328,7 @@ pub async fn summarize_thread(
     fresh: bool,
     request_id: String,
 ) -> Result<String, AppError> {
-    let thread = storage::messages::thread_of(&state.pool, message_id).await?;
-    let mut messages = Vec::with_capacity(thread.len());
-    // why one by one: the conversation view has already pulled every body
-    // through thread_bodies by the time its button is clicked, so these
-    // are cache hits — a cold thread would open a session per message.
-    for header in thread.into_iter().filter(|h| !h.is_draft) {
-        let text = summarizable_text(&app, &state, header.id).await?;
-        messages.push((header, text));
-    }
+    let messages = thread_sources(&app, &state, message_id).await?;
     llm::summarize_thread(&app, &messages, fresh, &request_id).await
 }
 

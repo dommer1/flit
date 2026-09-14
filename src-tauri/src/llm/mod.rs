@@ -196,6 +196,66 @@ async fn ready_model(
     Ok((spec, store::model_path(&dir, spec)))
 }
 
+/// Cache key of one message's summary under the current model and language.
+fn message_key(
+    spec: &catalog::ModelSpec,
+    language: &str,
+    header: &MessageHeader,
+    text: &str,
+) -> String {
+    let id = header.id.to_string();
+    summarize::cache_key("message", spec.id, language, [id.as_str(), text])
+}
+
+/// Cache key of a conversation's summary: every member's id and text, in
+/// order, so a conversation that gained a message hashes differently.
+fn thread_key(
+    spec: &catalog::ModelSpec,
+    language: &str,
+    messages: &[(MessageHeader, String)],
+) -> String {
+    let ids: Vec<String> = messages.iter().map(|(h, _)| h.id.to_string()).collect();
+    let parts = messages
+        .iter()
+        .zip(&ids)
+        .flat_map(|((_, text), id)| [id.as_str(), text.as_str()]);
+    summarize::cache_key("thread", spec.id, language, parts)
+}
+
+/// A summary already written for this message, if any — nothing is
+/// generated. `None` also when the feature is off or no model is picked,
+/// so an opened card can simply ask.
+pub async fn cached_message_summary(
+    app: &AppHandle,
+    header: &MessageHeader,
+    body_text: &str,
+) -> Result<Option<String>, AppError> {
+    let state = app.state::<AppState>();
+    let Ok((spec, _)) = ready_model(app, &state.pool).await else {
+        return Ok(None);
+    };
+    let language = settings::llm_summary_language(&state.pool).await?;
+    storage::summaries::get(
+        &state.pool,
+        &message_key(spec, &language, header, body_text),
+    )
+    .await
+}
+
+/// The conversation's already-written summary, if any (see
+/// `cached_message_summary`).
+pub async fn cached_thread_summary(
+    app: &AppHandle,
+    messages: &[(MessageHeader, String)],
+) -> Result<Option<String>, AppError> {
+    let state = app.state::<AppState>();
+    let Ok((spec, _)) = ready_model(app, &state.pool).await else {
+        return Ok(None);
+    };
+    let language = settings::llm_summary_language(&state.pool).await?;
+    storage::summaries::get(&state.pool, &thread_key(spec, &language, messages)).await
+}
+
 /// Summarize one message with the picked model. `body_text` is the raw
 /// stored text; the prompt builder trims it. A cached summary of the same
 /// inputs is returned unless `fresh` asks for a new one.
@@ -214,8 +274,7 @@ pub async fn summarize_message(
         ));
     }
     let language = settings::llm_summary_language(&state.pool).await?;
-    let id = header.id.to_string();
-    let key = summarize::cache_key("message", spec.id, &language, [id.as_str(), body_text]);
+    let key = message_key(spec, &language, header, body_text);
     if !fresh {
         if let Some(cached) = storage::summaries::get(&state.pool, &key).await? {
             return Ok(cached);
@@ -267,12 +326,7 @@ pub async fn summarize_thread(
         ));
     }
     let language = settings::llm_summary_language(&state.pool).await?;
-    let ids: Vec<String> = messages.iter().map(|(h, _)| h.id.to_string()).collect();
-    let parts = messages
-        .iter()
-        .zip(&ids)
-        .flat_map(|((_, text), id)| [id.as_str(), text.as_str()]);
-    let key = summarize::cache_key("thread", spec.id, &language, parts);
+    let key = thread_key(spec, &language, messages);
     if !fresh {
         if let Some(cached) = storage::summaries::get(&state.pool, &key).await? {
             return Ok(cached);
