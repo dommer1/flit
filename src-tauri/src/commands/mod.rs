@@ -2197,6 +2197,22 @@ pub async fn set_avatar_lookup_enabled(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_llm_summary_enabled(state: State<'_, AppState>) -> Result<bool, AppError> {
+    storage::settings::llm_summary_enabled(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_llm_summary_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), AppError> {
+    storage::settings::set_llm_summary_enabled(&state.pool, enabled).await?;
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
 /// Icons for the given sender domains, as data: URIs. Domains without one are
 /// simply absent and the list falls back to its monogram.
 #[tauri::command]

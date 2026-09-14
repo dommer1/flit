@@ -466,6 +466,15 @@ export function setAvatarLookupEnabled(enabled: boolean): Promise<void> {
   return invoke<void>("set_avatar_lookup_enabled", { enabled });
 }
 
+/** Whether the experimental on-device summaries are on. Off until switched on. */
+export function getLlmSummaryEnabled(): Promise<boolean> {
+  return invoke<boolean>("get_llm_summary_enabled");
+}
+
+export function setLlmSummaryEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>("set_llm_summary_enabled", { enabled });
+}
+
 /** Icons for sender domains, keyed by domain and ready to use as an img src.
  *  A domain with no icon is simply absent — the list falls back to its
  *  monogram. Returns nothing at all while the lookup switch is off. */

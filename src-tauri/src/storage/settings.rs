@@ -20,6 +20,7 @@ const PUSH_ENABLED_KEY: &str = "push_enabled";
 const SWIPE_LEFT_KEY: &str = "swipe_left";
 const SWIPE_RIGHT_KEY: &str = "swipe_right";
 const AVATAR_LOOKUP_KEY: &str = "avatar_lookup";
+const LLM_SUMMARY_KEY: &str = "llm_summary";
 const MAINTENANCE_REV_KEY: &str = "maintenance_rev";
 
 async fn value(pool: &SqlitePool, key: &str) -> Result<Option<String>, AppError> {
@@ -123,6 +124,23 @@ pub async fn set_avatar_lookup_enabled(pool: &SqlitePool, enabled: bool) -> Resu
     upsert(
         pool,
         AVATAR_LOOKUP_KEY,
+        if enabled { "true" } else { "false" },
+    )
+    .await
+}
+
+/// Whether the experimental on-device summaries are switched on. Same
+/// "only a stored true counts" rule as the avatar lookup: this switch is what
+/// lets the user fetch a model file from a host that is not their mail
+/// server, so a missing or corrupt value must read as off.
+pub async fn llm_summary_enabled(pool: &SqlitePool) -> Result<bool, AppError> {
+    Ok(value(pool, LLM_SUMMARY_KEY).await?.as_deref() == Some("true"))
+}
+
+pub async fn set_llm_summary_enabled(pool: &SqlitePool, enabled: bool) -> Result<(), AppError> {
+    upsert(
+        pool,
+        LLM_SUMMARY_KEY,
         if enabled { "true" } else { "false" },
     )
     .await
@@ -469,6 +487,30 @@ mod tests {
         // why off rather than the stored garbage: an unreadable value must
         // never be the reason the app starts reaching out to the network.
         assert!(!avatar_lookup_enabled(&pool).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn llm_summary_is_off_until_switched_on() {
+        let pool = test_pool().await;
+
+        assert!(!llm_summary_enabled(&pool).await.unwrap());
+
+        set_llm_summary_enabled(&pool, true).await.unwrap();
+        assert!(llm_summary_enabled(&pool).await.unwrap());
+
+        set_llm_summary_enabled(&pool, false).await.unwrap();
+        assert!(!llm_summary_enabled(&pool).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_llm_summary_value_reads_as_off() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('llm_summary', 'yolo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(!llm_summary_enabled(&pool).await.unwrap());
     }
 
     #[tokio::test]

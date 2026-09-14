@@ -188,6 +188,8 @@ pub fn run() {
             commands::get_avatar_lookup_enabled,
             commands::set_avatar_lookup_enabled,
             commands::load_domain_avatars,
+            commands::get_llm_summary_enabled,
+            commands::set_llm_summary_enabled,
             commands::get_notification_settings,
             commands::set_notification_settings,
             commands::set_account_notifications,
