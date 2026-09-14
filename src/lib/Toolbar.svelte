@@ -63,6 +63,9 @@
   let allRead = $derived(rows.every((row) => row.read));
 
   let readTitle = $derived(allRead ? "Mark Unread" : "Mark Read");
+  // why: the label names the action the click takes, like the title — a
+  // fixed "Unread" read wrong once the open message was already unread.
+  let readLabel = $derived(allRead ? "Unread" : "Read");
   let archiveTitle = $derived(archived ? "Move to Inbox" : "Archive");
 
   let moveOpen = $state(false);
@@ -187,7 +190,7 @@
         <rect x="2.5" y="4.5" width="15" height="11" rx="2" />
         <path d="m3 6 7 5 7-5" />
       </svg>
-      <span class="label">Unread</span>
+      <span class="label">{readLabel}</span>
     </button>
     <button
       class="action"

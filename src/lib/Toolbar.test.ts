@@ -158,6 +158,20 @@ it("toggles read state via the Mark Read / Mark Unread button", async () => {
   expect(onSetRead).toHaveBeenCalledWith(1, false);
 });
 
+it("labels the read toggle with the action it will take", async () => {
+  const { rerender } = renderToolbar({ selected: message });
+
+  // Unread fixture: the click marks it read, so the label says so.
+  expect(
+    screen.getByRole("button", { name: "Mark Read" }),
+  ).toHaveTextContent(/^\s*Read\s*$/);
+
+  await rerender({ selected: { ...message, read: true } });
+  expect(
+    screen.getByRole("button", { name: "Mark Unread" }),
+  ).toHaveTextContent(/^\s*Unread\s*$/);
+});
+
 it("archives and trashes the selected message", async () => {
   const onArchive = vi.fn();
   const onTrash = vi.fn();
