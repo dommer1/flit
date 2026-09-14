@@ -9,6 +9,7 @@ description: Everything needed to work with the Rust + Tauri 2 + Svelte 5 + Vite
 
 ```bash
 rustc --version && cargo --version   # need stable Rust; if missing: source "$HOME/.cargo/env"
+cmake --version                       # llama.cpp build (see below if missing)
 node --version                        # need Node ≥ 20
 xcode-select -p                       # macOS: Xcode CLT must be installed
 test -d node_modules || npm install
@@ -22,6 +23,11 @@ Missing pieces:
 - **Tauri CLI:** ships as npm devDependency (`@tauri-apps/cli`) — `npm install` covers it.
   Never `cargo install tauri-cli`; always go through `npm run tauri …`.
 - **Xcode CLT (macOS):** `xcode-select --install`.
+- **cmake (any platform):** the on-device summaries engine (`llama-cpp-2`) compiles
+  llama.cpp from source and needs `cmake` on PATH. Homebrew: `brew install cmake`.
+  Without Homebrew: `python3 -m pip install --user cmake`, then either add
+  `~/Library/Python/3.9/bin` to PATH or set `CMAKE=~/Library/Python/3.9/bin/cmake`
+  in `.env` (loaded by `scripts/tauri.sh`; export it yourself for bare `cargo` calls).
 
 ## 2. Run / build
 

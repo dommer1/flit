@@ -7,6 +7,9 @@ import type {
   Alias,
   AttachmentInfo,
   Contact,
+  LlmDownloadProgress,
+  LlmStatus,
+  SummaryToken,
   DateTimeFormat,
   Mailbox,
   MessageAttachment,
@@ -464,6 +467,113 @@ export function getAvatarLookupEnabled(): Promise<boolean> {
 
 export function setAvatarLookupEnabled(enabled: boolean): Promise<void> {
   return invoke<void>("set_avatar_lookup_enabled", { enabled });
+}
+
+/** Whether the experimental on-device summaries are on. Off until switched on. */
+export function getLlmSummaryEnabled(): Promise<boolean> {
+  return invoke<boolean>("get_llm_summary_enabled");
+}
+
+export function setLlmSummaryEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>("set_llm_summary_enabled", { enabled });
+}
+
+/** State of the on-device summaries: the switch, the picked model, and
+ *  every catalog model with its download state. */
+export function llmStatus(): Promise<LlmStatus> {
+  return invoke<LlmStatus>("llm_status");
+}
+
+export function setLlmModel(id: string): Promise<void> {
+  return invoke<void>("set_llm_model", { id });
+}
+
+/** Language summaries are written in: "auto" (the message's own) or an
+ *  English language name such as "Slovak". */
+export function getLlmSummaryLanguage(): Promise<string> {
+  return invoke<string>("get_llm_summary_language");
+}
+
+export function setLlmSummaryLanguage(language: string): Promise<void> {
+  return invoke<void>("set_llm_summary_language", { language });
+}
+
+/** A plain-text summary of one message, written by the local model.
+ *  Rejects with guidance when the feature is off or no model is ready.
+ *  Cached per inputs; `fresh` asks for a new one. */
+export function summarizeMessage(
+  messageId: number,
+  fresh = false,
+  requestId = newRequestId(),
+): Promise<string> {
+  return invoke<string>("summarize_message", { messageId, fresh, requestId });
+}
+
+/** A plain-text summary of the conversation the message belongs to. */
+export function summarizeThread(
+  messageId: number,
+  fresh = false,
+  requestId = newRequestId(),
+): Promise<string> {
+  return invoke<string>("summarize_thread", { messageId, fresh, requestId });
+}
+
+/** A summary already written for the message — or, with `thread`, for its
+ *  conversation — without generating anything. Null when there is none or
+ *  the feature is not ready. */
+export function cachedSummary(
+  messageId: number,
+  thread = false,
+): Promise<string | null> {
+  return invoke<string | null>("cached_summary", { messageId, thread });
+}
+
+/** Stop a summary being written; a no-op once it has finished. */
+export function cancelSummary(requestId: string): Promise<void> {
+  return invoke<void>("cancel_summary", { requestId });
+}
+
+/** Pieces of summaries being written, tagged with their request id. */
+export function onSummaryToken(
+  callback: (token: SummaryToken) => void,
+): Promise<UnlistenFn> {
+  return listen<SummaryToken>("summary-token", (event) =>
+    callback(event.payload),
+  );
+}
+
+/** A request id for summaries — unique within this window's lifetime. */
+export function newRequestId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** Start fetching a catalog model in the background. Progress arrives on
+ *  onLlmDownloadProgress; the end (done, cancelled, failed) on
+ *  onLlmModelsChanged. */
+export function downloadLlmModel(id: string): Promise<void> {
+  return invoke<void>("download_llm_model", { id });
+}
+
+export function cancelLlmDownload(id: string): Promise<void> {
+  return invoke<void>("cancel_llm_download", { id });
+}
+
+/** Delete a downloaded model file, or dismiss a failed download. */
+export function removeLlmModel(id: string): Promise<void> {
+  return invoke<void>("remove_llm_model", { id });
+}
+
+export function onLlmDownloadProgress(
+  callback: (progress: LlmDownloadProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<LlmDownloadProgress>("llm-download-progress", (event) =>
+    callback(event.payload),
+  );
+}
+
+/** Fires when a model download ends or a model file is removed. */
+export function onLlmModelsChanged(callback: () => void): Promise<UnlistenFn> {
+  return listen("llm-models-changed", callback);
 }
 
 /** Icons for sender domains, keyed by domain and ready to use as an img src.

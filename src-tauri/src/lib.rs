@@ -2,6 +2,7 @@ pub mod auth;
 mod commands;
 pub mod error;
 mod idle;
+pub mod llm;
 pub mod mail;
 mod models;
 mod notify;
@@ -188,6 +189,19 @@ pub fn run() {
             commands::get_avatar_lookup_enabled,
             commands::set_avatar_lookup_enabled,
             commands::load_domain_avatars,
+            commands::get_llm_summary_enabled,
+            commands::set_llm_summary_enabled,
+            commands::llm_status,
+            commands::set_llm_model,
+            commands::get_llm_summary_language,
+            commands::set_llm_summary_language,
+            commands::download_llm_model,
+            commands::cancel_llm_download,
+            commands::remove_llm_model,
+            commands::summarize_message,
+            commands::summarize_thread,
+            commands::cancel_summary,
+            commands::cached_summary,
             commands::get_notification_settings,
             commands::set_notification_settings,
             commands::set_account_notifications,
@@ -216,8 +230,17 @@ pub fn run() {
             commands::delete_alias,
             commands::set_default_alias
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // why: llama.cpp's Metal backend asserts in a static destructor
+            // when a model is still loaded at process exit — free it first.
+            // Exit fires once, right before Tauri calls process::exit.
+            if let tauri::RunEvent::Exit = event {
+                let state = app.state::<state::AppState>();
+                tauri::async_runtime::block_on(state.llm_engine.unload());
+            }
+        });
 }
 
 #[cfg(test)]

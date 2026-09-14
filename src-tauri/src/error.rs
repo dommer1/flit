@@ -21,6 +21,14 @@ pub enum AppError {
     Imap(String),
     #[error("smtp error: {0}")]
     Smtp(String),
+    /// Model download problems — a String like Imap, with context added at
+    /// the call site (status, verification, size).
+    #[error("download error: {0}")]
+    Http(String),
+    /// The local model could not load or answer; the message says which
+    /// step (load, prompt, context, generation) gave up.
+    #[error("summary error: {0}")]
+    Llm(String),
     // why: user-fixable input problems (e.g. a schedule time in the past)
     // get their own variant so the message reads as guidance, not a fault.
     #[error("{0}")]

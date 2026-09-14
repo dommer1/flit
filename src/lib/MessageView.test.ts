@@ -36,6 +36,14 @@ vi.mock("./api", () => ({
   // Bodies arrive as one bulk map, keyed by message id.
   threadBodies: vi.fn(async () => ({})),
   setMessageRead: vi.fn(async () => {}),
+  summarizeThread: vi.fn(
+    async () => "- Alice proposed Saturday\n- Bob agreed, bring snacks",
+  ),
+  summarizeMessage: vi.fn(async () => "- one line"),
+  newRequestId: vi.fn(() => "req-1"),
+  onSummaryToken: vi.fn(async () => () => {}),
+  cancelSummary: vi.fn(async () => undefined),
+  cachedSummary: vi.fn(async () => null),
 }));
 
 import * as api from "./api";
@@ -754,4 +762,50 @@ it("keeps the prompt when nothing is selected at all", () => {
   renderView({ message: null, selectedCount: 0 });
 
   expect(screen.getByText("Select a message")).toBeInTheDocument();
+});
+
+it("offers no conversation summary for a single message or when not ready", async () => {
+  renderView({ canSummarize: true });
+  await screen.findByText("hi there").catch(() => undefined);
+
+  expect(screen.queryByLabelText("Summarize this conversation")).toBeNull();
+});
+
+it("summarizes the whole conversation from its header", async () => {
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  renderView({ canSummarize: true });
+
+  await fireEvent.click(
+    await screen.findByLabelText("Summarize this conversation"),
+  );
+
+  expect(api.summarizeThread).toHaveBeenCalledWith(1, false, "req-1");
+  expect(await screen.findByText("Alice proposed Saturday")).toBeInTheDocument();
+  expect(
+    screen.getByRole("region", { name: "Conversation summary" }),
+  ).toBeInTheDocument();
+});
+
+it("hides the conversation summary button while summaries are not ready", async () => {
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  renderView();
+  await screen.findByText("Weekend plans");
+
+  expect(screen.queryByLabelText("Summarize this conversation")).toBeNull();
+});
+
+it("opens a conversation with the summary it already has", async () => {
+  vi.mocked(api.summarizeThread).mockClear();
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(conversationBodies);
+  vi.mocked(api.cachedSummary).mockImplementation(async (_id, thread) =>
+    thread ? "- Agreed on Saturday" : null,
+  );
+  renderView({ message: { ...message, id: 3 }, canSummarize: true });
+
+  expect(await screen.findByText("Agreed on Saturday")).toBeInTheDocument();
+  expect(api.cachedSummary).toHaveBeenCalledWith(3, true);
+  expect(api.summarizeThread).not.toHaveBeenCalled();
+  vi.mocked(api.cachedSummary).mockReset();
+  vi.mocked(api.cachedSummary).mockResolvedValue(null);
 });

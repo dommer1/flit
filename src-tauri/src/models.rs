@@ -294,6 +294,68 @@ impl Default for NotificationSettings {
     }
 }
 
+/// State of the experimental on-device summaries: what Settings shows and
+/// what the main window checks before offering a summarize button.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmStatus {
+    /// The Experimental switch.
+    pub enabled: bool,
+    /// Id of the picked model, if any (see llm::catalog).
+    pub active_model: Option<String>,
+    /// Summaries can run right now: switched on and the picked model's
+    /// file is complete on disk.
+    pub ready: bool,
+    pub models: Vec<LlmModel>,
+}
+
+/// One catalog entry plus its state on this machine.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmModel {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// Download size in bytes.
+    pub size: u64,
+    pub recommended: bool,
+    pub state: LlmModelState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LlmModelState {
+    Missing,
+    Downloading {
+        received: u64,
+        total: u64,
+    },
+    /// The last download failed; the card shows why until the user retries
+    /// or removes the model.
+    Failed {
+        error: String,
+    },
+    Ready,
+}
+
+/// Payload of the `summary-token` event: one piece of a summary being
+/// written, tagged with the request it belongs to.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryToken {
+    pub request_id: String,
+    pub text: String,
+}
+
+/// Payload of the `llm-download-progress` event.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmDownloadProgress {
+    pub id: String,
+    pub received: u64,
+    pub total: u64,
+}
+
 /// Order of messages in the conversation view.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

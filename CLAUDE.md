@@ -20,7 +20,7 @@ A minimal, privacy-first desktop email client for macOS (multiplatform later), m
 - **Email-body rendering is security-critical.** The webview that renders message HTML MUST have JavaScript disabled, MUST block remote resource loading by default (remote images = tracking pixels), and MUST sanitize the HTML. Render bodies in a sandboxed, isolated context (sandboxed iframe / restricted webview), never in the app's main frame. Treat any change to this path as a security change and flag it explicitly. Decided 2026-07-13: the webview itself NEVER loads remote content — remote images the user opts into (policy "always"/"ask", see `mail/remote.rs`) are fetched by the Rust backend (TLS-only, no cookies/Referer, known trackers stripped) and inlined as `data:` URIs. Decided 2026-07-19, the ONE sanctioned exception (user-approved): the compose editor may hold a reply's quoted original — only the `mail::sanitize::sanitize_fragment` output (scripts stripped, remote refs inert, images restricted to `data:`/`cid:` at the editor schema too), and only after the user explicitly expands the parked quote (••• toggle). Raw or unsanitized message HTML still never enters the main frame.
 - **Secrets never hit disk in plaintext.** Account passwords and OAuth tokens go in the macOS Keychain (`keyring` crate). Never write credentials or tokens to plaintext files, logs, or the SQLite DB.
 - **All network I/O over TLS.**
-- **No telemetry, no analytics, no external calls** other than the user's own mail servers, (later) the OAuth provider, user-initiated remote-image loading (decided 2026-07-13; `mail/remote.rs`, default remains blocked/ask), and sender-domain avatar lookups (decided 2026-07-31; `mail/avatars.rs`, **default off**). The avatar exception is narrow and stays that way: the lookup key is the sender's **domain, never an address or a hash of one**, results are cached per domain (hits 30 days, misses 7) so a domain is contacted at most once per window, and fetching is batched at list load — never tied to opening a message, which would make it a tracking pixel. Per-address services (Gravatar and friends) are out: they would leak who the user corresponds with, not merely which organisations write to them.
+- **No telemetry, no analytics, no external calls** other than the user's own mail servers, (later) the OAuth provider, user-initiated remote-image loading (decided 2026-07-13; `mail/remote.rs`, default remains blocked/ask), and sender-domain avatar lookups (decided 2026-07-31; `mail/avatars.rs`, **default off**). The avatar exception is narrow and stays that way: the lookup key is the sender's **domain, never an address or a hash of one**, results are cached per domain (hits 30 days, misses 7) so a domain is contacted at most once per window, and fetching is batched at list load — never tied to opening a message, which would make it a tracking pixel. Per-address services (Gravatar and friends) are out: they would leak who the user corresponds with, not merely which organisations write to them. Decided 2026-09-14, the fourth and last sanctioned host: **model downloads for the experimental on-device summaries** (`llm/download.rs`, `llm/catalog.rs`). Only when the user clicks Download on a specific catalog model in Settings → Experimental — the feature switch alone contacts nothing. Each catalog entry pins an exact URL (repository revision) and SHA-256 on huggingface.co; the file is fetched once over TLS with no cookies or Referer, verified, and kept in the app data folder. Nothing about the user's mail is ever sent: summaries run entirely on the local model and no message text leaves the machine.
 
 ## Development workflow
 
@@ -42,6 +42,7 @@ A minimal, privacy-first desktop email client for macOS (multiplatform later), m
 | Frontend tests | `npm test` |
 | Frontend type/lint check | `npm run check` |
 | Rust tests | `cargo test` (run in `src-tauri/`) |
+| Engine smoke test against a real model | `FLIT_TEST_MODEL=<path>.gguf cargo test llm::engine -- --ignored` |
 | Rust lint | `cargo clippy -- -D warnings` (in `src-tauri/`) |
 | Rust format | `cargo fmt` (in `src-tauri/`) |
 | Regenerate app icons | `npm run tauri icon -- icon.svg` |
@@ -76,6 +77,10 @@ pre-Tahoe macOS would show no icon at all.
 `.env.example`) and signs macOS builds — dev binaries and release bundles alike
 — with the local `flit-dev` identity, so the Keychain stops re-asking on every
 rebuild. Machines without that identity fall back to ad-hoc signing.
+
+The Rust build compiles llama.cpp from source (`llama-cpp-2`, for the experimental
+on-device summaries) and therefore needs `cmake` — see the `stack` skill for
+installing it without Homebrew.
 
 All of `npm run check` + `npm test` + `cargo test` + `cargo clippy` must pass before any commit.
 
@@ -115,7 +120,7 @@ All of `npm run check` + `npm test` + `cargo test` + `cargo clippy` must pass be
 
 ## Non-goals — do not build unless explicitly asked
 
-Full-text search, snooze, rules/filters, PGP, calendar. Out of scope until the core read / write / multi-account flow is solid. (Send-later was pulled out of this list and built 2026-07-16 — local scheduler in `src-tauri/src/scheduler.rs`; missed sends never auto-send, the user confirms in a catch-up dialog. Threading/conversation view was pulled out and built 2026-07-17 — References/In-Reply-To based, thread keys computed at insert in `storage/messages.rs`, no subject fallback; flat Gmail-style conversation, accordion detail view; trash/junk/drafts views stay flat. IMAP IDLE/push was pulled out and built 2026-07-27 — `src-tauri/src/idle.rs`, opt-in via the `push_enabled` setting, one connection per account watching the inbox, re-IDLE every 29 min, capped backoff; servers without IDLE fall back to polling. The poller stays: under push its interval is the cadence for the folders IDLE cannot watch.)
+Full-text search, snooze, rules/filters, PGP, calendar. Out of scope until the core read / write / multi-account flow is solid. (Send-later was pulled out of this list and built 2026-07-16 — local scheduler in `src-tauri/src/scheduler.rs`; missed sends never auto-send, the user confirms in a catch-up dialog. Threading/conversation view was pulled out and built 2026-07-17 — References/In-Reply-To based, thread keys computed at insert in `storage/messages.rs`, no subject fallback; flat Gmail-style conversation, accordion detail view; trash/junk/drafts views stay flat. IMAP IDLE/push was pulled out and built 2026-07-27 — `src-tauri/src/idle.rs`, opt-in via the `push_enabled` setting, one connection per account watching the inbox, re-IDLE every 29 min, capped backoff; servers without IDLE fall back to polling. The poller stays: under push its interval is the cadence for the folders IDLE cannot watch. On-device summaries were built 2026-09-14 as an Experimental setting — `src-tauri/src/llm/`: a static model catalog pinned by revision + SHA-256, download only on an explicit click, `llama-cpp-2` engine on its own thread with idle unload, message and conversation prompts that treat mail as untrusted material, a hashed summary cache, streamed tokens with cancel. Output is plain text only, never HTML; the buttons appear only while the switch is on and the picked model is on disk.)
 
 ## Backend crates (baseline)
 

@@ -12,6 +12,7 @@
     getShortcuts,
     getSwipeActions,
     getThreadOrder,
+    llmStatus,
     listAccounts,
     listAliases,
     listMailboxes,
@@ -26,6 +27,7 @@
     trashMessages,
     trashThread,
     onAccountsChanged,
+    onLlmModelsChanged,
     onMessagesChanged,
     onSettingsChanged,
     onScheduledChanged,
@@ -370,6 +372,13 @@
 
   async function refreshThreadOrder() {
     threadOrder = await getThreadOrder();
+  }
+
+  // Whether message cards offer the on-device summary: the Experimental
+  // switch is on and the picked model is downloaded.
+  let llmReady = $state(false);
+  async function refreshLlmReady() {
+    llmReady = (await llmStatus()).ready;
   }
 
   // How dates and clock times are written. Unlike the two above this is no
@@ -989,12 +998,23 @@
       void refreshDateTimeFormat().catch((err: unknown) =>
         console.error("failed to load the date format:", err),
       );
+      void refreshLlmReady().catch((err: unknown) =>
+        console.error("failed to load the summaries status:", err),
+      );
       resetAvatars();
     };
     refreshSwipeLogged();
     // why: the settings window mutates the config in its own JS context —
     // this window finds out through the backend's settings-changed event.
     const unlistenSettings = onSettingsChanged(refreshSwipeLogged);
+    // A model download finishing (or a model removed) changes readiness
+    // without touching any setting.
+    const unlistenLlm = onLlmModelsChanged(
+      () =>
+        void refreshLlmReady().catch((err: unknown) =>
+          console.error("failed to load the summaries status:", err),
+        ),
+    );
     // why separate: scheduled/missed sends must surface even if account sync
     // fails — they are local rows, not server state.
     const refreshScheduledLogged = () =>
@@ -1031,6 +1051,7 @@
       void unlistenMissed.then((stop) => stop());
       void unlistenScheduled.then((stop) => stop());
       void unlistenSettings.then((stop) => stop());
+      void unlistenLlm.then((stop) => stop());
     };
   });
 </script>
@@ -1150,6 +1171,7 @@
         onDraft={openDraftWithBody}
         onEditDraft={editDraft}
         onDeleteDraft={deleteDraft}
+        canSummarize={llmReady}
       />
     </section>
   </main>

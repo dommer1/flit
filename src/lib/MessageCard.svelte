@@ -1,8 +1,15 @@
 <script lang="ts">
-  import { getMessageBody, saveAllAttachments, saveAttachment } from "./api";
+  import {
+    cachedSummary,
+    getMessageBody,
+    saveAllAttachments,
+    saveAttachment,
+  } from "./api";
+  import { runSummary, type SummaryRun, type SummaryState } from "./summaries";
   import { extColor, fileExt } from "./attachments";
   import { interceptBodyLinks } from "./bodyLinks";
   import { formatFileSize, formatFullDate, senderName } from "./format";
+  import SummaryPanel from "./SummaryPanel.svelte";
   import type {
     MessageAttachment,
     MessageBody,
@@ -21,6 +28,7 @@
     onToggle,
     onDraft,
     onDelete,
+    canSummarize = false,
   }: {
     message: MessageHeader;
     /** This message's body from the conversation's bulk load; null while
@@ -40,7 +48,46 @@
     onDraft: (kind: "reply" | "reply-all") => void;
     /** Draft cards only: remove the draft from the server. */
     onDelete?: () => void;
+    /** Offer the local-model summary button (Experimental switch on and a
+     * model downloaded). */
+    canSummarize?: boolean;
   } = $props();
+
+  // The on-device summary of this card, once asked for. Plain text from
+  // the backend, shown as bullet lines — never interpreted as HTML.
+  let summary = $state<SummaryState | null>(null);
+  let summaryRun: SummaryRun | null = null;
+
+  function summarize(fresh = false) {
+    const id = message.id;
+    summaryRun?.cancel();
+    summaryRun = runSummary("message", id, fresh, (state) => {
+      if (message.id === id) summary = state;
+    });
+  }
+
+  function cancelSummary() {
+    summaryRun?.cancel();
+    summaryRun = null;
+    summary = null;
+  }
+
+  // An opened card shows the summary it already has — written earlier in
+  // this or another session — without being asked again. One lookup per
+  // card instance; a new selection makes a new card.
+  let cacheChecked = false;
+  $effect(() => {
+    if (!expanded || !canSummarize || cacheChecked) return;
+    cacheChecked = true;
+    const id = message.id;
+    cachedSummary(id)
+      .then((text) => {
+        if (text !== null && message.id === id && summary === null) {
+          summary = { loading: false, text, error: null };
+        }
+      })
+      .catch(() => undefined);
+  });
 
   /** Bare address out of `Name <addr>`; a plain address passes through. */
   function bareAddress(from: string): string {
@@ -325,6 +372,17 @@
       class="content"
       onclick={message.isDraft ? onToggle : undefined}
     >
+      {#if canSummarize}
+        <div class="summary-slot">
+          <SummaryPanel
+            {summary}
+            collapseKey="m{message.id}"
+            onStart={() => summarize()}
+            onRetry={() => summarize(true)}
+            onCancel={cancelSummary}
+          />
+        </div>
+      {/if}
       {#if shown && shown.attachments.length > 0}
         <div class="atts-label">
           <svg
@@ -542,6 +600,10 @@
 </section>
 
 <style>
+  .summary-slot {
+    margin: 0 0 12px;
+  }
+
   .card {
     background: var(--bg-card);
     border: 1px solid var(--card-border);

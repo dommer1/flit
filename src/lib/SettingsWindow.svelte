@@ -44,6 +44,7 @@
     type TimeFormat,
   } from "./types";
   import AccountsPane from "./AccountsPane.svelte";
+  import ExperimentalPane from "./ExperimentalPane.svelte";
   import NotificationsPane from "./NotificationsPane.svelte";
   import ShortcutsPane from "./ShortcutsPane.svelte";
   import SignaturesPane from "./SignaturesPane.svelte";
@@ -92,6 +93,7 @@
     | "swipes"
     | "shortcuts"
     | "privacy"
+    | "experimental"
   >("accounts");
   let policy = $state<RemoteImagePolicy>("ask");
   let avatarLookup = $state(false);
@@ -372,6 +374,13 @@
     >
       Privacy
     </button>
+    <button
+      class="tab"
+      class:active={tab === "experimental"}
+      onclick={() => (tab = "experimental")}
+    >
+      Experimental
+    </button>
   </header>
 
   {#if tab === "general"}
@@ -510,6 +519,8 @@
     </section>
   {:else if tab === "shortcuts"}
     <ShortcutsPane />
+  {:else if tab === "experimental"}
+    <ExperimentalPane />
   {:else}
     <section class="content">
       <div class="section-label">Remote images in messages</div>
@@ -587,7 +598,7 @@
   header {
     display: flex;
     justify-content: center;
-    /* Seven tabs no longer fit a window at its minimum width. */
+    /* Eight tabs no longer fit a window at its minimum width. */
     flex-wrap: wrap;
     gap: 4px;
     flex-shrink: 0;

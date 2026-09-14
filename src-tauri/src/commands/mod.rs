@@ -4,13 +4,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::models::{
-    Account, Alias, Appearance, AuthResults, DateTimeFormat, Mailbox, MessageBody, MessageHeader,
-    MessageQuote, MessagesChanged, NewAccount, NotificationSettings, OutgoingMessage,
-    RemoteImagePolicy, ShortcutAction, ShortcutBinding, Signature, SwipeActions, ThreadOrder,
+    Account, Alias, Appearance, AuthResults, DateTimeFormat, LlmStatus, Mailbox, MessageBody,
+    MessageHeader, MessageQuote, MessagesChanged, NewAccount, NotificationSettings,
+    OutgoingMessage, RemoteImagePolicy, ShortcutAction, ShortcutBinding, Signature, SwipeActions,
+    ThreadOrder,
 };
 use crate::state::AppState;
 use crate::timing;
-use crate::{auth, mail, storage};
+use crate::{auth, llm, mail, storage};
 
 // why: commands stay thin — validate/orchestrate, call a module, return
 // Result. Business logic lives in storage/ and auth/, which are unit-tested.
@@ -2195,6 +2196,189 @@ pub async fn set_avatar_lookup_enabled(
     storage::settings::set_avatar_lookup_enabled(&state.pool, enabled).await?;
     app.emit("settings-changed", ())?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_llm_summary_enabled(state: State<'_, AppState>) -> Result<bool, AppError> {
+    storage::settings::llm_summary_enabled(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_llm_summary_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), AppError> {
+    storage::settings::set_llm_summary_enabled(&state.pool, enabled).await?;
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn llm_status(app: AppHandle, state: State<'_, AppState>) -> Result<LlmStatus, AppError> {
+    llm::status(&app, &state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_llm_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), AppError> {
+    if llm::catalog::find(&id).is_none() {
+        return Err(AppError::Invalid(format!("Unknown model: {id}")));
+    }
+    storage::settings::set_llm_model(&state.pool, &id).await?;
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_llm_summary_language(state: State<'_, AppState>) -> Result<String, AppError> {
+    storage::settings::llm_summary_language(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_llm_summary_language(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    language: String,
+) -> Result<(), AppError> {
+    storage::settings::set_llm_summary_language(&state.pool, &language).await?;
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+/// A summary of one message, written by the picked local model — plain
+/// text, bullet lines. Nothing leaves the machine. `fresh` skips the cache
+/// (the panel's "summarize again"); pieces stream out as `summary-token`
+/// events tagged with `request_id`, which cancel_summary also takes.
+#[tauri::command]
+pub async fn summarize_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+    fresh: bool,
+    request_id: String,
+) -> Result<String, AppError> {
+    let (header, text) = message_source(&app, &state, message_id).await?;
+    llm::summarize_message(&app, &header, &text, fresh, &request_id).await
+}
+
+/// A summary already written for the message (or, with `thread`, for its
+/// conversation), without generating anything — what an opened card shows
+/// straight away. None when there is none, or the feature is not ready.
+#[tauri::command]
+pub async fn cached_summary(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+    thread: bool,
+) -> Result<Option<String>, AppError> {
+    if thread {
+        let messages = thread_sources(&app, &state, message_id).await?;
+        llm::cached_thread_summary(&app, &messages).await
+    } else {
+        let (header, text) = message_source(&app, &state, message_id).await?;
+        llm::cached_message_summary(&app, &header, &text).await
+    }
+}
+
+/// The message's header and stored text.
+async fn message_source(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    message_id: i64,
+) -> Result<(MessageHeader, String), AppError> {
+    let header = storage::messages::thread_of(&state.pool, message_id)
+        .await?
+        .into_iter()
+        .find(|h| h.id == message_id)
+        .ok_or_else(|| AppError::Invalid("Message not found.".to_string()))?;
+    let text = summarizable_text(app, state, message_id).await?;
+    Ok((header, text))
+}
+
+/// Every non-draft member of the message's conversation with its stored
+/// text, oldest first.
+async fn thread_sources(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    message_id: i64,
+) -> Result<Vec<(MessageHeader, String)>, AppError> {
+    let thread = storage::messages::thread_of(&state.pool, message_id).await?;
+    let mut messages = Vec::with_capacity(thread.len());
+    // why one by one: the conversation view has already pulled every body
+    // through thread_bodies by the time its button is clicked, so these
+    // are cache hits — a cold thread would open a session per message.
+    for header in thread.into_iter().filter(|h| !h.is_draft) {
+        let text = summarizable_text(app, state, header.id).await?;
+        messages.push((header, text));
+    }
+    Ok(messages)
+}
+
+/// A summary of the whole conversation the message belongs to (drafts
+/// left out), oldest message first.
+#[tauri::command]
+pub async fn summarize_thread(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+    fresh: bool,
+    request_id: String,
+) -> Result<String, AppError> {
+    let messages = thread_sources(&app, &state, message_id).await?;
+    llm::summarize_thread(&app, &messages, fresh, &request_id).await
+}
+
+/// Stop a summary being written under `request_id`; a no-op once it has
+/// finished.
+#[tauri::command]
+pub async fn cancel_summary(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> Result<(), AppError> {
+    state.llm_summaries.cancel(&request_id);
+    Ok(())
+}
+
+/// The message's stored text, fetching the body if it is not cached yet.
+async fn summarizable_text(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    message_id: i64,
+) -> Result<String, AppError> {
+    let body = load_body(app, state, message_id).await?;
+    // why the html fallback: mail-parser fills body_text for html-only mail
+    // at parse time, so this is for the odd cached row that has only html.
+    Ok(body
+        .text
+        .or_else(|| {
+            body.html
+                .as_deref()
+                .map(mail_parser::decoders::html::html_to_text)
+        })
+        .unwrap_or_default())
+}
+
+/// Start downloading a catalog model; returns once the background task is
+/// spawned. The only user action that contacts a host other than the
+/// user's own mail servers or a sender's image host — see CLAUDE.md.
+#[tauri::command]
+pub async fn download_llm_model(app: AppHandle, id: String) -> Result<(), AppError> {
+    llm::start_download(app, &id)
+}
+
+#[tauri::command]
+pub async fn cancel_llm_download(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    state.llm_downloads.cancel(&id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn remove_llm_model(app: AppHandle, id: String) -> Result<(), AppError> {
+    llm::remove_model(&app, &id).await
 }
 
 /// Icons for the given sender domains, as data: URIs. Domains without one are

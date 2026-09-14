@@ -1,7 +1,14 @@
 <script lang="ts">
-  import { listThread, setMessageRead, threadBodies } from "./api";
+  import {
+    cachedSummary,
+    listThread,
+    setMessageRead,
+    threadBodies,
+  } from "./api";
   import type { DraftKind } from "./draft";
   import MessageCard from "./MessageCard.svelte";
+  import { runSummary, type SummaryRun, type SummaryState } from "./summaries";
+  import SummaryPanel from "./SummaryPanel.svelte";
   import { timed } from "./timing";
   import type { MessageBody, MessageHeader, ThreadOrder } from "./types";
 
@@ -15,6 +22,7 @@
     onDraft,
     onEditDraft,
     onDeleteDraft,
+    canSummarize = false,
   }: {
     message: MessageHeader | null;
     /** How many rows the list has selected. Past one there is no single
@@ -36,6 +44,8 @@
     onEditDraft?: (id: number) => void;
     /** The draft card's Delete action — removes the server draft. */
     onDeleteDraft?: (message: MessageHeader) => void;
+    /** Whether cards offer the on-device summary button. */
+    canSummarize?: boolean;
   } = $props();
 
   // The whole conversation of the selected row, oldest first. Falls back to
@@ -56,6 +66,24 @@
   // once it has grown to its final size.
   let threadEl = $state<HTMLDivElement | null>(null);
   let scrollTargetId = $state<number | null>(null);
+  // The on-device summary of the whole conversation, once asked for.
+  let threadSummary = $state<SummaryState | null>(null);
+  let threadSummaryRun: SummaryRun | null = null;
+
+  function summarizeConversation(fresh = false) {
+    if (message === null) return;
+    const id = message.id;
+    threadSummaryRun?.cancel();
+    threadSummaryRun = runSummary("thread", id, fresh, (state) => {
+      if (message?.id === id) threadSummary = state;
+    });
+  }
+
+  function cancelConversationSummary() {
+    threadSummaryRun?.cancel();
+    threadSummaryRun = null;
+    threadSummary = null;
+  }
 
   $effect(() => {
     if (message === null) {
@@ -64,6 +92,7 @@
       expandedIds = new Set();
       anchorId = null;
       scrollTargetId = null;
+      cancelConversationSummary();
       return;
     }
     const id = message.id;
@@ -77,6 +106,7 @@
           // newest, for an ordinary folder row), load all bodies.
           anchorId = id;
           bodies = {};
+          cancelConversationSummary();
           const anchor = focusSelected
             ? anchorMessage(thread, fallback)
             : newestMessage(thread);
@@ -125,7 +155,10 @@
     // any body at all — every member of the thread has to land first.
     timed("threadBodies", () => threadBodies(anchor))
       .then((loaded) => {
-        if (anchorId === anchor) bodies = loaded;
+        if (anchorId === anchor) {
+          bodies = loaded;
+          showCachedConversationSummary(anchor);
+        }
       })
       .catch((err: unknown) => {
         if (anchorId === anchor) bodiesError = String(err);
@@ -133,6 +166,20 @@
       .finally(() => {
         if (anchorId === anchor) bodiesLoading = false;
       });
+  }
+
+  // A conversation opens with the summary it already has. Asked only once
+  // its bodies are here, so the lookup is a cache hit and never a second
+  // server fetch racing the bulk one.
+  function showCachedConversationSummary(anchor: number) {
+    if (!canSummarize || thread.length < 2 || threadSummary !== null) return;
+    cachedSummary(anchor, true)
+      .then((text) => {
+        if (text !== null && anchorId === anchor && threadSummary === null) {
+          threadSummary = { loading: false, text, error: null };
+        }
+      })
+      .catch(() => undefined);
   }
 
   /** Open a card (fresh selections replace the set), marking it read —
@@ -217,10 +264,24 @@
         <div class="thread-head">
           <h2 class="subject">{message.subject}</h2>
         </div>
+        {#if canSummarize && thread.length > 1}
+          <div class="thread-summary">
+            <SummaryPanel
+              summary={threadSummary}
+              label="Conversation summary"
+              startLabel="Summarize this conversation"
+              collapseKey="t{message.id}"
+              onStart={() => summarizeConversation()}
+              onRetry={() => summarizeConversation(true)}
+              onCancel={cancelConversationSummary}
+            />
+          </div>
+        {/if}
         {#each displayThread as entry (entry.id)}
           <MessageCard
             message={entry}
             body={bodies[entry.id] ?? null}
+            canSummarize={canSummarize && !entry.isDraft}
             loading={bodiesLoading}
             error={bodiesError}
             expanded={entry.isDraft || expandedIds.has(entry.id)}
@@ -286,5 +347,9 @@
     color: var(--text-primary);
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .thread-summary {
+    margin-bottom: 12px;
   }
 </style>

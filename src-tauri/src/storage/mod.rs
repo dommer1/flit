@@ -7,6 +7,7 @@ pub mod scheduled;
 pub mod search;
 pub mod settings;
 pub mod signatures;
+pub mod summaries;
 
 use std::path::Path;
 use std::time::Duration;
