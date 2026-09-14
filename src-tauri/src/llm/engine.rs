@@ -353,6 +353,43 @@ mod tests {
         assert!(answer.to_lowercase().contains("pong"), "{answer:?}");
     }
 
+    /// Manual quality probe (prints, asserts only the obvious): the short
+    /// invoice mail that once got four invented bullets. Run with
+    /// --nocapture and read the answer.
+    #[tokio::test]
+    #[ignore]
+    async fn summarizes_a_short_invoice_mail_without_inventing() {
+        use crate::llm::summarize::{message_prompt, Source, AUTO_LANGUAGE};
+        let path = std::env::var("FLIT_TEST_MODEL").expect("FLIT_TEST_MODEL not set");
+        let source = Source {
+            from: "EB Cars <office@eb-cars.example>".to_string(),
+            date: "2026-09-04T22:03:00Z".to_string(),
+            subject: "FA 08/2026".to_string(),
+            text: "Ahoj v prílohe  posielam FA za 08/2026 \n\n--\nS pozdravom,\nDávid Budinský \nkonateľ spoločnosti\n\nEB-Cars, s.r.o.\nKrajná 4/B, 900 29 Nová Dedinka\nIČO: 53596030\nIČ DPH: SK2121417331\n\n ".to_string(),
+            attachments: vec!["Faktúra vystavená - 20260158.pdf".to_string()],
+        };
+
+        let answer = test_engine()
+            .complete(Request {
+                model_path: PathBuf::from(path),
+                messages: message_prompt(&source, AUTO_LANGUAGE),
+                max_tokens: 200,
+                assistant_prefix: "<think>\n\n</think>\n\n".to_string(),
+                on_token: None,
+                cancel: CancelFlag::default(),
+            })
+            .await
+            .unwrap();
+        eprintln!("--- invoice mail summary ---\n{answer}\n---");
+
+        assert!(answer.contains("08/2026"), "{answer:?}");
+        let bullets = answer
+            .lines()
+            .filter(|l| l.trim_start().starts_with('-'))
+            .count();
+        assert!(bullets <= 3, "{answer:?}");
+    }
+
     /// Same setup as above; checks that the streamed pieces add up to the
     /// returned answer and that a raised flag stops generation.
     #[tokio::test]

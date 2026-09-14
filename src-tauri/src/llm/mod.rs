@@ -196,6 +196,15 @@ async fn ready_model(
     Ok((spec, store::model_path(&dir, spec)))
 }
 
+/// File names of the message's attachments, for the prompt.
+async fn attachment_names(pool: &SqlitePool, message_id: i64) -> Result<Vec<String>, AppError> {
+    Ok(storage::messages::attachments(pool, message_id)
+        .await?
+        .into_iter()
+        .map(|a| a.filename)
+        .collect())
+}
+
 /// Cache key of one message's summary under the current model and language.
 fn message_key(
     spec: &catalog::ModelSpec,
@@ -285,6 +294,7 @@ pub async fn summarize_message(
         date: header.date.clone(),
         subject: header.subject.clone(),
         text: body_text.to_string(),
+        attachments: attachment_names(&state.pool, header.id).await?,
     };
     let text = generate(
         app,
@@ -310,16 +320,19 @@ pub async fn summarize_thread(
 ) -> Result<String, AppError> {
     let state = app.state::<AppState>();
     let (spec, model_path) = ready_model(app, &state.pool).await?;
-    let sources: Vec<summarize::Source> = messages
-        .iter()
-        .filter(|(_, text)| !summarize::prepare_text(text, summarize::MESSAGE_CHARS).is_empty())
-        .map(|(header, text)| summarize::Source {
+    let mut sources = Vec::with_capacity(messages.len());
+    for (header, text) in messages {
+        if summarize::prepare_text(text, summarize::MESSAGE_CHARS).is_empty() {
+            continue;
+        }
+        sources.push(summarize::Source {
             from: header.from.clone(),
             date: header.date.clone(),
             subject: header.subject.clone(),
             text: text.clone(),
-        })
-        .collect();
+            attachments: attachment_names(&state.pool, header.id).await?,
+        });
+    }
     if sources.is_empty() {
         return Err(AppError::Invalid(
             "This conversation has no text to summarize.".to_string(),
