@@ -506,6 +506,92 @@ impl Default for SwipeActions {
     }
 }
 
+/// An app action that can be triggered from the keyboard (and rebound in
+/// Settings → Shortcuts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShortcutAction {
+    NewMessage,
+    Reply,
+    ReplyAll,
+    Forward,
+    Archive,
+    Trash,
+    ToggleRead,
+    CheckMail,
+    ToggleSidebar,
+    FocusSearch,
+    Send,
+}
+
+impl ShortcutAction {
+    /// Every action, in the order the Settings tab lists them.
+    pub const ALL: [ShortcutAction; 11] = [
+        ShortcutAction::NewMessage,
+        ShortcutAction::Reply,
+        ShortcutAction::ReplyAll,
+        ShortcutAction::Forward,
+        ShortcutAction::Archive,
+        ShortcutAction::Trash,
+        ShortcutAction::ToggleRead,
+        ShortcutAction::CheckMail,
+        ShortcutAction::ToggleSidebar,
+        ShortcutAction::FocusSearch,
+        ShortcutAction::Send,
+    ];
+
+    /// The wire/storage form — matches the serde `kebab-case` names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ShortcutAction::NewMessage => "new-message",
+            ShortcutAction::Reply => "reply",
+            ShortcutAction::ReplyAll => "reply-all",
+            ShortcutAction::Forward => "forward",
+            ShortcutAction::Archive => "archive",
+            ShortcutAction::Trash => "trash",
+            ShortcutAction::ToggleRead => "toggle-read",
+            ShortcutAction::CheckMail => "check-mail",
+            ShortcutAction::ToggleSidebar => "toggle-sidebar",
+            ShortcutAction::FocusSearch => "focus-search",
+            ShortcutAction::Send => "send",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|action| action.as_str() == value)
+    }
+
+    /// The shipped binding, Apple Mail style, in the canonical combo format
+    /// (`Ctrl+Alt+Shift+Meta+<Key>`, modifiers always in that order).
+    pub fn default_combo(self) -> &'static str {
+        match self {
+            ShortcutAction::NewMessage => "Meta+N",
+            ShortcutAction::Reply => "Meta+R",
+            ShortcutAction::ReplyAll => "Shift+Meta+R",
+            ShortcutAction::Forward => "Shift+Meta+F",
+            ShortcutAction::Archive => "Ctrl+Meta+A",
+            ShortcutAction::Trash => "Backspace",
+            ShortcutAction::ToggleRead => "Shift+Meta+U",
+            ShortcutAction::CheckMail => "Shift+Meta+N",
+            ShortcutAction::ToggleSidebar => "Ctrl+Meta+S",
+            ShortcutAction::FocusSearch => "Meta+F",
+            ShortcutAction::Send => "Meta+Enter",
+        }
+    }
+}
+
+/// One action's current keyboard binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutBinding {
+    pub action: ShortcutAction,
+    /// `None` when the user unbound it (or another action took its combo).
+    pub combo: Option<String>,
+    pub default_combo: String,
+}
+
 /// One autocomplete suggestion for a compose recipient field — an address
 /// harvested from cached or sent mail (see storage::contacts).
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]

@@ -45,6 +45,7 @@
   } from "./types";
   import AccountsPane from "./AccountsPane.svelte";
   import NotificationsPane from "./NotificationsPane.svelte";
+  import ShortcutsPane from "./ShortcutsPane.svelte";
   import SignaturesPane from "./SignaturesPane.svelte";
 
   const POLICIES: { value: RemoteImagePolicy; label: string; hint: string }[] =
@@ -84,7 +85,13 @@
   let aliases = $state<Alias[]>([]);
   let lastError = $state<string | null>(null);
   let tab = $state<
-    "general" | "accounts" | "signatures" | "notifications" | "swipes" | "privacy"
+    | "general"
+    | "accounts"
+    | "signatures"
+    | "notifications"
+    | "swipes"
+    | "shortcuts"
+    | "privacy"
   >("accounts");
   let policy = $state<RemoteImagePolicy>("ask");
   let avatarLookup = $state(false);
@@ -353,6 +360,13 @@
     </button>
     <button
       class="tab"
+      class:active={tab === "shortcuts"}
+      onclick={() => (tab = "shortcuts")}
+    >
+      Shortcuts
+    </button>
+    <button
+      class="tab"
       class:active={tab === "privacy"}
       onclick={() => (tab = "privacy")}
     >
@@ -494,6 +508,8 @@
         direction off.
       </p>
     </section>
+  {:else if tab === "shortcuts"}
+    <ShortcutsPane />
   {:else}
     <section class="content">
       <div class="section-label">Remote images in messages</div>
@@ -571,6 +587,8 @@
   header {
     display: flex;
     justify-content: center;
+    /* Seven tabs no longer fit a window at its minimum width. */
+    flex-wrap: wrap;
     gap: 4px;
     flex-shrink: 0;
     padding: 8px 12px;

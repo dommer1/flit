@@ -214,3 +214,43 @@ it("disables Move to when there is nowhere to move", () => {
 
   expect(screen.getByRole("button", { name: "Move to" })).toBeDisabled();
 });
+
+it("names each action's keyboard shortcut in its tooltip", () => {
+  renderToolbar({
+    selected: message,
+    shortcuts: [
+      { action: "new-message", combo: "Meta+N", defaultCombo: "Meta+N" },
+      { action: "reply-all", combo: "Shift+Meta+R", defaultCombo: "Shift+Meta+R" },
+      { action: "archive", combo: "Ctrl+Meta+A", defaultCombo: "Ctrl+Meta+A" },
+      { action: "toggle-read", combo: "Shift+Meta+U", defaultCombo: "Shift+Meta+U" },
+      { action: "forward", combo: null, defaultCombo: "Shift+Meta+F" },
+    ],
+  });
+
+  expect(screen.getByRole("button", { name: "New Message" })).toHaveAttribute(
+    "title",
+    "New Message (⌘N)",
+  );
+  expect(screen.getByRole("button", { name: "Reply All" })).toHaveAttribute(
+    "title",
+    "Reply All (⇧⌘R)",
+  );
+  expect(screen.getByRole("button", { name: "Archive" })).toHaveAttribute(
+    "title",
+    "Archive (⌃⌘A)",
+  );
+  // The read toggle keeps naming the action the click takes.
+  expect(screen.getByRole("button", { name: "Mark Read" })).toHaveAttribute(
+    "title",
+    "Mark Read (⇧⌘U)",
+  );
+  // Unbound, or not in the list: just the name.
+  expect(screen.getByRole("button", { name: "Forward" })).toHaveAttribute(
+    "title",
+    "Forward",
+  );
+  expect(screen.getByRole("button", { name: "Trash" })).toHaveAttribute(
+    "title",
+    "Trash",
+  );
+});

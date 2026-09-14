@@ -1,9 +1,11 @@
-use sqlx::SqlitePool;
+use std::collections::HashMap;
+
+use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::error::AppError;
 use crate::models::{
-    Appearance, DateFormat, DateTimeFormat, NotificationSettings, RemoteImagePolicy, SwipeAction,
-    SwipeActions, ThreadOrder, TimeFormat,
+    Appearance, DateFormat, DateTimeFormat, NotificationSettings, RemoteImagePolicy,
+    ShortcutAction, ShortcutBinding, SwipeAction, SwipeActions, ThreadOrder, TimeFormat,
 };
 
 const REMOTE_IMAGES_KEY: &str = "remote_images";
@@ -232,6 +234,207 @@ async fn swipe_side(pool: &SqlitePool, key: &str) -> Result<Option<SwipeAction>,
 pub async fn set_swipe_actions(pool: &SqlitePool, actions: SwipeActions) -> Result<(), AppError> {
     upsert(pool, SWIPE_LEFT_KEY, actions.left.as_str()).await?;
     upsert(pool, SWIPE_RIGHT_KEY, actions.right.as_str()).await?;
+    Ok(())
+}
+
+/// Settings key prefix for keyboard shortcuts: one row per action,
+/// `shortcut.<action-id>`. A missing row means the default; `""` means the
+/// user unbound it.
+const SHORTCUT_PREFIX: &str = "shortcut.";
+
+/// Keys a combo may end in besides `A`–`Z`, `0`–`9` and `F1`–`F12` (those
+/// are checked by shape). Punctuation uses the `KeyboardEvent.code` names.
+const SHORTCUT_KEYS: &[&str] = &[
+    "Enter",
+    "Backspace",
+    "Delete",
+    "Space",
+    "Escape",
+    "Tab",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "Comma",
+    "Period",
+    "Slash",
+    "Semicolon",
+    "Quote",
+    "BracketLeft",
+    "BracketRight",
+    "Backslash",
+    "Minus",
+    "Equal",
+    "Backquote",
+];
+
+/// Combos Tauri's default macOS menu already owns (checked against tauri
+/// 2.11.5's `menu.rs`) — Quit, Hide, Undo, Copy and the rest.
+const MACOS_COMBOS: &[&str] = &[
+    "Meta+Q",
+    "Meta+W",
+    "Meta+H",
+    "Alt+Meta+H",
+    "Meta+M",
+    "Meta+Z",
+    "Shift+Meta+Z",
+    "Meta+X",
+    "Meta+C",
+    "Meta+V",
+    "Meta+A",
+    "Ctrl+Meta+F",
+];
+
+/// Combos Flit itself keeps fixed: the custom ⌘, Settings item and the list
+/// navigation. Escape and Tab are refused in any combination as well.
+const FIXED_COMBOS: &[&str] = &[
+    "Meta+Comma",
+    "ArrowUp",
+    "ArrowDown",
+    "Shift+ArrowUp",
+    "Shift+ArrowDown",
+];
+
+/// Modifiers in the one order a canonical combo spells them.
+const MODIFIERS: [&str; 4] = ["Ctrl", "Alt", "Shift", "Meta"];
+
+fn is_shortcut_key(key: &str) -> bool {
+    let single_char = |pred: fn(&u8) -> bool| key.len() == 1 && key.as_bytes().iter().all(pred);
+    let function_key = key
+        .strip_prefix('F')
+        .filter(|n| !n.starts_with('0'))
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=12).contains(&n));
+    single_char(u8::is_ascii_uppercase)
+        || single_char(u8::is_ascii_digit)
+        || function_key
+        || SHORTCUT_KEYS.contains(&key)
+}
+
+/// Is `combo` a well-formed canonical combo that is free for the user to bind?
+fn check_combo(combo: &str) -> Result<(), AppError> {
+    let malformed = || AppError::Invalid("That is not a valid shortcut.".into());
+    let mut parts: Vec<&str> = combo.split('+').collect();
+    let key = parts.pop().unwrap_or_default();
+    // why a moving start index: each modifier has to appear later in
+    // MODIFIERS than the previous one, which rules out both duplicates and
+    // the wrong order in one pass.
+    let mut next = 0;
+    for part in parts {
+        match MODIFIERS[next..].iter().position(|m| *m == part) {
+            Some(offset) => next += offset + 1,
+            None => return Err(malformed()),
+        }
+    }
+    if !is_shortcut_key(key) {
+        return Err(malformed());
+    }
+    // why two messages: "reserved" alone left the user guessing whether
+    // macOS or Flit holds the combo — and only Flit's own can never move.
+    if MACOS_COMBOS.contains(&combo) {
+        return Err(AppError::Invalid(
+            "macOS already uses this shortcut.".into(),
+        ));
+    }
+    if key == "Escape" || key == "Tab" || FIXED_COMBOS.contains(&combo) {
+        return Err(AppError::Invalid(
+            "Flit already uses this shortcut, and it can't be changed.".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn shortcut_key(action: ShortcutAction) -> String {
+    format!("{SHORTCUT_PREFIX}{}", action.as_str())
+}
+
+/// Read every binding over one connection.
+///
+/// why `&mut SqliteConnection` instead of the pool: `set_shortcut` has to
+/// read inside its transaction, and a transaction derefs to a connection —
+/// the plain read just checks one out of the pool and passes it in.
+async fn load_shortcuts(conn: &mut SqliteConnection) -> Result<Vec<ShortcutBinding>, AppError> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT key, value FROM settings WHERE key LIKE 'shortcut.%'")
+            .fetch_all(&mut *conn)
+            .await?;
+    let stored: HashMap<String, String> = rows.into_iter().collect();
+    Ok(ShortcutAction::ALL
+        .into_iter()
+        .map(|action| {
+            let default = action.default_combo();
+            let combo = match stored.get(&shortcut_key(action)) {
+                None => Some(default.to_string()),
+                Some(value) if value.is_empty() => None,
+                Some(value) if check_combo(value).is_ok() => Some(value.clone()),
+                // A corrupt value costs only this one action its custom binding.
+                Some(_) => Some(default.to_string()),
+            };
+            ShortcutBinding {
+                action,
+                combo,
+                default_combo: default.to_string(),
+            }
+        })
+        .collect())
+}
+
+async fn upsert_on(conn: &mut SqliteConnection, key: &str, value: &str) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// Every action's current binding, in `ShortcutAction::ALL` order.
+pub async fn shortcuts(pool: &SqlitePool) -> Result<Vec<ShortcutBinding>, AppError> {
+    let mut conn = pool.acquire().await?;
+    load_shortcuts(&mut conn).await
+}
+
+/// Bind `action` to `combo` (`None` unbinds it) and return the new bindings.
+/// Whichever other action held that combo is left unbound: a combo belongs
+/// to at most one action.
+pub async fn set_shortcut(
+    pool: &SqlitePool,
+    action: ShortcutAction,
+    combo: Option<String>,
+) -> Result<Vec<ShortcutBinding>, AppError> {
+    if let Some(combo) = &combo {
+        check_combo(combo)?;
+    }
+    // why the lock: this transaction reads before it writes, and SQLite has a
+    // single writer — see storage::WRITE_LOCK.
+    let _write = super::WRITE_LOCK.lock().await;
+    // why a transaction: the conflict check reads the current bindings and
+    // then writes two rows (unbind the old owner, bind the new one). Doing it
+    // atomically means a crash halfway can never leave one combo on two
+    // actions. Dropping `tx` without commit() on an early `?` rolls back.
+    let mut tx = pool.begin().await?;
+    if let Some(combo) = &combo {
+        for binding in load_shortcuts(&mut tx).await? {
+            if binding.action != action && binding.combo.as_ref() == Some(combo) {
+                upsert_on(&mut tx, &shortcut_key(binding.action), "").await?;
+            }
+        }
+    }
+    let value = combo.as_deref().unwrap_or("");
+    upsert_on(&mut tx, &shortcut_key(action), value).await?;
+    let bindings = load_shortcuts(&mut tx).await?;
+    tx.commit().await?;
+    Ok(bindings)
+}
+
+/// Forget every custom binding, so each action is back on its default.
+pub async fn reset_shortcuts(pool: &SqlitePool) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM settings WHERE key LIKE 'shortcut.%'")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -542,5 +745,239 @@ mod tests {
         let settings = notification_settings(&pool).await.unwrap();
 
         assert_eq!(settings, NotificationSettings::default());
+    }
+
+    async fn stored(pool: &SqlitePool, key: &str, value: &str) {
+        sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
+            .bind(key)
+            .bind(value)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    fn combo_of(bindings: &[ShortcutBinding], action: ShortcutAction) -> Option<String> {
+        bindings
+            .iter()
+            .find(|binding| binding.action == action)
+            .and_then(|binding| binding.combo.clone())
+    }
+
+    #[tokio::test]
+    async fn shortcuts_default_to_the_shipped_bindings() {
+        let pool = test_pool().await;
+
+        let bindings = shortcuts(&pool).await.unwrap();
+
+        assert_eq!(bindings.len(), ShortcutAction::ALL.len());
+        for binding in &bindings {
+            assert_eq!(
+                binding.combo.as_deref(),
+                Some(binding.action.default_combo())
+            );
+            assert_eq!(binding.default_combo, binding.action.default_combo());
+        }
+        assert_eq!(
+            combo_of(&bindings, ShortcutAction::NewMessage).as_deref(),
+            Some("Meta+N")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shortcut_roundtrips_and_can_be_unbound() {
+        let pool = test_pool().await;
+
+        let bindings = set_shortcut(&pool, ShortcutAction::Reply, Some("Alt+Meta+R".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            combo_of(&bindings, ShortcutAction::Reply).as_deref(),
+            Some("Alt+Meta+R")
+        );
+        assert_eq!(shortcuts(&pool).await.unwrap(), bindings);
+
+        let bindings = set_shortcut(&pool, ShortcutAction::Reply, None)
+            .await
+            .unwrap();
+        assert_eq!(combo_of(&bindings, ShortcutAction::Reply), None);
+        assert_eq!(shortcuts(&pool).await.unwrap(), bindings);
+    }
+
+    #[tokio::test]
+    async fn taking_another_actions_combo_unbinds_that_action() {
+        let pool = test_pool().await;
+
+        // New Message holds Meta+N only by default — no row stored for it.
+        let bindings = set_shortcut(&pool, ShortcutAction::Reply, Some("Meta+N".into()))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            combo_of(&bindings, ShortcutAction::Reply).as_deref(),
+            Some("Meta+N")
+        );
+        assert_eq!(combo_of(&bindings, ShortcutAction::NewMessage), None);
+        // Everyone else keeps theirs.
+        assert_eq!(
+            combo_of(&bindings, ShortcutAction::Forward).as_deref(),
+            Some("Shift+Meta+F")
+        );
+        assert_eq!(shortcuts(&pool).await.unwrap(), bindings);
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_shortcut_falls_back_to_that_actions_default() {
+        let pool = test_pool().await;
+        stored(&pool, "shortcut.reply", "Meta+Yolo").await;
+        stored(&pool, "shortcut.archive", "Meta+Q").await;
+        stored(&pool, "shortcut.forward", "Alt+Meta+F").await;
+        stored(&pool, "shortcut.trash", "").await;
+
+        let bindings = shortcuts(&pool).await.unwrap();
+
+        assert_eq!(
+            combo_of(&bindings, ShortcutAction::Reply).as_deref(),
+            Some("Meta+R")
+        );
+        assert_eq!(
+            combo_of(&bindings, ShortcutAction::Archive).as_deref(),
+            Some("Ctrl+Meta+A")
+        );
+        assert_eq!(
+            combo_of(&bindings, ShortcutAction::Forward).as_deref(),
+            Some("Alt+Meta+F")
+        );
+        assert_eq!(combo_of(&bindings, ShortcutAction::Trash), None);
+    }
+
+    #[tokio::test]
+    async fn a_reserved_combo_says_who_owns_it() {
+        let pool = test_pool().await;
+        let message = |combo: &str| {
+            let pool = pool.clone();
+            let combo = combo.to_string();
+            async move {
+                set_shortcut(&pool, ShortcutAction::Reply, Some(combo))
+                    .await
+                    .unwrap_err()
+                    .to_string()
+            }
+        };
+
+        for combo in ["Meta+C", "Meta+Q", "Ctrl+Meta+F"] {
+            assert_eq!(
+                message(combo).await,
+                "macOS already uses this shortcut.",
+                "{combo}"
+            );
+        }
+        for combo in [
+            "Meta+Comma",
+            "ArrowDown",
+            "Shift+ArrowUp",
+            "Escape",
+            "Meta+Tab",
+        ] {
+            assert_eq!(
+                message(combo).await,
+                "Flit already uses this shortcut, and it can't be changed.",
+                "{combo}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn reserved_and_malformed_combos_are_rejected() {
+        let pool = test_pool().await;
+
+        for combo in [
+            "Meta+Q",
+            "Meta+W",
+            "Meta+C",
+            "Shift+Meta+Z",
+            "Ctrl+Meta+F",
+            "Meta+Comma",
+            "ArrowDown",
+            "Shift+ArrowUp",
+            "Escape",
+            "Tab",
+            "Meta+Tab",
+        ] {
+            let result = set_shortcut(&pool, ShortcutAction::Reply, Some(combo.into())).await;
+            assert!(
+                matches!(result, Err(AppError::Invalid(_))),
+                "{combo} should be reserved"
+            );
+        }
+        for combo in [
+            "",
+            "Meta",
+            "Meta+",
+            "Meta+Ctrl+R",
+            "Meta+Meta+R",
+            "Meta+r",
+            "Meta+Yolo",
+            "Hyper+R",
+        ] {
+            let result = set_shortcut(&pool, ShortcutAction::Reply, Some(combo.into())).await;
+            assert!(
+                matches!(result, Err(AppError::Invalid(_))),
+                "{combo:?} should be malformed"
+            );
+        }
+
+        // Nothing was written by the rejected attempts.
+        assert_eq!(
+            combo_of(&shortcuts(&pool).await.unwrap(), ShortcutAction::Reply).as_deref(),
+            Some("Meta+R")
+        );
+    }
+
+    #[tokio::test]
+    async fn well_formed_combos_are_accepted() {
+        let pool = test_pool().await;
+
+        for combo in [
+            "R",
+            "Shift+7",
+            "Ctrl+Alt+Shift+Meta+F12",
+            "Meta+BracketLeft",
+            "Alt+Space",
+            "Delete",
+            "Meta+ArrowLeft",
+        ] {
+            set_shortcut(&pool, ShortcutAction::Reply, Some(combo.into()))
+                .await
+                .unwrap_or_else(|err| panic!("{combo} rejected: {err}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn resetting_shortcuts_restores_every_default() {
+        let pool = test_pool().await;
+        set_shortcut(&pool, ShortcutAction::Reply, Some("Meta+N".into()))
+            .await
+            .unwrap();
+        set_shortcut(&pool, ShortcutAction::Trash, None)
+            .await
+            .unwrap();
+        set_swipe_actions(&pool, SwipeActions::default())
+            .await
+            .unwrap();
+
+        reset_shortcuts(&pool).await.unwrap();
+
+        for binding in shortcuts(&pool).await.unwrap() {
+            assert_eq!(
+                binding.combo.as_deref(),
+                Some(binding.action.default_combo())
+            );
+        }
+        // Only the shortcut rows go — other settings stay.
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM settings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 2);
     }
 }

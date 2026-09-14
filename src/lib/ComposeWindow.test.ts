@@ -11,8 +11,13 @@ import type {
   Alias,
   Contact,
   OutgoingMessage,
+  ShortcutBinding,
   Signature,
 } from "./types";
+
+const sendOnCmdEnter: ShortcutBinding[] = [
+  { action: "send", combo: "Meta+Enter", defaultCombo: "Meta+Enter" },
+];
 
 const accounts: Account[] = [
   {
@@ -85,6 +90,7 @@ vi.mock("./api", () => ({
   listAliases: vi.fn(async (): Promise<Alias[]> => []),
   listSignatures: vi.fn(async (): Promise<Signature[]> => []),
   listContacts: vi.fn(async (): Promise<Contact[]> => []),
+  getShortcuts: vi.fn(async (): Promise<ShortcutBinding[]> => sendOnCmdEnter),
   takeComposeDraft: vi.fn(async (): Promise<OutgoingMessage | null> => null),
   queueSend: vi.fn(async (): Promise<void> => undefined),
   scheduleSend: vi.fn(async (): Promise<void> => undefined),
@@ -1169,4 +1175,58 @@ it("carries the reply threading headers into saves and sends", async () => {
       }),
     ),
   );
+});
+
+it("sends with ⌘↩ through the same submit as the Send button", async () => {
+  await renderLoaded();
+  await waitFor(() => expect(api.getShortcuts).toHaveBeenCalled());
+
+  const subject = screen.getByLabelText("Subject");
+  await fireEvent.input(subject, { target: { value: "Hello" } });
+  await fireEvent.keyDown(subject, { key: "Enter", metaKey: true });
+
+  await waitFor(() =>
+    expect(api.queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "bob@example.com", subject: "Hello" }),
+    ),
+  );
+});
+
+it("sends with ⌘↩ from the editor without adding a line break", async () => {
+  vi.mocked(api.takeComposeDraft).mockResolvedValueOnce({
+    accountId: 1,
+    to: "alice@example.com",
+    subject: "Hi",
+    body: "hello",
+  });
+  // The editor binds Mod-Enter to a hard break of its own, and jsdom is not
+  // a Mac, so Mod is Ctrl here — bind Send to Ctrl+Enter to hit that clash.
+  vi.mocked(api.getShortcuts).mockResolvedValueOnce([
+    { action: "send", combo: "Ctrl+Enter", defaultCombo: "Meta+Enter" },
+  ]);
+  render(ComposeWindow);
+  const box = await screen.findByRole("textbox", { name: "Message body" });
+  await waitFor(() => expect(api.getShortcuts).toHaveBeenCalled());
+
+  await fireEvent.keyDown(box, { key: "Enter", ctrlKey: true });
+
+  await waitFor(() => expect(api.queueSend).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(api.queueSend).mock.calls[0][0].bodyHtml).not.toContain(
+    "<br",
+  );
+});
+
+it("does not send with ⌘↩ once the send shortcut is unbound", async () => {
+  vi.mocked(api.getShortcuts).mockResolvedValueOnce([
+    { action: "send", combo: null, defaultCombo: "Meta+Enter" },
+  ]);
+  await renderLoaded();
+  await waitFor(() => expect(api.getShortcuts).toHaveBeenCalled());
+
+  await fireEvent.keyDown(screen.getByLabelText("Subject"), {
+    key: "Enter",
+    metaKey: true,
+  });
+
+  expect(api.queueSend).not.toHaveBeenCalled();
 });
