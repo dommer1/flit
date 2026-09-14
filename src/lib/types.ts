@@ -187,6 +187,29 @@ export interface SwipeActions {
   right: SwipeAction;
 }
 
+/** An app action that can be triggered from the keyboard. */
+export type ShortcutAction =
+  | "new-message"
+  | "reply"
+  | "reply-all"
+  | "forward"
+  | "archive"
+  | "trash"
+  | "toggle-read"
+  | "check-mail"
+  | "toggle-sidebar"
+  | "focus-search"
+  | "send";
+
+/** One action's keyboard binding. Combos are canonical strings,
+ * `Ctrl+Alt+Shift+Meta+<Key>` with modifiers in that order (e.g. "Meta+N"). */
+export interface ShortcutBinding {
+  action: ShortcutAction;
+  /** null = unbound. */
+  combo: string | null;
+  defaultCombo: string;
+}
+
 /** How dates are written. Every value but "system" (the OS locale's own
  * format) is the pattern it produces, so it doubles as the menu label. */
 export type DateFormat =

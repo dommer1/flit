@@ -20,6 +20,8 @@ import type {
   RemoteImagePolicy,
   ScheduledMessage,
   SendEvent,
+  ShortcutAction,
+  ShortcutBinding,
   Signature,
   SwipeActions,
   ThreadOrder,
@@ -505,6 +507,25 @@ export function getSwipeActions(): Promise<SwipeActions> {
 
 export function setSwipeActions(actions: SwipeActions): Promise<void> {
   return invoke<void>("set_swipe_actions", { actions });
+}
+
+/** Every action's keyboard binding, in settings order. */
+export function getShortcuts(): Promise<ShortcutBinding[]> {
+  return invoke<ShortcutBinding[]>("get_shortcuts");
+}
+
+/** Bind an action to a combo (null unbinds). Whichever action held the combo
+ * before is left unbound; the returned list shows the result. Rejects with a
+ * readable message for a reserved or malformed combo. */
+export function setShortcut(
+  action: ShortcutAction,
+  combo: string | null,
+): Promise<ShortcutBinding[]> {
+  return invoke<ShortcutBinding[]>("set_shortcut", { action, combo });
+}
+
+export function resetShortcuts(): Promise<ShortcutBinding[]> {
+  return invoke<ShortcutBinding[]>("reset_shortcuts");
 }
 
 /** Conversation-view order (newest at the bottom until changed). */

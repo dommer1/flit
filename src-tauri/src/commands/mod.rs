@@ -6,7 +6,7 @@ use crate::error::AppError;
 use crate::models::{
     Account, Alias, AuthResults, DateTimeFormat, Mailbox, MessageBody, MessageHeader, MessageQuote,
     MessagesChanged, NewAccount, NotificationSettings, OutgoingMessage, RemoteImagePolicy,
-    Signature, SwipeActions, ThreadOrder,
+    ShortcutAction, ShortcutBinding, Signature, SwipeActions, ThreadOrder,
 };
 use crate::state::AppState;
 use crate::timing;
@@ -2249,6 +2249,37 @@ pub async fn set_swipe_actions(
     // listens and re-reads the gesture config.
     app.emit("settings-changed", ())?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_shortcuts(state: State<'_, AppState>) -> Result<Vec<ShortcutBinding>, AppError> {
+    storage::settings::shortcuts(&state.pool).await
+}
+
+/// Bind `action` to `combo` (`None` unbinds it). Returns every binding, so
+/// the settings pane can show which other action lost the combo.
+#[tauri::command]
+pub async fn set_shortcut(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    action: ShortcutAction,
+    combo: Option<String>,
+) -> Result<Vec<ShortcutBinding>, AppError> {
+    let bindings = storage::settings::set_shortcut(&state.pool, action, combo).await?;
+    // why: the main and compose windows each keep their own copy of the
+    // bindings and re-read them on this event.
+    app.emit("settings-changed", ())?;
+    Ok(bindings)
+}
+
+#[tauri::command]
+pub async fn reset_shortcuts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<ShortcutBinding>, AppError> {
+    storage::settings::reset_shortcuts(&state.pool).await?;
+    app.emit("settings-changed", ())?;
+    storage::settings::shortcuts(&state.pool).await
 }
 
 /// Is timing output switched on for this process (`FLIT_TIMING`)?
