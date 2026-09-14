@@ -36,6 +36,10 @@ vi.mock("./api", () => ({
   // Bodies arrive as one bulk map, keyed by message id.
   threadBodies: vi.fn(async () => ({})),
   setMessageRead: vi.fn(async () => {}),
+  summarizeThread: vi.fn(
+    async () => "- Alice proposed Saturday\n- Bob agreed, bring snacks",
+  ),
+  summarizeMessage: vi.fn(async () => "- one line"),
 }));
 
 import * as api from "./api";
@@ -754,4 +758,34 @@ it("keeps the prompt when nothing is selected at all", () => {
   renderView({ message: null, selectedCount: 0 });
 
   expect(screen.getByText("Select a message")).toBeInTheDocument();
+});
+
+it("offers no conversation summary for a single message or when not ready", async () => {
+  renderView({ canSummarize: true });
+  await screen.findByText("hi there").catch(() => undefined);
+
+  expect(screen.queryByLabelText("Summarize this conversation")).toBeNull();
+});
+
+it("summarizes the whole conversation from its header", async () => {
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  renderView({ canSummarize: true });
+
+  await fireEvent.click(
+    await screen.findByLabelText("Summarize this conversation"),
+  );
+
+  expect(api.summarizeThread).toHaveBeenCalledWith(1);
+  expect(await screen.findByText("Alice proposed Saturday")).toBeInTheDocument();
+  expect(
+    screen.getByRole("region", { name: "Conversation summary" }),
+  ).toBeInTheDocument();
+});
+
+it("hides the conversation summary button while summaries are not ready", async () => {
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  renderView();
+  await screen.findByText("Weekend plans");
+
+  expect(screen.queryByLabelText("Summarize this conversation")).toBeNull();
 });

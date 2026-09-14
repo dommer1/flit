@@ -1,7 +1,13 @@
 <script lang="ts">
-  import { listThread, setMessageRead, threadBodies } from "./api";
+  import {
+    listThread,
+    setMessageRead,
+    summarizeThread,
+    threadBodies,
+  } from "./api";
   import type { DraftKind } from "./draft";
   import MessageCard from "./MessageCard.svelte";
+  import SummaryPanel from "./SummaryPanel.svelte";
   import { timed } from "./timing";
   import type { MessageBody, MessageHeader, ThreadOrder } from "./types";
 
@@ -59,6 +65,28 @@
   // once it has grown to its final size.
   let threadEl = $state<HTMLDivElement | null>(null);
   let scrollTargetId = $state<number | null>(null);
+  // The on-device summary of the whole conversation, once asked for.
+  let threadSummary = $state<{
+    loading: boolean;
+    text: string | null;
+    error: string | null;
+  } | null>(null);
+
+  async function summarizeConversation() {
+    if (message === null) return;
+    const id = message.id;
+    threadSummary = { loading: true, text: null, error: null };
+    try {
+      const text = await summarizeThread(id);
+      if (message?.id === id) {
+        threadSummary = { loading: false, text, error: null };
+      }
+    } catch (err) {
+      if (message?.id === id) {
+        threadSummary = { loading: false, text: null, error: String(err) };
+      }
+    }
+  }
 
   $effect(() => {
     if (message === null) {
@@ -67,6 +95,7 @@
       expandedIds = new Set();
       anchorId = null;
       scrollTargetId = null;
+      threadSummary = null;
       return;
     }
     const id = message.id;
@@ -80,6 +109,7 @@
           // newest, for an ordinary folder row), load all bodies.
           anchorId = id;
           bodies = {};
+          threadSummary = null;
           const anchor = focusSelected
             ? anchorMessage(thread, fallback)
             : newestMessage(thread);
@@ -219,7 +249,39 @@
       <div class="stack">
         <div class="thread-head">
           <h2 class="subject">{message.subject}</h2>
+          {#if canSummarize && thread.length > 1}
+            <button
+              class="summarize"
+              title="Summarize conversation"
+              aria-label="Summarize this conversation"
+              onclick={() => void summarizeConversation()}
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M10 2.5 11.8 8.2 17.5 10l-5.7 1.8L10 17.5l-1.8-5.7L2.5 10l5.7-1.8z" />
+                <path d="M16 2v3M14.5 3.5h3" />
+              </svg>
+            </button>
+          {/if}
         </div>
+        {#if threadSummary}
+          <div class="thread-summary">
+            <SummaryPanel
+              summary={threadSummary}
+              label="Conversation summary"
+              onRetry={() => void summarizeConversation()}
+              onClose={() => (threadSummary = null)}
+            />
+          </div>
+        {/if}
         {#each displayThread as entry (entry.id)}
           <MessageCard
             message={entry}
@@ -290,5 +352,27 @@
     color: var(--text-primary);
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .summarize {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    align-self: center;
+    padding: 3px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-secondary);
+    cursor: default;
+  }
+
+  .summarize:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .thread-summary {
+    margin-bottom: 12px;
   }
 </style>
