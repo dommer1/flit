@@ -75,11 +75,20 @@ pub struct Request {
 
 type Reply = tokio::sync::oneshot::Sender<Result<String, AppError>>;
 
+enum Job {
+    Complete(Request, Reply),
+    /// Drop the loaded model and answer when done. why it exists: llama.cpp's
+    /// Metal backend asserts at process exit if a model is still loaded, and
+    /// a static destructor is not a place to free gigabytes — the app calls
+    /// this on its way out.
+    Unload(tokio::sync::oneshot::Sender<()>),
+}
+
 /// Handle to the worker thread. Cheap to keep in AppState: the thread —
 /// and llama.cpp's backend — start on the first request, not at app boot.
 #[derive(Default)]
 pub struct Engine {
-    sender: OnceLock<mpsc::Sender<(Request, Reply)>>,
+    sender: OnceLock<mpsc::Sender<Job>>,
 }
 
 impl Engine {
@@ -87,14 +96,26 @@ impl Engine {
     pub async fn complete(&self, request: Request) -> Result<String, AppError> {
         let (reply, answer) = tokio::sync::oneshot::channel();
         self.sender()
-            .send((request, reply))
+            .send(Job::Complete(request, reply))
             .map_err(|_| AppError::Llm("the model worker has stopped".to_string()))?;
         answer
             .await
             .map_err(|_| AppError::Llm("the model worker dropped the request".to_string()))?
     }
 
-    fn sender(&self) -> &mpsc::Sender<(Request, Reply)> {
+    /// Free the loaded model, if any; resolves once it is gone. A no-op
+    /// when the worker never started.
+    pub async fn unload(&self) {
+        let Some(sender) = self.sender.get() else {
+            return;
+        };
+        let (done, gone) = tokio::sync::oneshot::channel();
+        if sender.send(Job::Unload(done)).is_ok() {
+            let _ = gone.await;
+        }
+    }
+
+    fn sender(&self) -> &mpsc::Sender<Job> {
         self.sender.get_or_init(|| {
             let (sender, receiver) = mpsc::channel();
             // why ignore the spawn error: a thread that could not start
@@ -109,15 +130,23 @@ impl Engine {
 }
 
 /// The worker loop: load on demand, answer, unload when idle.
-fn worker(receiver: mpsc::Receiver<(Request, Reply)>) {
+fn worker(receiver: mpsc::Receiver<Job>) {
     // llama.cpp logs every model detail to stderr by default — keep it quiet.
     send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
     let backend = match LlamaBackend::init() {
         Ok(backend) => backend,
         Err(err) => {
             // Fail every request with the reason rather than exit silently.
-            while let Ok((_, reply)) = receiver.recv() {
-                let _ = reply.send(Err(AppError::Llm(format!("cannot start llama.cpp: {err}"))));
+            while let Ok(job) = receiver.recv() {
+                match job {
+                    Job::Complete(_, reply) => {
+                        let _ = reply
+                            .send(Err(AppError::Llm(format!("cannot start llama.cpp: {err}"))));
+                    }
+                    Job::Unload(done) => {
+                        let _ = done.send(());
+                    }
+                }
             }
             return;
         }
@@ -125,9 +154,13 @@ fn worker(receiver: mpsc::Receiver<(Request, Reply)>) {
     let mut loaded: Option<Loaded> = None;
     loop {
         match receiver.recv_timeout(IDLE_UNLOAD) {
-            Ok((mut request, reply)) => {
+            Ok(Job::Complete(mut request, reply)) => {
                 let result = complete(&backend, &mut loaded, &mut request);
                 let _ = reply.send(result);
+            }
+            Ok(Job::Unload(done)) => {
+                loaded = None;
+                let _ = done.send(());
             }
             Err(RecvTimeoutError::Timeout) => loaded = None,
             Err(RecvTimeoutError::Disconnected) => return,
@@ -353,6 +386,7 @@ mod tests {
             .unwrap();
 
         assert!(answer.to_lowercase().contains("pong"), "{answer:?}");
+        engine.unload().await;
     }
 
     /// Manual quality probe (prints, asserts only the obvious): the short
@@ -390,6 +424,7 @@ mod tests {
             .filter(|l| l.trim_start().starts_with('-'))
             .count();
         assert!(bullets <= 3, "{answer:?}");
+        test_engine().unload().await;
     }
 
     /// Manual probe on any mail: `FLIT_PROBE_FILE=<body.txt>
@@ -448,6 +483,7 @@ mod tests {
             "--- probe summary ({:.1}s) ---\n{answer}\n---",
             started.elapsed().as_secs_f32()
         );
+        test_engine().unload().await;
     }
 
     /// Same setup as above; checks that the streamed pieces add up to the
@@ -490,5 +526,14 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("cancelled"), "{err}");
+        engine.unload().await;
+    }
+
+    #[tokio::test]
+    async fn unload_before_any_request_is_a_no_op() {
+        // Must not start the worker (nor llama.cpp) just to unload nothing.
+        let engine = Engine::default();
+        engine.unload().await;
+        assert!(engine.sender.get().is_none());
     }
 }

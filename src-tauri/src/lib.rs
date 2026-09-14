@@ -230,8 +230,17 @@ pub fn run() {
             commands::delete_alias,
             commands::set_default_alias
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // why: llama.cpp's Metal backend asserts in a static destructor
+            // when a model is still loaded at process exit — free it first.
+            // Exit fires once, right before Tauri calls process::exit.
+            if let tauri::RunEvent::Exit = event {
+                let state = app.state::<state::AppState>();
+                tauri::async_runtime::block_on(state.llm_engine.unload());
+            }
+        });
 }
 
 #[cfg(test)]
