@@ -37,6 +37,12 @@ pub fn run() {
             // then assume the pool always exists in state.
             let pool = tauri::async_runtime::block_on(storage::init(&data_dir.join("flit.db")))?;
 
+            // why before any window is built: the main window is created
+            // further down, so it opens already in the stored scheme instead
+            // of flashing the system one first.
+            let appearance = tauri::async_runtime::block_on(storage::settings::appearance(&pool))?;
+            app.handle().set_theme(commands::theme_for(appearance));
+
             // why spawned instead of awaited in here: these are one-off
             // repairs of data that is already cached, so nothing on screen
             // waits for them — while block_on'ing them cost 1.6 s of a 1.7 s
@@ -190,6 +196,8 @@ pub fn run() {
             commands::set_swipe_actions,
             commands::timing_enabled,
             commands::log_timing,
+            commands::get_appearance,
+            commands::set_appearance,
             commands::get_thread_order,
             commands::set_thread_order,
             commands::get_date_time_format,

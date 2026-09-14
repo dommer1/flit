@@ -324,6 +324,37 @@ impl ThreadOrder {
     }
 }
 
+/// The app's colour scheme. `System` follows macOS; the other two pin it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    /// The wire/storage form — matches the serde `camelCase` names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Appearance::System => "system",
+            Appearance::Light => "light",
+            Appearance::Dark => "dark",
+        }
+    }
+
+    /// why: unknown strings fall back to the default — a corrupt row must
+    /// never leave the app stuck in a scheme the user did not pick.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "light" => Appearance::Light,
+            "dark" => Appearance::Dark,
+            _ => Appearance::System,
+        }
+    }
+}
+
 /// How dates are written in the UI. Every variant but `System` is named
 /// after exactly what it produces, and that pattern IS its wire form — the
 /// value the settings menu shows is the value stored and the value the

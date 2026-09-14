@@ -10,6 +10,7 @@
     updateAlias,
     confirmAccountDeletion,
     deleteAccount,
+    getAppearance,
     getAvatarLookupEnabled,
     getDateTimeFormat,
     getRemoteImagePolicy,
@@ -18,6 +19,7 @@
     listAccounts,
     onAccountsChanged,
     setAccountColor,
+    setAppearance,
     setAvatarLookupEnabled,
     setDateTimeFormat,
     setRemoteImagePolicy,
@@ -31,6 +33,7 @@
     SYSTEM_DATE_TIME_FORMAT,
     type Account,
     type Alias,
+    type Appearance,
     type DateFormat,
     type DateTimeFormat,
     type NewAccount,
@@ -71,6 +74,12 @@
     { value: "reply", label: "Reply" },
   ];
 
+  const APPEARANCES: { value: Appearance; label: string }[] = [
+    { value: "system", label: "System" },
+    { value: "light", label: "Light" },
+    { value: "dark", label: "Dark" },
+  ];
+
   let accounts = $state<Account[]>([]);
   let aliases = $state<Alias[]>([]);
   let lastError = $state<string | null>(null);
@@ -80,6 +89,7 @@
   let policy = $state<RemoteImagePolicy>("ask");
   let avatarLookup = $state(false);
   let swipes = $state<SwipeActions>(DEFAULT_SWIPE_ACTIONS);
+  let appearance = $state<Appearance>("system");
   let threadOrder = $state<ThreadOrder>("newestLast");
   let dateTime = $state<DateTimeFormat>(SYSTEM_DATE_TIME_FORMAT);
 
@@ -224,6 +234,37 @@
     }
   }
 
+  async function selectAppearance(next: Appearance) {
+    lastError = null;
+    const previous = appearance;
+    appearance = next;
+    try {
+      await setAppearance(next);
+    } catch (err) {
+      // why: the control must not lie — a failed save rolls the value back.
+      appearance = previous;
+      lastError = String(err);
+    }
+  }
+
+  // why: the ARIA radio-group pattern — the group is one Tab stop and the
+  // arrow keys move (and select) within it, as in macOS System Settings.
+  function handleAppearanceKeydown(event: KeyboardEvent) {
+    const step =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    const index = APPEARANCES.findIndex((a) => a.value === appearance);
+    const next = (index + step + APPEARANCES.length) % APPEARANCES.length;
+    void selectAppearance(APPEARANCES[next].value);
+    const group = event.currentTarget as HTMLElement;
+    group.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
+  }
+
   async function selectThreadOrder(next: ThreadOrder) {
     lastError = null;
     const previous = threadOrder;
@@ -259,6 +300,7 @@
     void getRemoteImagePolicy().then((stored) => (policy = stored));
     void getAvatarLookupEnabled().then((stored) => (avatarLookup = stored));
     void getSwipeActions().then((stored) => (swipes = stored));
+    void getAppearance().then((stored) => (appearance = stored));
     void getThreadOrder().then((stored) => (threadOrder = stored));
     void getDateTimeFormat().then((stored) => (dateTime = stored));
     // why: refreshes also cover changes made elsewhere (a future main-window
@@ -320,6 +362,35 @@
 
   {#if tab === "general"}
     <section class="content">
+      <div class="section-label">Appearance</div>
+      <div class="group">
+        <div class="row">
+          <span class="row-label" id="appearance-label">Appearance</span>
+          <div
+            class="segmented"
+            role="radiogroup"
+            aria-labelledby="appearance-label"
+            tabindex="-1"
+            onkeydown={handleAppearanceKeydown}
+          >
+            {#each APPEARANCES as option (option.value)}
+              <button
+                type="button"
+                role="radio"
+                class="segment"
+                aria-checked={appearance === option.value}
+                tabindex={appearance === option.value ? 0 : -1}
+                onclick={() => void selectAppearance(option.value)}
+              >
+                {option.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+      </div>
+      <p class="explain">
+        System follows the macOS setting and switches with it.
+      </p>
       <div class="section-label">Conversations</div>
       <div class="group">
         <div class="row">
@@ -578,6 +649,40 @@
     background: var(--bg-window);
     font: inherit;
     font-size: 12.5px;
+  }
+
+  /* macOS-style segmented control: a sunken track with the chosen
+     segment raised as a card. */
+  .segmented {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 7px;
+    background: var(--bg-field);
+  }
+
+  .segment {
+    min-width: 64px;
+    padding: 3px 12px;
+    border: none;
+    border-radius: 5px;
+    background: none;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: default;
+  }
+
+  .segment[aria-checked="true"] {
+    background: var(--bg-card);
+    box-shadow: 0 0 0 0.5px var(--card-border-strong);
+    color: var(--text-primary);
+  }
+
+  .segment:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   .explain {

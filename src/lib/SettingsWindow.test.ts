@@ -65,6 +65,8 @@ vi.mock("./api", () => ({
     right: "toggleRead",
   })),
   setSwipeActions: vi.fn(async () => undefined),
+  getAppearance: vi.fn(async () => "system"),
+  setAppearance: vi.fn(async () => undefined),
   getThreadOrder: vi.fn(async () => "newestLast"),
   setThreadOrder: vi.fn(async () => undefined),
   getDateTimeFormat: vi.fn(async () => ({ date: "system", time: "system" })),
@@ -263,6 +265,28 @@ it("saves a swipe action change", async () => {
     left: "reply",
     right: "toggleRead",
   });
+});
+
+it("picks the appearance from the segmented control on the General tab", async () => {
+  render(SettingsWindow);
+  await fireEvent.click(screen.getByRole("button", { name: "General" }));
+  screen.getByRole("radiogroup", { name: "Appearance" });
+  expect(await screen.findByRole("radio", { name: "System" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+
+  await fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
+
+  expect(api.setAppearance).toHaveBeenCalledWith("dark");
+  expect(screen.getByRole("radio", { name: "Dark" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  expect(screen.getByRole("radio", { name: "System" })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
 });
 
 it("saves the conversation order change on the General tab", async () => {

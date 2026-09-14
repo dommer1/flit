@@ -178,6 +178,9 @@ export interface NotificationSettings {
  * "none" disables that direction. */
 export type SwipeAction = "none" | "toggleRead" | "archive" | "trash" | "reply";
 
+/** The app's colour scheme; "system" follows macOS. */
+export type Appearance = "system" | "light" | "dark";
+
 /** Order of messages in the conversation view. */
 export type ThreadOrder = "newestLast" | "newestFirst";
 
