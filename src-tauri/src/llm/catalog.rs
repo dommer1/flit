@@ -28,6 +28,11 @@ pub struct ModelSpec {
     /// thinking off — without it the model deliberates for hundreds of
     /// tokens before the summary. Gemma 4 thinks only when asked, so none.
     pub assistant_prefix: &'static str,
+    /// Summarize in English first and translate the bullets in a second
+    /// call when the summary language is not English. The 2B model asked
+    /// for Slovak directly copies the newsletter's table of contents; asked
+    /// for English it reads the mail, and translating bullets is easy.
+    pub two_pass_translation: bool,
 }
 
 const QWEN_NO_THINK: &str = "<think>\n\n</think>\n\n";
@@ -36,13 +41,14 @@ pub const MODELS: &[ModelSpec] = &[
     ModelSpec {
         id: "qwen3.5-2b",
         name: "Qwen3.5 2B",
-        description: "Fastest and smallest. Fine in English; in Slovak it copies headings and slips.",
+        description: "Fastest and smallest. Summarizes in English, then translates — expect small slips.",
         file_name: "Qwen3.5-2B-Q4_K_M.gguf",
         size: 1_280_835_840,
         sha256: "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
         url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf",
         recommended: false,
         assistant_prefix: QWEN_NO_THINK,
+        two_pass_translation: true,
     },
     ModelSpec {
         id: "qwen3.5-4b",
@@ -54,6 +60,7 @@ pub const MODELS: &[ModelSpec] = &[
         url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
         recommended: true,
         assistant_prefix: QWEN_NO_THINK,
+        two_pass_translation: false,
     },
     ModelSpec {
         id: "gemma-4-e2b",
@@ -65,6 +72,7 @@ pub const MODELS: &[ModelSpec] = &[
         url: "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/675cff42a74c774d6cb76f76d8eacb49b48c9b93/gemma-4-E2B_q4_0-it.gguf",
         recommended: false,
         assistant_prefix: "",
+        two_pass_translation: false,
     },
 ];
 

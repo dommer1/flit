@@ -127,20 +127,21 @@ impl Summaries {
     }
 }
 
-/// Run one generation under `request_id`: pieces go out as `summary-token`
-/// events, a cancel command reaches it through the registry, and the entry
-/// is dropped however it ends.
+/// Run one generation under `request_id`: with `stream`, pieces go out as
+/// `summary-token` events; a cancel command reaches it through the
+/// registry, and the entry is dropped however it ends.
 async fn generate(
     app: &AppHandle,
     request_id: &str,
-    model_path: std::path::PathBuf,
+    model_path: &std::path::Path,
     messages: Vec<engine::ChatMessage>,
     max_tokens: usize,
     assistant_prefix: &str,
+    stream: bool,
 ) -> Result<String, AppError> {
     let state = app.state::<AppState>();
     let cancel = state.llm_summaries.begin(request_id);
-    let sink: engine::TokenSink = {
+    let sink: Option<engine::TokenSink> = stream.then(|| {
         let app = app.clone();
         let request_id = request_id.to_string();
         Box::new(move |piece: &str| {
@@ -151,16 +152,16 @@ async fn generate(
                     text: piece.to_string(),
                 },
             );
-        })
-    };
+        }) as engine::TokenSink
+    });
     let result = state
         .llm_engine
         .complete(engine::Request {
-            model_path,
+            model_path: model_path.to_path_buf(),
             messages,
             max_tokens,
             assistant_prefix: assistant_prefix.to_string(),
-            on_token: Some(sink),
+            on_token: sink,
             cancel,
         })
         .await;
@@ -168,12 +169,72 @@ async fn generate(
     result
 }
 
+/// The summary itself: one call in the target language, or — for models
+/// flagged for it, when the target is not English — an English summary
+/// followed by a translation. `prompt_for` builds the summary prompt for a
+/// given language name (or the auto setting); `detect_from` is the text
+/// the language is detected from.
+async fn summarize_with(
+    app: &AppHandle,
+    request_id: &str,
+    picked: &Picked,
+    language_setting: &str,
+    detect_from: &str,
+    max_tokens: usize,
+    prompt_for: impl Fn(&str) -> Vec<engine::ChatMessage>,
+) -> Result<String, AppError> {
+    let Picked {
+        spec,
+        path: model_path,
+    } = picked;
+    let target = summarize::resolve_language(language_setting, detect_from);
+    let two_pass = spec.two_pass_translation && target.as_deref().is_some_and(|l| l != "English");
+    if !two_pass {
+        return generate(
+            app,
+            request_id,
+            model_path,
+            prompt_for(language_setting),
+            max_tokens,
+            spec.assistant_prefix,
+            true,
+        )
+        .await;
+    }
+    let target = target.unwrap_or_default();
+    // The English pass stays silent — the reader would see one language
+    // replaced by another mid-way; only the translation streams.
+    let english = generate(
+        app,
+        request_id,
+        model_path,
+        prompt_for("English"),
+        max_tokens,
+        spec.assistant_prefix,
+        false,
+    )
+    .await?;
+    generate(
+        app,
+        request_id,
+        model_path,
+        summarize::translation_prompt(&english, &target),
+        max_tokens,
+        spec.assistant_prefix,
+        true,
+    )
+    .await
+}
+
+/// The picked model and where its file is.
+struct Picked {
+    spec: &'static catalog::ModelSpec,
+    path: std::path::PathBuf,
+}
+
 /// The picked model, only when the feature is on and its file is here;
 /// otherwise an error that reads as guidance for the user.
-async fn ready_model(
-    app: &AppHandle,
-    pool: &SqlitePool,
-) -> Result<(&'static catalog::ModelSpec, std::path::PathBuf), AppError> {
+async fn ready_model(app: &AppHandle, pool: &SqlitePool) -> Result<Picked, AppError> {
     if !settings::llm_summary_enabled(pool).await? {
         return Err(AppError::Invalid(
             "Summaries are switched off — see Settings → Experimental.".to_string(),
@@ -193,7 +254,10 @@ async fn ready_model(
             spec.name
         )));
     }
-    Ok((spec, store::model_path(&dir, spec)))
+    Ok(Picked {
+        spec,
+        path: store::model_path(&dir, spec),
+    })
 }
 
 /// File names of the message's attachments, for the prompt.
@@ -240,13 +304,13 @@ pub async fn cached_message_summary(
     body_text: &str,
 ) -> Result<Option<String>, AppError> {
     let state = app.state::<AppState>();
-    let Ok((spec, _)) = ready_model(app, &state.pool).await else {
+    let Ok(picked) = ready_model(app, &state.pool).await else {
         return Ok(None);
     };
     let language = settings::llm_summary_language(&state.pool).await?;
     storage::summaries::get(
         &state.pool,
-        &message_key(spec, &language, header, body_text),
+        &message_key(picked.spec, &language, header, body_text),
     )
     .await
 }
@@ -258,11 +322,11 @@ pub async fn cached_thread_summary(
     messages: &[(MessageHeader, String)],
 ) -> Result<Option<String>, AppError> {
     let state = app.state::<AppState>();
-    let Ok((spec, _)) = ready_model(app, &state.pool).await else {
+    let Ok(picked) = ready_model(app, &state.pool).await else {
         return Ok(None);
     };
     let language = settings::llm_summary_language(&state.pool).await?;
-    storage::summaries::get(&state.pool, &thread_key(spec, &language, messages)).await
+    storage::summaries::get(&state.pool, &thread_key(picked.spec, &language, messages)).await
 }
 
 /// Summarize one message with the picked model. `body_text` is the raw
@@ -276,14 +340,14 @@ pub async fn summarize_message(
     request_id: &str,
 ) -> Result<String, AppError> {
     let state = app.state::<AppState>();
-    let (spec, model_path) = ready_model(app, &state.pool).await?;
+    let picked = ready_model(app, &state.pool).await?;
     if summarize::prepare_text(body_text, summarize::MESSAGE_CHARS).is_empty() {
         return Err(AppError::Invalid(
             "This message has no text to summarize.".to_string(),
         ));
     }
     let language = settings::llm_summary_language(&state.pool).await?;
-    let key = message_key(spec, &language, header, body_text);
+    let key = message_key(picked.spec, &language, header, body_text);
     if !fresh {
         if let Some(cached) = storage::summaries::get(&state.pool, &key).await? {
             return Ok(cached);
@@ -296,13 +360,15 @@ pub async fn summarize_message(
         text: body_text.to_string(),
         attachments: attachment_names(&state.pool, header.id).await?,
     };
-    let text = generate(
+    let prepared = summarize::prepare_text(body_text, summarize::MESSAGE_CHARS);
+    let text = summarize_with(
         app,
         request_id,
-        model_path,
-        summarize::message_prompt(&source, &language),
+        &picked,
+        &language,
+        &prepared,
         summarize::MAX_ANSWER_TOKENS,
-        spec.assistant_prefix,
+        |lang| summarize::message_prompt(&source, lang),
     )
     .await?;
     storage::summaries::put(&state.pool, &key, &text).await?;
@@ -319,7 +385,7 @@ pub async fn summarize_thread(
     request_id: &str,
 ) -> Result<String, AppError> {
     let state = app.state::<AppState>();
-    let (spec, model_path) = ready_model(app, &state.pool).await?;
+    let picked = ready_model(app, &state.pool).await?;
     let mut sources = Vec::with_capacity(messages.len());
     for (header, text) in messages {
         if summarize::prepare_text(text, summarize::MESSAGE_CHARS).is_empty() {
@@ -339,19 +405,25 @@ pub async fn summarize_thread(
         ));
     }
     let language = settings::llm_summary_language(&state.pool).await?;
-    let key = thread_key(spec, &language, messages);
+    let key = thread_key(picked.spec, &language, messages);
     if !fresh {
         if let Some(cached) = storage::summaries::get(&state.pool, &key).await? {
             return Ok(cached);
         }
     }
-    let text = generate(
+    let all_text: String = sources
+        .iter()
+        .map(|s| summarize::prepare_text(&s.text, summarize::MESSAGE_CHARS))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = summarize_with(
         app,
         request_id,
-        model_path,
-        summarize::thread_prompt(&sources, &language),
+        &picked,
+        &language,
+        &all_text,
         summarize::MAX_THREAD_ANSWER_TOKENS,
-        spec.assistant_prefix,
+        |lang| summarize::thread_prompt(&sources, lang),
     )
     .await?;
     storage::summaries::put(&state.pool, &key, &text).await?;

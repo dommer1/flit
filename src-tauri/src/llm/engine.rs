@@ -400,7 +400,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn probe_a_mail_from_a_file() {
-        use crate::llm::summarize::{message_prompt, Source, AUTO_LANGUAGE, MAX_ANSWER_TOKENS};
+        use crate::llm::summarize::{
+            message_prompt, translation_prompt, Source, AUTO_LANGUAGE, MAX_ANSWER_TOKENS,
+        };
         let path = std::env::var("FLIT_TEST_MODEL").expect("FLIT_TEST_MODEL not set");
         let file = std::env::var("FLIT_PROBE_FILE").expect("FLIT_PROBE_FILE not set");
         let source = Source {
@@ -411,21 +413,37 @@ mod tests {
             attachments: Vec::new(),
         };
 
+        let language = std::env::var("FLIT_PROBE_LANGUAGE").unwrap_or(AUTO_LANGUAGE.to_string());
+        // FLIT_PROBE_MODE=translate plays the two-pass path: an English
+        // summary, then its translation (what the app does for models
+        // flagged two_pass_translation).
+        let mode = std::env::var("FLIT_PROBE_MODE").unwrap_or_default();
+        let request = |messages: Vec<ChatMessage>| Request {
+            model_path: PathBuf::from(&path),
+            messages,
+            max_tokens: MAX_ANSWER_TOKENS,
+            assistant_prefix: "<think>\n\n</think>\n\n".to_string(),
+            on_token: None,
+            cancel: CancelFlag::default(),
+        };
+
         let started = std::time::Instant::now();
-        let answer = test_engine()
-            .complete(Request {
-                model_path: PathBuf::from(path),
-                messages: message_prompt(
-                    &source,
-                    &std::env::var("FLIT_PROBE_LANGUAGE").unwrap_or(AUTO_LANGUAGE.to_string()),
-                ),
-                max_tokens: MAX_ANSWER_TOKENS,
-                assistant_prefix: "<think>\n\n</think>\n\n".to_string(),
-                on_token: None,
-                cancel: CancelFlag::default(),
-            })
-            .await
-            .unwrap();
+        let answer = if mode == "translate" {
+            let english = test_engine()
+                .complete(request(message_prompt(&source, "English")))
+                .await
+                .unwrap();
+            eprintln!("--- english pass ---\n{english}\n---");
+            test_engine()
+                .complete(request(translation_prompt(&english, &language)))
+                .await
+                .unwrap()
+        } else {
+            test_engine()
+                .complete(request(message_prompt(&source, &language)))
+                .await
+                .unwrap()
+        };
         eprintln!(
             "--- probe summary ({:.1}s) ---\n{answer}\n---",
             started.elapsed().as_secs_f32()

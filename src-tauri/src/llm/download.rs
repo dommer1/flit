@@ -298,6 +298,7 @@ mod tests {
             url: Box::leak(url.into_boxed_str()),
             recommended: false,
             assistant_prefix: "",
+            two_pass_translation: false,
         }
     }
 

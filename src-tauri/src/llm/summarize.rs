@@ -266,24 +266,53 @@ const LANGUAGE_CONFIDENCE: f64 = 0.05;
 /// Shorter texts than this are not worth detecting.
 const LANGUAGE_MIN_CHARS: usize = 20;
 
-/// "Write in X." for the prompt. With the auto setting the language is
-/// detected from `text` and named outright — a small model told "the
-/// language of the message" answers in English anyway; told "Slovak" it
-/// complies. Too little or too ambiguous text falls back to the generic
-/// wording.
-fn language_line(language: &str, text: &str) -> String {
-    if language != AUTO_LANGUAGE && !language.trim().is_empty() {
-        return format!("Write in {}.", language.trim());
+/// The language a summary should be written in, by English name: the
+/// setting when one is picked, else the language detected from `text`.
+/// `None` when the setting is auto and the text is too short or too
+/// ambiguous to tell.
+pub fn resolve_language(setting: &str, text: &str) -> Option<String> {
+    if setting != AUTO_LANGUAGE && !setting.trim().is_empty() {
+        return Some(setting.trim().to_string());
     }
     if text.chars().count() < LANGUAGE_MIN_CHARS {
-        return "Write in the language the message is written in.".to_string();
+        return None;
     }
     match whatlang::detect(text) {
         Some(info) if info.confidence() >= LANGUAGE_CONFIDENCE => {
-            format!("Write in {}.", info.lang().eng_name())
+            Some(info.lang().eng_name().to_string())
         }
-        _ => "Write in the language the message is written in.".to_string(),
+        _ => None,
     }
+}
+
+/// "Write in X." for the prompt. The language is named outright — a small
+/// model told "the language of the message" answers in English anyway;
+/// told "Slovak" it complies. Unknown falls back to the generic wording.
+fn language_line(language: &str, text: &str) -> String {
+    match resolve_language(language, text) {
+        Some(name) => format!("Write in {name}."),
+        None => "Write in the language the message is written in.".to_string(),
+    }
+}
+
+/// The second call of a two-pass summary: turn English bullets into
+/// `language`, nothing else.
+pub fn translation_prompt(bullets: &str, language: &str) -> Vec<ChatMessage> {
+    vec![
+        ChatMessage {
+            role: "system",
+            content: format!(
+                "You translate text into {language}. Translate every bullet and keep the \"- \" \
+                 markers. Keep names, numbers, codes and file names exactly as they are. \
+                 Add nothing, drop nothing, explain nothing. Use only the {language} alphabet. \
+                 Output only the translation."
+            ),
+        },
+        ChatMessage {
+            role: "user",
+            content: bullets.to_string(),
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -485,6 +514,35 @@ mod tests {
         assert!(prompt[1]
             .content
             .contains("Summarize the message above. Write in "));
+    }
+
+    #[test]
+    fn resolve_language_prefers_the_setting_then_detection() {
+        let slovak = "Ahoj, v prílohe posielam faktúru za august, prosím o úhradu do konca mesiaca. Ďakujem pekne a prajem pekný deň.";
+        assert_eq!(
+            resolve_language("German", slovak).as_deref(),
+            Some("German")
+        );
+        assert_eq!(
+            resolve_language(AUTO_LANGUAGE, slovak).as_deref(),
+            Some("Slovak")
+        );
+        assert_eq!(resolve_language(AUTO_LANGUAGE, "ok"), None);
+    }
+
+    #[test]
+    fn translation_prompt_carries_the_bullets_and_the_language() {
+        let prompt = translation_prompt("- Sends the invoice.\n- Asks for payment.", "Slovak");
+
+        assert_eq!(prompt.len(), 2);
+        assert!(prompt[0]
+            .content
+            .starts_with("You translate text into Slovak."));
+        assert!(prompt[0].content.contains("Add nothing, drop nothing"));
+        assert_eq!(
+            prompt[1].content,
+            "- Sends the invoice.\n- Asks for payment."
+        );
     }
 
     #[test]

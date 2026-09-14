@@ -46,6 +46,7 @@ mod tests {
             url: "",
             recommended: false,
             assistant_prefix: "",
+            two_pass_translation: false,
         }
     }
 
