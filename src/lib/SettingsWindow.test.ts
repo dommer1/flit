@@ -62,6 +62,13 @@ vi.mock("./api", () => ({
   setAvatarLookupEnabled: vi.fn(async () => undefined),
   getLlmSummaryEnabled: vi.fn(async () => false),
   setLlmSummaryEnabled: vi.fn(async () => undefined),
+  llmStatus: vi.fn(async () => ({
+    enabled: false,
+    activeModel: null,
+    ready: false,
+    models: [],
+  })),
+  setLlmModel: vi.fn(async () => undefined),
   getSwipeActions: vi.fn(async () => ({
     left: "archive",
     right: "toggleRead",
