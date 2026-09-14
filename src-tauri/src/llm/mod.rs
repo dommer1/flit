@@ -121,8 +121,7 @@ pub async fn summarize_message(
 ) -> Result<String, AppError> {
     let state = app.state::<AppState>();
     let (spec, model_path) = ready_model(app, &state.pool).await?;
-    let text = summarize::prepare_text(body_text, summarize::MESSAGE_CHARS);
-    if text.is_empty() {
+    if summarize::prepare_text(body_text, summarize::MESSAGE_CHARS).is_empty() {
         return Err(AppError::Invalid(
             "This message has no text to summarize.".to_string(),
         ));
@@ -132,7 +131,7 @@ pub async fn summarize_message(
         from: header.from.clone(),
         date: header.date.clone(),
         subject: header.subject.clone(),
-        text,
+        text: body_text.to_string(),
     };
     state
         .llm_engine
