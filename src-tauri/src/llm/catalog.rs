@@ -23,7 +23,14 @@ pub struct ModelSpec {
     pub url: &'static str,
     /// The default pick, highlighted in the picker.
     pub recommended: bool,
+    /// Text pre-filled as the start of the model's answer. Qwen3.5 takes an
+    /// empty `<think>` block, which is how its own chat template switches
+    /// thinking off — without it the model deliberates for hundreds of
+    /// tokens before the summary. Gemma 4 thinks only when asked, so none.
+    pub assistant_prefix: &'static str,
 }
+
+const QWEN_NO_THINK: &str = "<think>\n\n</think>\n\n";
 
 pub const MODELS: &[ModelSpec] = &[
     ModelSpec {
@@ -35,6 +42,7 @@ pub const MODELS: &[ModelSpec] = &[
         sha256: "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
         url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf",
         recommended: true,
+        assistant_prefix: QWEN_NO_THINK,
     },
     ModelSpec {
         id: "qwen3.5-4b",
@@ -45,6 +53,7 @@ pub const MODELS: &[ModelSpec] = &[
         sha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
         url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
         recommended: false,
+        assistant_prefix: QWEN_NO_THINK,
     },
     ModelSpec {
         id: "gemma-4-e2b",
@@ -55,6 +64,7 @@ pub const MODELS: &[ModelSpec] = &[
         sha256: "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634",
         url: "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/675cff42a74c774d6cb76f76d8eacb49b48c9b93/gemma-4-E2B_q4_0-it.gguf",
         recommended: false,
+        assistant_prefix: "",
     },
 ];
 

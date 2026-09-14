@@ -39,6 +39,8 @@ pub struct AppState {
     draft_pushes: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
     /// Model downloads in flight or failed (see llm::download::Downloads).
     pub llm_downloads: llm::download::Downloads,
+    /// The summaries worker (see llm::engine). Idle until the first request.
+    pub llm_engine: llm::engine::Engine,
 }
 
 /// Proof of holding an account's sync slot. Dropping it releases the slot —
@@ -79,6 +81,7 @@ impl AppState {
             backfilling: Mutex::new(HashSet::new()),
             draft_pushes: Mutex::new(HashMap::new()),
             llm_downloads: llm::download::Downloads::default(),
+            llm_engine: llm::engine::Engine::default(),
         }
     }
 

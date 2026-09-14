@@ -7,6 +7,7 @@
 
 pub mod catalog;
 pub mod download;
+pub mod engine;
 pub mod store;
 
 use std::collections::HashMap;

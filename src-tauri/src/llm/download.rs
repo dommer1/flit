@@ -297,6 +297,7 @@ mod tests {
             sha256: Box::leak(digest.into_boxed_str()),
             url: Box::leak(url.into_boxed_str()),
             recommended: false,
+            assistant_prefix: "",
         }
     }
 

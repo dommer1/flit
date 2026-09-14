@@ -45,6 +45,7 @@ mod tests {
             sha256: "",
             url: "",
             recommended: false,
+            assistant_prefix: "",
         }
     }
 
