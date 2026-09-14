@@ -1,8 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    cancelLlmDownload,
+    downloadLlmModel,
     getLlmSummaryEnabled,
     llmStatus,
+    onLlmDownloadProgress,
+    onLlmModelsChanged,
+    removeLlmModel,
     setLlmModel,
     setLlmSummaryEnabled,
   } from "./api";
@@ -31,10 +36,11 @@
     }
   }
 
-  async function pick(id: string) {
+  /** Run a backend action, then re-read status so the cards catch up. */
+  async function act(action: () => Promise<void>) {
     error = null;
     try {
-      await setLlmModel(id);
+      await action();
       await refresh();
     } catch (err) {
       error = String(err);
@@ -44,6 +50,20 @@
   onMount(() => {
     void getLlmSummaryEnabled().then((stored) => (enabled = stored));
     void refresh();
+    // why patch in place: progress ticks several times a second and the
+    // status call walks the models directory — re-reading it per tick
+    // would be wasteful for a bar that only needs the new byte count.
+    const unlistenProgress = onLlmDownloadProgress((progress) => {
+      const model = status?.models.find((m) => m.id === progress.id);
+      if (model && model.state.kind === "downloading") {
+        model.state = { ...progress, kind: "downloading" };
+      }
+    });
+    const unlistenChanged = onLlmModelsChanged(() => void refresh());
+    return () => {
+      void unlistenProgress.then((stop) => stop());
+      void unlistenChanged.then((stop) => stop());
+    };
   });
 </script>
 
@@ -84,7 +104,7 @@
               aria-label="Use {model.name}"
               checked={status.activeModel === model.id}
               disabled={!ready}
-              onchange={() => void pick(model.id)}
+              onchange={() => void act(() => setLlmModel(model.id))}
             />
             <div class="body">
               <div class="title">
@@ -96,10 +116,50 @@
               </div>
               <small>{model.description}</small>
               <div class="state">
-                {#if ready}
+                {#if model.state.kind === "downloading"}
+                  <progress value={model.state.received} max={model.state.total}
+                  ></progress>
+                  <span class="bytes">
+                    {formatFileSize(model.state.received)} of {formatFileSize(
+                      model.state.total,
+                    )}
+                  </span>
+                  <button
+                    class="action"
+                    onclick={() => void act(() => cancelLlmDownload(model.id))}
+                  >
+                    Cancel
+                  </button>
+                {:else if model.state.kind === "failed"}
+                  <span class="failed">{model.state.error}</span>
+                  <button
+                    class="action"
+                    onclick={() => void act(() => downloadLlmModel(model.id))}
+                  >
+                    Retry
+                  </button>
+                  <button
+                    class="action"
+                    onclick={() => void act(() => removeLlmModel(model.id))}
+                  >
+                    Remove
+                  </button>
+                {:else if ready}
                   <span class="ready">Downloaded</span>
+                  <button
+                    class="action"
+                    onclick={() => void act(() => removeLlmModel(model.id))}
+                  >
+                    Remove
+                  </button>
                 {:else}
                   <span>Not downloaded</span>
+                  <button
+                    class="action"
+                    onclick={() => void act(() => downloadLlmModel(model.id))}
+                  >
+                    Download
+                  </button>
                 {/if}
               </div>
             </div>
@@ -250,6 +310,42 @@
 
   .ready {
     color: var(--text-primary);
+  }
+
+  .failed {
+    color: var(--danger);
+  }
+
+  .bytes {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  progress {
+    flex: 1;
+    height: 6px;
+    accent-color: var(--accent);
+  }
+
+  .action {
+    margin-left: auto;
+    padding: 2px 10px;
+    border: 1px solid var(--border-chrome);
+    border-radius: 6px;
+    background: var(--bg-window);
+    font: inherit;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    cursor: default;
+  }
+
+  .action + .action {
+    margin-left: 0;
+  }
+
+  .action:hover {
+    background: var(--bg-hover);
   }
 
   .error {

@@ -1,15 +1,30 @@
 import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { LlmStatus } from "./types";
+import type { LlmDownloadProgress, LlmStatus } from "./types";
 
 let enabled = false;
 let status: LlmStatus;
+let progressListener: ((progress: LlmDownloadProgress) => void) | null = null;
+let changedListener: (() => void) | null = null;
 
 vi.mock("./api", () => ({
   getLlmSummaryEnabled: vi.fn(async () => enabled),
   setLlmSummaryEnabled: vi.fn(async () => undefined),
   llmStatus: vi.fn(async () => status),
   setLlmModel: vi.fn(async () => undefined),
+  downloadLlmModel: vi.fn(async () => undefined),
+  cancelLlmDownload: vi.fn(async () => undefined),
+  removeLlmModel: vi.fn(async () => undefined),
+  onLlmDownloadProgress: vi.fn(
+    async (callback: (progress: LlmDownloadProgress) => void) => {
+      progressListener = callback;
+      return () => {};
+    },
+  ),
+  onLlmModelsChanged: vi.fn(async (callback: () => void) => {
+    changedListener = callback;
+    return () => {};
+  }),
 }));
 
 import * as api from "./api";
@@ -17,6 +32,8 @@ import ExperimentalPane from "./ExperimentalPane.svelte";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  progressListener = null;
+  changedListener = null;
   enabled = false;
   status = {
     enabled: false,
@@ -119,4 +136,88 @@ it("marks the picked model as in use", async () => {
   render(ExperimentalPane);
 
   expect(await screen.findByLabelText("Use Big 4B")).toBeChecked();
+});
+
+it("starts a download from the card of a missing model", async () => {
+  enabled = true;
+  status.enabled = true;
+  render(ExperimentalPane);
+  const small = (await screen.findByText("Small 2B")).closest("li")!;
+
+  await fireEvent.click(within(small).getByRole("button", { name: "Download" }));
+
+  expect(api.downloadLlmModel).toHaveBeenCalledWith("small");
+});
+
+it("shows progress for a download in flight and lets it be cancelled", async () => {
+  enabled = true;
+  status.enabled = true;
+  status.models[0].state = {
+    kind: "downloading",
+    received: 640_417_920,
+    total: 1_280_835_840,
+  };
+  render(ExperimentalPane);
+  const small = (await screen.findByText("Small 2B")).closest("li")!;
+
+  expect(within(small).getByRole("progressbar")).toHaveAttribute("value", "640417920");
+  expect(within(small).getByText("640 MB of 1.3 GB")).toBeInTheDocument();
+  expect(within(small).queryByRole("button", { name: "Download" })).toBeNull();
+
+  await fireEvent.click(within(small).getByRole("button", { name: "Cancel" }));
+
+  expect(api.cancelLlmDownload).toHaveBeenCalledWith("small");
+});
+
+it("moves the bar on progress events without re-reading status", async () => {
+  enabled = true;
+  status.enabled = true;
+  status.models[0].state = { kind: "downloading", received: 0, total: 100 };
+  render(ExperimentalPane);
+  const small = (await screen.findByText("Small 2B")).closest("li")!;
+  vi.mocked(api.llmStatus).mockClear();
+
+  progressListener!({ id: "small", received: 42, total: 100 });
+
+  expect(
+    await within(small).findByText("42 B of 100 B"),
+  ).toBeInTheDocument();
+  expect(api.llmStatus).not.toHaveBeenCalled();
+});
+
+it("re-reads status when a download ends", async () => {
+  enabled = true;
+  status.enabled = true;
+  render(ExperimentalPane);
+  await screen.findByText("Small 2B");
+  status.models[0].state = { kind: "ready" };
+
+  changedListener!();
+
+  const small = (await screen.findByText("Small 2B")).closest("li")!;
+  expect(await within(small).findByText("Downloaded")).toBeInTheDocument();
+});
+
+it("shows why a download failed and offers a retry", async () => {
+  enabled = true;
+  status.enabled = true;
+  status.models[0].state = { kind: "failed", error: "download error: server answered 503" };
+  render(ExperimentalPane);
+  const small = (await screen.findByText("Small 2B")).closest("li")!;
+
+  expect(within(small).getByText("download error: server answered 503")).toBeInTheDocument();
+  await fireEvent.click(within(small).getByRole("button", { name: "Retry" }));
+
+  expect(api.downloadLlmModel).toHaveBeenCalledWith("small");
+});
+
+it("removes a downloaded model from its card", async () => {
+  enabled = true;
+  status.enabled = true;
+  render(ExperimentalPane);
+  const big = (await screen.findByText("Big 4B")).closest("li")!;
+
+  await fireEvent.click(within(big).getByRole("button", { name: "Remove" }));
+
+  expect(api.removeLlmModel).toHaveBeenCalledWith("big");
 });
