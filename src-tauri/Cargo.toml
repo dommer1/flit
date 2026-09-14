@@ -72,6 +72,10 @@ llama-cpp-2 = { version = "0.1.156", default-features = false }
 # why: llama-cpp-2 hands tokens back through an encoding_rs UTF-8 decoder, so
 # a multi-byte character split across tokens still comes out whole.
 encoding_rs = "0.8"
+# why: a small model asked to "write in the language of the message" answers
+# in English anyway; told "write in Slovak" it complies. Offline trigram
+# detection, no data files, MIT.
+whatlang = "0.18"
 lightningcss = { version = "=1.0.0-alpha.71", default-features = false }
 mail-builder = "0.4"
 # why: native new-mail notifications, sent from the Rust sync path only —
