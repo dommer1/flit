@@ -1,0 +1,74 @@
+name: Release
+
+# Builds a universal macOS bundle (Intel + Apple Silicon) when a version tag is
+# pushed and attaches it to a DRAFT GitHub Release, so the assets can be checked
+# before anyone sees them. Publish the draft by hand.
+#
+# Release steps:
+#   1. bump "version" in src-tauri/tauri.conf.json, package.json and
+#      src-tauri/Cargo.toml to the same value, commit
+#   2. git tag v<version> && git push origin v<version>
+#
+# Signing: with no APPLE_* secrets configured the bundle is ad-hoc signed and
+# Gatekeeper blocks it on first launch (System Settings → Privacy & Security →
+# Open Anyway). Add the five secrets below and the very same workflow signs with
+# a Developer ID certificate and notarizes with Apple; the Tauri CLI imports the
+# certificate into a temporary keychain itself.
+#   APPLE_CERTIFICATE            base64 of the "Developer ID Application" .p12
+#   APPLE_CERTIFICATE_PASSWORD   password chosen at .p12 export
+#   APPLE_ID                     Apple ID e-mail
+#   APPLE_PASSWORD               an app-specific password, not the account one
+#   APPLE_TEAM_ID                10-character team id
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: build + draft release
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust toolchain
+        # why: a universal binary is two native builds glued together, so both
+        # targets have to be installed even though the runner itself is arm64.
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Flit ${{ github.ref_name }}
+          releaseBody: |
+            Universal macOS build (Intel and Apple Silicon). Download the `.dmg`,
+            drag Flit to Applications.
+          releaseDraft: true
+          prerelease: true
+          args: --target universal-apple-darwin
