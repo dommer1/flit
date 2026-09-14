@@ -4,12 +4,13 @@ use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::error::AppError;
 use crate::models::{
-    DateFormat, DateTimeFormat, NotificationSettings, RemoteImagePolicy, ShortcutAction,
-    ShortcutBinding, SwipeAction, SwipeActions, ThreadOrder, TimeFormat,
+    Appearance, DateFormat, DateTimeFormat, NotificationSettings, RemoteImagePolicy,
+    ShortcutAction, ShortcutBinding, SwipeAction, SwipeActions, ThreadOrder, TimeFormat,
 };
 
 const REMOTE_IMAGES_KEY: &str = "remote_images";
 const THREAD_ORDER_KEY: &str = "thread_order";
+const APPEARANCE_KEY: &str = "appearance";
 const DATE_FORMAT_KEY: &str = "date_format";
 const TIME_FORMAT_KEY: &str = "time_format";
 const NOTIFICATIONS_ENABLED_KEY: &str = "notifications_enabled";
@@ -167,6 +168,20 @@ pub async fn thread_order(pool: &SqlitePool) -> Result<ThreadOrder, AppError> {
 
 pub async fn set_thread_order(pool: &SqlitePool, order: ThreadOrder) -> Result<(), AppError> {
     upsert(pool, THREAD_ORDER_KEY, order.as_str()).await
+}
+
+/// The stored colour-scheme preference; missing or corrupt values fall back
+/// to following the system.
+pub async fn appearance(pool: &SqlitePool) -> Result<Appearance, AppError> {
+    Ok(value(pool, APPEARANCE_KEY)
+        .await?
+        .as_deref()
+        .map(Appearance::parse)
+        .unwrap_or_default())
+}
+
+pub async fn set_appearance(pool: &SqlitePool, appearance: Appearance) -> Result<(), AppError> {
+    upsert(pool, APPEARANCE_KEY, appearance.as_str()).await
 }
 
 /// The stored date/time display format. The halves are read independently,
@@ -590,6 +605,36 @@ mod tests {
             .unwrap();
 
         assert_eq!(thread_order(&pool).await.unwrap(), ThreadOrder::NewestLast);
+    }
+
+    #[tokio::test]
+    async fn appearance_defaults_to_system_and_roundtrips() {
+        let pool = test_pool().await;
+
+        assert_eq!(appearance(&pool).await.unwrap(), Appearance::System);
+
+        set_appearance(&pool, Appearance::Dark).await.unwrap();
+        assert_eq!(appearance(&pool).await.unwrap(), Appearance::Dark);
+
+        // Changing it again overwrites instead of duplicating the key.
+        set_appearance(&pool, Appearance::Light).await.unwrap();
+        assert_eq!(appearance(&pool).await.unwrap(), Appearance::Light);
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM settings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    #[tokio::test]
+    async fn corrupt_appearance_falls_back_to_system() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('appearance', 'sepia')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(appearance(&pool).await.unwrap(), Appearance::System);
     }
 
     #[tokio::test]

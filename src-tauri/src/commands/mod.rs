@@ -4,9 +4,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::models::{
-    Account, Alias, AuthResults, DateTimeFormat, Mailbox, MessageBody, MessageHeader, MessageQuote,
-    MessagesChanged, NewAccount, NotificationSettings, OutgoingMessage, RemoteImagePolicy,
-    ShortcutAction, ShortcutBinding, Signature, SwipeActions, ThreadOrder,
+    Account, Alias, Appearance, AuthResults, DateTimeFormat, Mailbox, MessageBody, MessageHeader,
+    MessageQuote, MessagesChanged, NewAccount, NotificationSettings, OutgoingMessage,
+    RemoteImagePolicy, ShortcutAction, ShortcutBinding, Signature, SwipeActions, ThreadOrder,
 };
 use crate::state::AppState;
 use crate::timing;
@@ -2328,6 +2328,37 @@ pub async fn set_thread_order(
 }
 
 #[tauri::command]
+pub async fn get_appearance(state: State<'_, AppState>) -> Result<Appearance, AppError> {
+    storage::settings::appearance(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_appearance(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    appearance: Appearance,
+) -> Result<(), AppError> {
+    storage::settings::set_appearance(&state.pool, appearance).await?;
+    app.set_theme(theme_for(appearance));
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
+/// The native theme an appearance pins, or `None` to follow macOS.
+///
+/// why native instead of a CSS class: on macOS `set_theme` sets the whole
+/// app's NSAppearance, so WKWebView flips `prefers-color-scheme` (which the
+/// palette in styles.css already keys off) AND the native chrome — traffic
+/// lights, `<select>` popups, context menus, scrollbars — follows along.
+pub fn theme_for(appearance: Appearance) -> Option<tauri::Theme> {
+    match appearance {
+        Appearance::System => None,
+        Appearance::Light => Some(tauri::Theme::Light),
+        Appearance::Dark => Some(tauri::Theme::Dark),
+    }
+}
+
+#[tauri::command]
 pub async fn get_date_time_format(state: State<'_, AppState>) -> Result<DateTimeFormat, AppError> {
     storage::settings::date_time_format(&state.pool).await
 }
@@ -2534,6 +2565,13 @@ pub async fn close_settings(app: AppHandle) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appearance_maps_to_a_pinned_theme_or_none_for_system() {
+        assert_eq!(theme_for(Appearance::System), None);
+        assert_eq!(theme_for(Appearance::Light), Some(tauri::Theme::Light));
+        assert_eq!(theme_for(Appearance::Dark), Some(tauri::Theme::Dark));
+    }
 
     #[tokio::test]
     async fn unique_path_numbers_past_every_taken_name() {

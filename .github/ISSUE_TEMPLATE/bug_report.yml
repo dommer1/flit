@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in Flit does not behave the way it should.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Please do **not** report security issues here; use the private "Report a vulnerability" button under the Security tab instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Flit version or commit
+      placeholder: e.g. 0.1.0 or fab5e5b
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: e.g. 26.0 (Tahoe)
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Mail provider
+      description: Which server is the account on? Server quirks are the most common bug source.
+      options:
+        - Gmail (IMAP)
+        - Fastmail
+        - iCloud
+        - Outlook / Microsoft 365
+        - Self-hosted (Dovecot, etc.)
+        - Other / not relevant
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Output from the terminal running `npm run tauri dev` helps a lot. Redact addresses and anything private; never paste passwords or tokens.

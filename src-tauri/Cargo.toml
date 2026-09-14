@@ -1,9 +1,11 @@
 [package]
 name = "flit"
 version = "0.1.0"
-description = "Flit desktop app"
+description = "A minimal, privacy-first desktop email client"
 authors = ["Dominik Mery"]
 edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/dommer1/flit"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary

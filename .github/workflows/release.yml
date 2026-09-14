@@ -1,0 +1,94 @@
+name: Release
+
+# Builds one macOS bundle per architecture (Apple Silicon and Intel) when a
+# version tag is pushed and attaches both .dmg files to a DRAFT GitHub Release,
+# so the assets can be checked before anyone sees them. Publish the draft by
+# hand. Tauri names the files Flit_<version>_aarch64.dmg and Flit_<version>_x64.dmg.
+#
+# Release steps:
+#   1. bump "version" in src-tauri/tauri.conf.json, package.json and
+#      src-tauri/Cargo.toml to the same value, commit
+#   2. git tag <version> && git push origin <version>   (with or without a v)
+# For a tag that already exists, run this workflow by hand (Actions → Release →
+# Run workflow) and give it the tag; assets are attached to that tag's release.
+#
+# Signing: with no APPLE_* secrets configured the bundle is ad-hoc signed and
+# Gatekeeper blocks it on first launch (System Settings → Privacy & Security →
+# Open Anyway). Add the five secrets below and the very same workflow signs with
+# a Developer ID certificate and notarizes with Apple; the Tauri CLI imports the
+# certificate into a temporary keychain itself.
+#   APPLE_CERTIFICATE            base64 of the "Developer ID Application" .p12
+#   APPLE_CERTIFICATE_PASSWORD   password chosen at .p12 export
+#   APPLE_ID                     Apple ID e-mail
+#   APPLE_PASSWORD               an app-specific password, not the account one
+#   APPLE_TEAM_ID                10-character team id
+
+on:
+  push:
+    tags: ["v[0-9]*", "[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach assets to (e.g. 0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: build ${{ matrix.arch }} + draft release
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: apple-silicon
+            target: aarch64-apple-darwin
+          - arch: intel
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust toolchain
+        # why: the runner is arm64, so the Intel job cross-compiles and needs
+        # its target installed explicitly.
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: Flit ${{ inputs.tag || github.ref_name }}
+          releaseBody: |
+            Download the `.dmg` for your Mac and drag Flit to Applications:
+            `aarch64` for Apple Silicon (M1 and newer), `x64` for Intel.
+          releaseDraft: true
+          prerelease: true
+          args: --target ${{ matrix.target }}

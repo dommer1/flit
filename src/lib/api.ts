@@ -25,6 +25,7 @@ import type {
   Signature,
   SwipeActions,
   ThreadOrder,
+  Appearance,
   ViewStatus,
 } from "./types";
 
@@ -526,6 +527,16 @@ export function setShortcut(
 
 export function resetShortcuts(): Promise<ShortcutBinding[]> {
   return invoke<ShortcutBinding[]>("reset_shortcuts");
+}
+
+/** The app's colour scheme (follows the system until changed). Setting it
+ * re-themes every window natively, so the CSS needs no class toggle. */
+export function getAppearance(): Promise<Appearance> {
+  return invoke<Appearance>("get_appearance");
+}
+
+export function setAppearance(appearance: Appearance): Promise<void> {
+  return invoke<void>("set_appearance", { appearance });
 }
 
 /** Conversation-view order (newest at the bottom until changed). */

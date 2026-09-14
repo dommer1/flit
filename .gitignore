@@ -5,6 +5,8 @@ node_modules
 .env.*
 !.env.example
 vite.config.ts.timestamp-*
+# Local AI-tooling config (MCP servers) stays per machine.
+.mcp.json
 # `tauri icon` also emits mobile icon sets; this is a desktop app.
 /src-tauri/icons/android
 /src-tauri/icons/ios

@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest something Flit should do.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Flit is deliberately small: a clean, fast client for reading and writing mail. Features that turn it into a productivity suite are unlikely to be accepted until the core is solid.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation, not the solution. "I cannot tell which account a mail in All Inboxes came from" is more useful than "add colours".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: How would it work from the user's side? Keyboard, settings, defaults.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: This does not require Flit to contact any server other than the user's own mail servers.
+          required: true
