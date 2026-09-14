@@ -14,6 +14,7 @@ import type {
   MessagesChanged,
   ScheduledMessage,
   SendEvent,
+  ShortcutBinding,
   SwipeActions,
 } from "./lib/types";
 
@@ -142,6 +143,29 @@ let scheduledMissed: (() => void) | undefined;
 let scheduledChanged: (() => void) | undefined;
 let settingsChanged: (() => void) | undefined;
 let currentSwipeActions: SwipeActions;
+let currentShortcuts: ShortcutBinding[];
+
+/** The shipped bindings, as the backend reports them before any rebinding. */
+function defaultShortcuts(): ShortcutBinding[] {
+  const defaults: [ShortcutBinding["action"], string][] = [
+    ["new-message", "Meta+N"],
+    ["reply", "Meta+R"],
+    ["reply-all", "Shift+Meta+R"],
+    ["forward", "Shift+Meta+F"],
+    ["archive", "Ctrl+Meta+A"],
+    ["trash", "Backspace"],
+    ["toggle-read", "Shift+Meta+U"],
+    ["check-mail", "Shift+Meta+N"],
+    ["toggle-sidebar", "Ctrl+Meta+S"],
+    ["focus-search", "Meta+F"],
+    ["send", "Meta+Enter"],
+  ];
+  return defaults.map(([action, combo]) => ({
+    action,
+    combo,
+    defaultCombo: combo,
+  }));
+}
 let currentDateTimeFormat: DateTimeFormat;
 
 // why a named default: tests override listMailboxes with
@@ -274,6 +298,7 @@ vi.mock("./lib/api", () => ({
   // Avatar lookups are off by default, so the command resolves to nothing.
   loadDomainAvatars: vi.fn(async () => ({})),
   getSwipeActions: vi.fn(async () => currentSwipeActions),
+  getShortcuts: vi.fn(async () => currentShortcuts),
   getDateTimeFormat: vi.fn(async () => currentDateTimeFormat),
   onSettingsChanged: vi.fn(async (callback: () => void) => {
     settingsChanged = callback;
@@ -310,6 +335,7 @@ beforeEach(() => {
   scheduledChanged = undefined;
   settingsChanged = undefined;
   currentSwipeActions = { left: "archive", right: "toggleRead" };
+  currentShortcuts = defaultShortcuts();
   currentDateTimeFormat = { date: "system", time: "system" };
   localStorage.clear();
   vi.clearAllMocks();
@@ -993,6 +1019,105 @@ it("navigates the message list with Arrow Down / Up", async () => {
 
   await fireEvent.keyDown(document.body, { key: "ArrowUp" });
   expect(first).toHaveAttribute("aria-selected", "true");
+});
+
+/** Render the app and wait until its shortcut bindings have loaded. */
+async function renderWithShortcuts() {
+  render(App);
+  await screen.findByText("Weekend plans");
+  await waitFor(() => expect(api.getShortcuts).toHaveBeenCalled());
+}
+
+it("opens a new message with ⌘N", async () => {
+  await renderWithShortcuts();
+
+  await fireEvent.keyDown(document.body, { key: "n", metaKey: true });
+
+  await waitFor(() =>
+    expect(api.openCompose).toHaveBeenCalledWith({
+      accountId: 1,
+      to: "",
+      subject: "",
+      body: "",
+    }),
+  );
+});
+
+it("collapses the sidebar with ⌃⌘S", async () => {
+  await renderWithShortcuts();
+
+  await fireEvent.keyDown(document.body, {
+    key: "s",
+    ctrlKey: true,
+    metaKey: true,
+  });
+
+  expect(
+    screen.queryByRole("button", { name: "All Inboxes" }),
+  ).not.toBeInTheDocument();
+});
+
+it("trashes the open message with ⌫, but not while typing in search", async () => {
+  await renderWithShortcuts();
+  await fireEvent.click(screen.getByText("Weekend plans"));
+  await screen.findByRole("heading", { name: "Weekend plans" });
+
+  const search = screen.getByRole("searchbox", { name: "Search messages" });
+  await fireEvent.keyDown(search, { key: "Backspace" });
+  expect(api.moveToTrash).not.toHaveBeenCalled();
+
+  await fireEvent.keyDown(document.body, { key: "Backspace" });
+  expect(api.moveToTrash).toHaveBeenCalledWith(1);
+});
+
+it("ignores message shortcuts while nothing is selected", async () => {
+  await renderWithShortcuts();
+
+  await fireEvent.keyDown(document.body, { key: "Backspace" });
+  await fireEvent.keyDown(document.body, { key: "r", metaKey: true });
+  await fireEvent.keyDown(document.body, {
+    key: "a",
+    ctrlKey: true,
+    metaKey: true,
+  });
+
+  expect(api.moveToTrash).not.toHaveBeenCalled();
+  expect(api.archiveMessage).not.toHaveBeenCalled();
+  expect(api.openCompose).not.toHaveBeenCalled();
+});
+
+it("puts focus in the search field with ⌘F", async () => {
+  await renderWithShortcuts();
+
+  await fireEvent.keyDown(document.body, { key: "f", metaKey: true });
+
+  expect(
+    screen.getByRole("searchbox", { name: "Search messages" }),
+  ).toHaveFocus();
+});
+
+it("follows a rebinding made in the settings window", async () => {
+  await renderWithShortcuts();
+
+  currentShortcuts = defaultShortcuts().map((binding) =>
+    binding.action === "new-message"
+      ? { ...binding, combo: "Alt+Meta+M" }
+      : binding,
+  );
+  settingsChanged?.();
+  await waitFor(() => expect(api.getShortcuts).toHaveBeenCalledTimes(2));
+
+  await fireEvent.keyDown(document.body, { key: "n", metaKey: true });
+  expect(api.openCompose).not.toHaveBeenCalled();
+
+  // ⌥ turns M into µ on a Mac — the physical key still counts.
+  await fireEvent.keyDown(document.body, {
+    key: "µ",
+    code: "KeyM",
+    altKey: true,
+    metaKey: true,
+  });
+  await waitFor(() => expect(api.openCompose).toHaveBeenCalledTimes(1));
 });
 
 it("marks an unread message read when it is opened", async () => {

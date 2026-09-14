@@ -49,6 +49,13 @@
   } = $props();
 
   let query = $state("");
+  let searchEl = $state<HTMLInputElement | null>(null);
+
+  /** Move keyboard focus into the search field (the ⌘F shortcut). */
+  export function focusSearch() {
+    searchEl?.focus();
+    searchEl?.select();
+  }
 
   // Collapsed, the zone keeps just enough room for the native traffic
   // lights plus the toggle button.
@@ -270,6 +277,7 @@
         placeholder="Search"
         aria-label="Search messages"
         title="Narrow with from:… to:… subject:… is:unread"
+        bind:this={searchEl}
         bind:value={query}
         oninput={() => onSearch(query)}
       />

@@ -9,6 +9,7 @@
     getDateTimeFormat,
     getMessageBody,
     getMessageQuote,
+    getShortcuts,
     getSwipeActions,
     getThreadOrder,
     listAccounts,
@@ -60,10 +61,13 @@
     MessageHeader,
     MessageQuote,
     ScheduledMessage,
+    ShortcutAction,
+    ShortcutBinding,
     SwipeActions,
     ThreadOrder,
     ViewStatus,
   } from "./lib/types";
+  import { actionFor, comboFromEvent, firesIn } from "./lib/shortcuts";
   import { DEFAULT_SWIPE_ACTIONS } from "./lib/swipe";
   import { markPaint, timed } from "./lib/timing";
   import { neighborId, nextMessageId, type NavDelta } from "./lib/messageNav";
@@ -467,9 +471,75 @@
     evictMessage(id, (messageId) => move(messageId, mailbox));
   }
 
-  // Arrow Up / Down walk the list. Ignored while typing in a field (search,
-  // etc.) or with a modifier held, so system/app shortcuts aren't hijacked.
+  // Keyboard shortcuts — user-configurable in the settings window, reloaded
+  // on settings-changed like the swipe actions.
+  let shortcuts = $state<ShortcutBinding[]>([]);
+
+  async function refreshShortcuts() {
+    shortcuts = await getShortcuts();
+  }
+
+  let toolbar = $state<ReturnType<typeof Toolbar>>();
+
+  /** Run a shortcut's action through the same path as its toolbar button,
+   * with the same guards — a message action with nothing selected is a
+   * no-op, like the disabled button. Returns false for actions this window
+   * does not own (Send belongs to compose windows). */
+  function runShortcut(action: ShortcutAction): boolean {
+    // The rows the toolbar's action buttons operate on (see Toolbar.svelte).
+    const rows =
+      selectedRows.length > 0
+        ? selectedRows
+        : selectedMessage
+          ? [selectedMessage]
+          : [];
+    switch (action) {
+      case "new-message":
+        openNewMessage();
+        return true;
+      case "reply":
+      case "reply-all":
+      case "forward":
+        openDraftFromSelection(action);
+        return true;
+      case "archive":
+        if (rows.length > 0) handleArchive(rows[0].id);
+        return true;
+      case "trash":
+        if (rows.length > 0) handleTrash(rows[0].id);
+        return true;
+      case "toggle-read":
+        if (rows.length > 0) {
+          handleSetRead(rows[0].id, !rows.every((row) => row.read));
+        }
+        return true;
+      case "check-mail":
+        if (syncsInFlight === 0) handleRefresh();
+        return true;
+      case "toggle-sidebar":
+        toggleSidebar();
+        return true;
+      case "focus-search":
+        toolbar?.focusSearch();
+        return true;
+      case "send":
+        return false;
+    }
+  }
+
+  // Configured shortcuts first; then Arrow Up / Down walk the list. The
+  // arrows are ignored while typing in a field (search, etc.) or with a
+  // modifier held, so system/app shortcuts aren't hijacked.
   function handleKeydown(event: KeyboardEvent) {
+    const combo = comboFromEvent(event);
+    const action =
+      combo !== null && firesIn(event.target, combo)
+        ? actionFor(shortcuts, combo)
+        : null;
+    if (action !== null && runShortcut(action)) {
+      event.preventDefault();
+      return;
+    }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target as HTMLElement | null;
@@ -910,6 +980,9 @@
       void refreshSwipeActions().catch((err: unknown) =>
         console.error("failed to load swipe actions:", err),
       );
+      void refreshShortcuts().catch((err: unknown) =>
+        console.error("failed to load keyboard shortcuts:", err),
+      );
       void refreshThreadOrder().catch((err: unknown) =>
         console.error("failed to load thread order:", err),
       );
@@ -965,6 +1038,7 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <Toolbar
+  bind:this={toolbar}
   {sidebarCollapsed}
   sidebarWidth={paneWidths.sidebar}
   onToggleSidebar={toggleSidebar}
