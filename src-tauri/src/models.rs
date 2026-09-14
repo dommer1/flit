@@ -338,6 +338,15 @@ pub enum LlmModelState {
     Ready,
 }
 
+/// Payload of the `summary-token` event: one piece of a summary being
+/// written, tagged with the request it belongs to.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryToken {
+    pub request_id: String,
+    pub text: String,
+}
+
 /// Payload of the `llm-download-progress` event.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

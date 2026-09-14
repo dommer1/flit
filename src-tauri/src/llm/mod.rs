@@ -13,13 +13,17 @@ pub mod summarize;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::AppError;
-use crate::models::{LlmDownloadProgress, LlmModel, LlmModelState, LlmStatus, MessageHeader};
+use crate::models::{
+    LlmDownloadProgress, LlmModel, LlmModelState, LlmStatus, MessageHeader, SummaryToken,
+};
 use crate::state::AppState;
 use crate::storage::{self, settings};
 
@@ -84,6 +88,86 @@ fn describe(
     }
 }
 
+/// Summaries being written, keyed by the frontend's request id, so a
+/// cancel command can reach the right generation.
+#[derive(Default)]
+pub struct Summaries {
+    inner: Mutex<HashMap<String, engine::CancelFlag>>,
+}
+
+impl Summaries {
+    fn begin(&self, request_id: &str) -> engine::CancelFlag {
+        let cancel = engine::CancelFlag::default();
+        self.lock().insert(request_id.to_string(), cancel.clone());
+        cancel
+    }
+
+    fn finish(&self, request_id: &str) {
+        self.lock().remove(request_id);
+    }
+
+    /// Raise the request's stop flag; false when nothing runs under that id
+    /// (already finished, or a cache hit that never ran).
+    pub fn cancel(&self, request_id: &str) -> bool {
+        match self.lock().get(request_id) {
+            Some(flag) => {
+                flag.store(true, Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+
+    // why unwrap_or_else(into_inner): a poisoned lock only means a task
+    // panicked mid-update; the map is still coherent.
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, engine::CancelFlag>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Run one generation under `request_id`: pieces go out as `summary-token`
+/// events, a cancel command reaches it through the registry, and the entry
+/// is dropped however it ends.
+async fn generate(
+    app: &AppHandle,
+    request_id: &str,
+    model_path: std::path::PathBuf,
+    messages: Vec<engine::ChatMessage>,
+    max_tokens: usize,
+    assistant_prefix: &str,
+) -> Result<String, AppError> {
+    let state = app.state::<AppState>();
+    let cancel = state.llm_summaries.begin(request_id);
+    let sink: engine::TokenSink = {
+        let app = app.clone();
+        let request_id = request_id.to_string();
+        Box::new(move |piece: &str| {
+            let _ = app.emit(
+                "summary-token",
+                SummaryToken {
+                    request_id: request_id.clone(),
+                    text: piece.to_string(),
+                },
+            );
+        })
+    };
+    let result = state
+        .llm_engine
+        .complete(engine::Request {
+            model_path,
+            messages,
+            max_tokens,
+            assistant_prefix: assistant_prefix.to_string(),
+            on_token: Some(sink),
+            cancel,
+        })
+        .await;
+    state.llm_summaries.finish(request_id);
+    result
+}
+
 /// The picked model, only when the feature is on and its file is here;
 /// otherwise an error that reads as guidance for the user.
 async fn ready_model(
@@ -120,6 +204,7 @@ pub async fn summarize_message(
     header: &MessageHeader,
     body_text: &str,
     fresh: bool,
+    request_id: &str,
 ) -> Result<String, AppError> {
     let state = app.state::<AppState>();
     let (spec, model_path) = ready_model(app, &state.pool).await?;
@@ -142,17 +227,15 @@ pub async fn summarize_message(
         subject: header.subject.clone(),
         text: body_text.to_string(),
     };
-    let text = state
-        .llm_engine
-        .complete(engine::Request {
-            model_path,
-            messages: summarize::message_prompt(&source, &language),
-            max_tokens: summarize::MAX_ANSWER_TOKENS,
-            assistant_prefix: spec.assistant_prefix.to_string(),
-            on_token: None,
-            cancel: engine::CancelFlag::default(),
-        })
-        .await?;
+    let text = generate(
+        app,
+        request_id,
+        model_path,
+        summarize::message_prompt(&source, &language),
+        summarize::MAX_ANSWER_TOKENS,
+        spec.assistant_prefix,
+    )
+    .await?;
     storage::summaries::put(&state.pool, &key, &text).await?;
     Ok(text)
 }
@@ -164,6 +247,7 @@ pub async fn summarize_thread(
     app: &AppHandle,
     messages: &[(MessageHeader, String)],
     fresh: bool,
+    request_id: &str,
 ) -> Result<String, AppError> {
     let state = app.state::<AppState>();
     let (spec, model_path) = ready_model(app, &state.pool).await?;
@@ -194,17 +278,15 @@ pub async fn summarize_thread(
             return Ok(cached);
         }
     }
-    let text = state
-        .llm_engine
-        .complete(engine::Request {
-            model_path,
-            messages: summarize::thread_prompt(&sources, &language),
-            max_tokens: summarize::MAX_THREAD_ANSWER_TOKENS,
-            assistant_prefix: spec.assistant_prefix.to_string(),
-            on_token: None,
-            cancel: engine::CancelFlag::default(),
-        })
-        .await?;
+    let text = generate(
+        app,
+        request_id,
+        model_path,
+        summarize::thread_prompt(&sources, &language),
+        summarize::MAX_THREAD_ANSWER_TOKENS,
+        spec.assistant_prefix,
+    )
+    .await?;
     storage::summaries::put(&state.pool, &key, &text).await?;
     Ok(text)
 }
@@ -291,6 +373,20 @@ pub async fn remove_model(app: &AppHandle, id: &str) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn cancel_reaches_only_a_running_request() {
+        let summaries = Summaries::default();
+        let flag = summaries.begin("r1");
+
+        assert!(!summaries.cancel("r2"));
+        assert!(!flag.load(Ordering::Relaxed));
+        assert!(summaries.cancel("r1"));
+        assert!(flag.load(Ordering::Relaxed));
+
+        summaries.finish("r1");
+        assert!(!summaries.cancel("r1"));
+    }
 
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir =

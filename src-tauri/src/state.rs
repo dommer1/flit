@@ -41,6 +41,8 @@ pub struct AppState {
     pub llm_downloads: llm::download::Downloads,
     /// The summaries worker (see llm::engine). Idle until the first request.
     pub llm_engine: llm::engine::Engine,
+    /// Summaries being written, so a cancel can reach them.
+    pub llm_summaries: llm::Summaries,
 }
 
 /// Proof of holding an account's sync slot. Dropping it releases the slot —
@@ -82,6 +84,7 @@ impl AppState {
             draft_pushes: Mutex::new(HashMap::new()),
             llm_downloads: llm::download::Downloads::default(),
             llm_engine: llm::engine::Engine::default(),
+            llm_summaries: llm::Summaries::default(),
         }
     }
 

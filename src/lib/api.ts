@@ -9,6 +9,7 @@ import type {
   Contact,
   LlmDownloadProgress,
   LlmStatus,
+  SummaryToken,
   DateTimeFormat,
   Mailbox,
   MessageAttachment,
@@ -503,16 +504,37 @@ export function setLlmSummaryLanguage(language: string): Promise<void> {
 export function summarizeMessage(
   messageId: number,
   fresh = false,
+  requestId = newRequestId(),
 ): Promise<string> {
-  return invoke<string>("summarize_message", { messageId, fresh });
+  return invoke<string>("summarize_message", { messageId, fresh, requestId });
 }
 
 /** A plain-text summary of the conversation the message belongs to. */
 export function summarizeThread(
   messageId: number,
   fresh = false,
+  requestId = newRequestId(),
 ): Promise<string> {
-  return invoke<string>("summarize_thread", { messageId, fresh });
+  return invoke<string>("summarize_thread", { messageId, fresh, requestId });
+}
+
+/** Stop a summary being written; a no-op once it has finished. */
+export function cancelSummary(requestId: string): Promise<void> {
+  return invoke<void>("cancel_summary", { requestId });
+}
+
+/** Pieces of summaries being written, tagged with their request id. */
+export function onSummaryToken(
+  callback: (token: SummaryToken) => void,
+): Promise<UnlistenFn> {
+  return listen<SummaryToken>("summary-token", (event) =>
+    callback(event.payload),
+  );
+}
+
+/** A request id for summaries — unique within this window's lifetime. */
+export function newRequestId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 /** Start fetching a catalog model in the background. Progress arrives on

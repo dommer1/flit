@@ -2251,13 +2251,15 @@ pub async fn set_llm_summary_language(
 
 /// A summary of one message, written by the picked local model — plain
 /// text, bullet lines. Nothing leaves the machine. `fresh` skips the cache
-/// (the panel's "summarize again").
+/// (the panel's "summarize again"); pieces stream out as `summary-token`
+/// events tagged with `request_id`, which cancel_summary also takes.
 #[tauri::command]
 pub async fn summarize_message(
     app: AppHandle,
     state: State<'_, AppState>,
     message_id: i64,
     fresh: bool,
+    request_id: String,
 ) -> Result<String, AppError> {
     let header = storage::messages::thread_of(&state.pool, message_id)
         .await?
@@ -2265,7 +2267,7 @@ pub async fn summarize_message(
         .find(|h| h.id == message_id)
         .ok_or_else(|| AppError::Invalid("Message not found.".to_string()))?;
     let text = summarizable_text(&app, &state, message_id).await?;
-    llm::summarize_message(&app, &header, &text, fresh).await
+    llm::summarize_message(&app, &header, &text, fresh, &request_id).await
 }
 
 /// A summary of the whole conversation the message belongs to (drafts
@@ -2276,6 +2278,7 @@ pub async fn summarize_thread(
     state: State<'_, AppState>,
     message_id: i64,
     fresh: bool,
+    request_id: String,
 ) -> Result<String, AppError> {
     let thread = storage::messages::thread_of(&state.pool, message_id).await?;
     let mut messages = Vec::with_capacity(thread.len());
@@ -2286,7 +2289,18 @@ pub async fn summarize_thread(
         let text = summarizable_text(&app, &state, header.id).await?;
         messages.push((header, text));
     }
-    llm::summarize_thread(&app, &messages, fresh).await
+    llm::summarize_thread(&app, &messages, fresh, &request_id).await
+}
+
+/// Stop a summary being written under `request_id`; a no-op once it has
+/// finished.
+#[tauri::command]
+pub async fn cancel_summary(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> Result<(), AppError> {
+    state.llm_summaries.cancel(&request_id);
+    Ok(())
 }
 
 /// The message's stored text, fetching the body if it is not cached yet.

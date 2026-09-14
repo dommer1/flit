@@ -202,6 +202,12 @@ export type LlmModelState =
   | { kind: "failed"; error: string }
   | { kind: "ready" };
 
+/** Mirrors SummaryToken in models.rs: one piece of a summary being written. */
+export interface SummaryToken {
+  requestId: string;
+  text: string;
+}
+
 /** Mirrors LlmDownloadProgress in models.rs. */
 export interface LlmDownloadProgress {
   id: string;
