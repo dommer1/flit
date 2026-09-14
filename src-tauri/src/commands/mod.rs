@@ -2249,6 +2249,30 @@ pub async fn set_llm_summary_language(
     Ok(())
 }
 
+/// A summary of one message, written by the picked local model — plain
+/// text, bullet lines. Nothing leaves the machine.
+#[tauri::command]
+pub async fn summarize_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<String, AppError> {
+    let header = storage::messages::thread_of(&state.pool, message_id)
+        .await?
+        .into_iter()
+        .find(|h| h.id == message_id)
+        .ok_or_else(|| AppError::Invalid("Message not found.".to_string()))?;
+    let body = load_body(&app, &state, message_id).await?;
+    // why the html fallback: mail-parser fills body_text for html-only mail
+    // at parse time, so this is for the odd cached row that has only html.
+    let text = body.text.or_else(|| {
+        body.html
+            .as_deref()
+            .map(mail_parser::decoders::html::html_to_text)
+    });
+    llm::summarize_message(&app, &header, text.as_deref().unwrap_or_default()).await
+}
+
 /// Start downloading a catalog model; returns once the background task is
 /// spawned. The only user action that contacts a host other than the
 /// user's own mail servers or a sender's image host — see CLAUDE.md.

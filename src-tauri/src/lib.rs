@@ -198,6 +198,7 @@ pub fn run() {
             commands::download_llm_model,
             commands::cancel_llm_download,
             commands::remove_llm_model,
+            commands::summarize_message,
             commands::get_notification_settings,
             commands::set_notification_settings,
             commands::set_account_notifications,

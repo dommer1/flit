@@ -19,7 +19,7 @@ use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::AppError;
-use crate::models::{LlmDownloadProgress, LlmModel, LlmModelState, LlmStatus};
+use crate::models::{LlmDownloadProgress, LlmModel, LlmModelState, LlmStatus, MessageHeader};
 use crate::state::AppState;
 use crate::storage::settings;
 
@@ -82,6 +82,67 @@ fn describe(
         ready,
         models,
     }
+}
+
+/// The picked model, only when the feature is on and its file is here;
+/// otherwise an error that reads as guidance for the user.
+async fn ready_model(
+    app: &AppHandle,
+    pool: &SqlitePool,
+) -> Result<(&'static catalog::ModelSpec, std::path::PathBuf), AppError> {
+    if !settings::llm_summary_enabled(pool).await? {
+        return Err(AppError::Invalid(
+            "Summaries are switched off — see Settings → Experimental.".to_string(),
+        ));
+    }
+    let spec = settings::llm_model(pool)
+        .await?
+        .as_deref()
+        .and_then(catalog::find)
+        .ok_or_else(|| {
+            AppError::Invalid("Pick and download a model in Settings → Experimental.".to_string())
+        })?;
+    let dir = store::models_dir(app)?;
+    if !store::is_ready(&dir, spec) {
+        return Err(AppError::Invalid(format!(
+            "{} is not downloaded — see Settings → Experimental.",
+            spec.name
+        )));
+    }
+    Ok((spec, store::model_path(&dir, spec)))
+}
+
+/// Summarize one message with the picked model. `body_text` is the raw
+/// stored text; the prompt builder trims it.
+pub async fn summarize_message(
+    app: &AppHandle,
+    header: &MessageHeader,
+    body_text: &str,
+) -> Result<String, AppError> {
+    let state = app.state::<AppState>();
+    let (spec, model_path) = ready_model(app, &state.pool).await?;
+    let text = summarize::prepare_text(body_text, summarize::MESSAGE_CHARS);
+    if text.is_empty() {
+        return Err(AppError::Invalid(
+            "This message has no text to summarize.".to_string(),
+        ));
+    }
+    let language = settings::llm_summary_language(&state.pool).await?;
+    let source = summarize::Source {
+        from: header.from.clone(),
+        date: header.date.clone(),
+        subject: header.subject.clone(),
+        text,
+    };
+    state
+        .llm_engine
+        .complete(engine::Request {
+            model_path,
+            messages: summarize::message_prompt(&source, &language),
+            max_tokens: summarize::MAX_ANSWER_TOKENS,
+            assistant_prefix: spec.assistant_prefix.to_string(),
+        })
+        .await
 }
 
 /// Start fetching a model in the background; returns as soon as the task is

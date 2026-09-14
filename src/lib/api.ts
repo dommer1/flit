@@ -497,6 +497,12 @@ export function setLlmSummaryLanguage(language: string): Promise<void> {
   return invoke<void>("set_llm_summary_language", { language });
 }
 
+/** A plain-text summary of one message, written by the local model.
+ *  Rejects with guidance when the feature is off or no model is ready. */
+export function summarizeMessage(messageId: number): Promise<string> {
+  return invoke<string>("summarize_message", { messageId });
+}
+
 /** Start fetching a catalog model in the background. Progress arrives on
  *  onLlmDownloadProgress; the end (done, cancelled, failed) on
  *  onLlmModelsChanged. */
