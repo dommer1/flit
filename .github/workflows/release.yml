@@ -16,7 +16,8 @@ name: Release
 # Gatekeeper blocks it on first launch (System Settings → Privacy & Security →
 # Open Anyway). Add the five secrets below and the very same workflow signs with
 # a Developer ID certificate and notarizes with Apple; the Tauri CLI imports the
-# certificate into a temporary keychain itself.
+# certificate into a temporary keychain itself. The "Configure signing" step
+# is what switches between the two, based on whether APPLE_CERTIFICATE is set.
 #   APPLE_CERTIFICATE            base64 of the "Developer ID Application" .p12
 #   APPLE_CERTIFICATE_PASSWORD   password chosen at .p12 export
 #   APPLE_ID                     Apple ID e-mail
@@ -75,14 +76,35 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - uses: tauri-apps/tauri-action@v1
+      - name: Configure signing
+        # why: a missing secret arrives as an EMPTY string, and the Tauri CLI
+        # treats a present-but-empty APPLE_CERTIFICATE as a certificate to
+        # import (and fails). So only export the variables that are actually
+        # set; with no certificate, sign ad-hoc ("-") so the bundle is at least
+        # consistently signed instead of half-signed by the linker.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No APPLE_CERTIFICATE secret: ad-hoc signing"
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "Developer ID signing and notarization"
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            eval "value=\${$name}"
+            if [ -n "$value" ]; then
+              printf '%s<<EOF\n%s\nEOF\n' "$name" "$value" >> "$GITHUB_ENV"
+            fi
+          done
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Flit ${{ inputs.tag || github.ref_name }}

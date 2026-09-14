@@ -24,8 +24,11 @@ if [ -f .env ]; then
 fi
 
 : "${APPLE_SIGNING_IDENTITY:=flit-dev}"
-if security find-identity -p codesigning -v 2>/dev/null |
-  grep -q "\"$APPLE_SIGNING_IDENTITY\""; then
+# why: "-" is Tauri's ad-hoc pseudo-identity (CI without a certificate); it
+# never appears in a keychain, so it must bypass the lookup below.
+if [ "$APPLE_SIGNING_IDENTITY" = "-" ] ||
+  security find-identity -p codesigning -v 2>/dev/null |
+    grep -q "\"$APPLE_SIGNING_IDENTITY\""; then
   export APPLE_SIGNING_IDENTITY
 else
   echo "tauri: no \"$APPLE_SIGNING_IDENTITY\" identity — build stays ad-hoc signed" >&2
