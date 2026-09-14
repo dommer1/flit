@@ -5,6 +5,7 @@
     attachmentPreview,
     closeCompose,
     discardDraft,
+    getShortcuts,
     inspectAttachments,
     listAccounts,
     listAliases,
@@ -32,8 +33,10 @@
     AttachmentInfo,
     DraftQuote,
     OutgoingMessage,
+    ShortcutBinding,
     Signature,
   } from "./types";
+  import { actionFor, comboFromEvent, firesIn } from "./shortcuts";
   import {
     presets,
     toDatetimeLocal,
@@ -186,6 +189,11 @@
   }
 
   onMount(() => {
+    void getShortcuts()
+      .then((bindings) => (shortcuts = bindings))
+      .catch((err: unknown) =>
+        console.error("failed to load keyboard shortcuts:", err),
+      );
     let unlisten: (() => void) | undefined;
     let unlistenClose: (() => void) | undefined;
     // why: a listener can finish registering after the component is
@@ -379,6 +387,23 @@
     await getCurrentWindow().destroy();
   }
 
+  // Loaded once per window: a compose window is short-lived, so a rebinding
+  // made while it is open applies from the next one.
+  let shortcuts = $state<ShortcutBinding[]>([]);
+  let formEl = $state<HTMLFormElement | null>(null);
+
+  /** The Send shortcut (⌘↩ by default) submits the form exactly like the
+   * Send button, so the same validation and queue flow apply. */
+  function onShortcutKey(event: KeyboardEvent) {
+    if (showCloseDialog) return;
+    const combo = comboFromEvent(event);
+    if (combo === null || !firesIn(event.target, combo)) return;
+    if (actionFor(shortcuts, combo) !== "send") return;
+    event.preventDefault();
+    event.stopPropagation();
+    formEl?.requestSubmit();
+  }
+
   function onDialogKey(event: KeyboardEvent) {
     if (!showCloseDialog || event.key !== "Escape") return;
     event.preventDefault();
@@ -495,9 +520,13 @@
   }
 </script>
 
-<svelte:window onkeydown={onDialogKey} />
+<!-- why capture: the editor binds ⌘↩ to a line break of its own. Catching
+     the shortcut on the way down, before it reaches the editor, keeps that
+     stray break out of the message being sent. -->
+<svelte:window onkeydown={onDialogKey} onkeydowncapture={onShortcutKey} />
 
 <form
+  bind:this={formEl}
   class="window"
   class:drop-target={dropHover}
   aria-label="Compose message"
