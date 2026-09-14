@@ -149,6 +149,8 @@ pub async fn summarize_message(
             messages: summarize::message_prompt(&source, &language),
             max_tokens: summarize::MAX_ANSWER_TOKENS,
             assistant_prefix: spec.assistant_prefix.to_string(),
+            on_token: None,
+            cancel: engine::CancelFlag::default(),
         })
         .await?;
     storage::summaries::put(&state.pool, &key, &text).await?;
@@ -199,6 +201,8 @@ pub async fn summarize_thread(
             messages: summarize::thread_prompt(&sources, &language),
             max_tokens: summarize::MAX_THREAD_ANSWER_TOKENS,
             assistant_prefix: spec.assistant_prefix.to_string(),
+            on_token: None,
+            cancel: engine::CancelFlag::default(),
         })
         .await?;
     storage::summaries::put(&state.pool, &key, &text).await?;

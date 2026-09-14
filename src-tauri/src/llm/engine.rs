@@ -10,8 +10,9 @@
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -46,9 +47,13 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+/// A raisable stop signal: the generation loop polls it between tokens.
+pub type CancelFlag = Arc<AtomicBool>;
+/// Receives the answer piece by piece as it is written.
+pub type TokenSink = Box<dyn FnMut(&str) + Send>;
+
 /// A completion request: which model file, the conversation so far, and
 /// how many tokens the answer may take.
-#[derive(Debug, Clone)]
 pub struct Request {
     pub model_path: PathBuf,
     pub messages: Vec<ChatMessage>,
@@ -58,6 +63,12 @@ pub struct Request {
     /// here (see catalog) so the answer starts right away instead of after
     /// hundreds of tokens of deliberation.
     pub assistant_prefix: String,
+    /// Called with each piece of the answer as it is written — the text a
+    /// reader may see, so a stray think block is held back, never shown.
+    pub on_token: Option<TokenSink>,
+    /// Raised to stop early; the request then fails as cancelled and
+    /// nothing is cached.
+    pub cancel: CancelFlag,
 }
 
 type Reply = tokio::sync::oneshot::Sender<Result<String, AppError>>;
@@ -112,8 +123,8 @@ fn worker(receiver: mpsc::Receiver<(Request, Reply)>) {
     let mut loaded: Option<Loaded> = None;
     loop {
         match receiver.recv_timeout(IDLE_UNLOAD) {
-            Ok((request, reply)) => {
-                let result = complete(&backend, &mut loaded, &request);
+            Ok((mut request, reply)) => {
+                let result = complete(&backend, &mut loaded, &mut request);
                 let _ = reply.send(result);
             }
             Err(RecvTimeoutError::Timeout) => loaded = None,
@@ -130,7 +141,7 @@ struct Loaded {
 fn complete(
     backend: &LlamaBackend,
     loaded: &mut Option<Loaded>,
-    request: &Request,
+    request: &mut Request,
 ) -> Result<String, AppError> {
     let model = load(backend, loaded, &request.model_path)?;
 
@@ -193,7 +204,12 @@ fn complete(
     ]);
     let mut decoder = encoding_rs::UTF_8.new_decoder();
     let mut output = String::new();
+    // How much of `output` has been handed to on_token so far.
+    let mut streamed = 0;
     for pos in (tokens.len()..).take(request.max_tokens) {
+        if request.cancel.load(Ordering::Relaxed) {
+            return Err(AppError::Invalid("Summary cancelled.".to_string()));
+        }
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         sampler.accept(token);
         if model.is_eog_token(token) {
@@ -203,6 +219,13 @@ fn complete(
             .token_to_piece(token, &mut decoder, false, None)
             .map_err(|e| AppError::Llm(format!("cannot decode token: {e}")))?;
         output.push_str(&piece);
+        if let Some(on_token) = request.on_token.as_mut() {
+            let visible = streamable(&output);
+            if visible.len() > streamed {
+                on_token(&visible[streamed..]);
+                streamed = visible.len();
+            }
+        }
 
         batch.clear();
         batch
@@ -212,6 +235,17 @@ fn complete(
             .map_err(|e| AppError::Llm(format!("generation failed: {e}")))?;
     }
     Ok(strip_thinking(&output).trim().to_string())
+}
+
+/// The part of a growing answer a reader may see: everything, unless the
+/// answer opened with a think block — then only what follows its end, and
+/// nothing while the opening tag is still being spelled out.
+fn streamable(output: &str) -> &str {
+    let trimmed = output.trim_start();
+    if !trimmed.is_empty() && "<think>".starts_with(trimmed) {
+        return "";
+    }
+    strip_thinking(output)
 }
 
 /// Drop a leading `<think>…</think>` block — a model that deliberated
@@ -257,6 +291,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn streams_nothing_while_a_think_block_is_open_or_being_typed() {
+        assert_eq!(streamable("<th"), "");
+        assert_eq!(streamable("<think>"), "");
+        assert_eq!(streamable("<think>\nhmm"), "");
+        assert_eq!(streamable("<think>\nhmm\n</think>\n\n- A").trim(), "- A");
+        assert_eq!(streamable("- A point"), "- A point");
+        // A tag that is not a think tag streams as text.
+        assert_eq!(streamable("<b>bold"), "<b>bold");
+    }
+
+    #[test]
     fn strips_a_leading_think_block() {
         assert_eq!(
             strip_thinking("<think>\nhmm\n</think>\n\nThe answer.").trim(),
@@ -268,6 +313,13 @@ mod tests {
         assert_eq!(strip_thinking("A <think> B"), "A <think> B");
     }
 
+    /// One engine for every model test: llama.cpp's backend initialises
+    /// once per process, and the app itself only ever has one engine.
+    fn test_engine() -> &'static Engine {
+        static ENGINE: OnceLock<Engine> = OnceLock::new();
+        ENGINE.get_or_init(Engine::default)
+    }
+
     /// Needs a real model file: `FLIT_TEST_MODEL=/path/to/model.gguf cargo
     /// test llm::engine -- --ignored`. Loads it and checks that a trivial
     /// instruction gets the expected answer.
@@ -275,7 +327,7 @@ mod tests {
     #[ignore]
     async fn answers_a_trivial_instruction() {
         let path = std::env::var("FLIT_TEST_MODEL").expect("FLIT_TEST_MODEL not set");
-        let engine = Engine::default();
+        let engine = test_engine();
 
         let answer = engine
             .complete(Request {
@@ -292,10 +344,54 @@ mod tests {
                 ],
                 max_tokens: 16,
                 assistant_prefix: "<think>\n\n</think>\n\n".to_string(),
+                on_token: None,
+                cancel: CancelFlag::default(),
             })
             .await
             .unwrap();
 
         assert!(answer.to_lowercase().contains("pong"), "{answer:?}");
+    }
+
+    /// Same setup as above; checks that the streamed pieces add up to the
+    /// returned answer and that a raised flag stops generation.
+    #[tokio::test]
+    #[ignore]
+    async fn streams_pieces_and_honours_cancel() {
+        let path = std::env::var("FLIT_TEST_MODEL").expect("FLIT_TEST_MODEL not set");
+        let engine = test_engine();
+        let pieces = Arc::new(std::sync::Mutex::new(String::new()));
+        let sink = pieces.clone();
+        let request = |on_token: Option<TokenSink>, cancel: CancelFlag| Request {
+            model_path: PathBuf::from(&path),
+            messages: vec![ChatMessage {
+                role: "user",
+                content: "Count from one to twenty in words, comma separated.".to_string(),
+            }],
+            max_tokens: 64,
+            assistant_prefix: "<think>\n\n</think>\n\n".to_string(),
+            on_token,
+            cancel,
+        };
+
+        let answer = engine
+            .complete(request(
+                Some(Box::new(move |piece| sink.lock().unwrap().push_str(piece))),
+                CancelFlag::default(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(pieces.lock().unwrap().trim(), answer);
+
+        let cancel = CancelFlag::default();
+        let flag = cancel.clone();
+        let err = engine
+            .complete(request(
+                Some(Box::new(move |_| flag.store(true, Ordering::Relaxed))),
+                cancel,
+            ))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("cancelled"), "{err}");
     }
 }
