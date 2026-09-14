@@ -23,6 +23,7 @@ import type {
   Signature,
   SwipeActions,
   ThreadOrder,
+  Appearance,
   ViewStatus,
 } from "./types";
 
@@ -505,6 +506,16 @@ export function getSwipeActions(): Promise<SwipeActions> {
 
 export function setSwipeActions(actions: SwipeActions): Promise<void> {
   return invoke<void>("set_swipe_actions", { actions });
+}
+
+/** The app's colour scheme (follows the system until changed). Setting it
+ * re-themes every window natively, so the CSS needs no class toggle. */
+export function getAppearance(): Promise<Appearance> {
+  return invoke<Appearance>("get_appearance");
+}
+
+export function setAppearance(appearance: Appearance): Promise<void> {
+  return invoke<void>("set_appearance", { appearance });
 }
 
 /** Conversation-view order (newest at the bottom until changed). */
