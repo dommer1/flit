@@ -64,6 +64,14 @@ reqwest = { version = "0.13.4", default-features = false, features = ["native-tl
 # why: a downloaded model file is hashed on the way down and checked against
 # the catalog pin before it is ever loaded (already in the tree via sqlx).
 sha2 = "0.10"
+# why: the on-device summaries engine. Thin bindings over llama.cpp, built
+# from source (needs cmake); on Apple Silicon the crate turns Metal on by
+# itself. default-features off drops llama.cpp's `common` library (~14 MB
+# we never call) and OpenMP, which Apple's clang does not ship.
+llama-cpp-2 = { version = "0.1.156", default-features = false }
+# why: llama-cpp-2 hands tokens back through an encoding_rs UTF-8 decoder, so
+# a multi-byte character split across tokens still comes out whole.
+encoding_rs = "0.8"
 lightningcss = { version = "=1.0.0-alpha.71", default-features = false }
 mail-builder = "0.4"
 # why: native new-mail notifications, sent from the Rust sync path only —
