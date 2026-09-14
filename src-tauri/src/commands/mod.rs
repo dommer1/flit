@@ -2250,12 +2250,14 @@ pub async fn set_llm_summary_language(
 }
 
 /// A summary of one message, written by the picked local model — plain
-/// text, bullet lines. Nothing leaves the machine.
+/// text, bullet lines. Nothing leaves the machine. `fresh` skips the cache
+/// (the panel's "summarize again").
 #[tauri::command]
 pub async fn summarize_message(
     app: AppHandle,
     state: State<'_, AppState>,
     message_id: i64,
+    fresh: bool,
 ) -> Result<String, AppError> {
     let header = storage::messages::thread_of(&state.pool, message_id)
         .await?
@@ -2263,7 +2265,7 @@ pub async fn summarize_message(
         .find(|h| h.id == message_id)
         .ok_or_else(|| AppError::Invalid("Message not found.".to_string()))?;
     let text = summarizable_text(&app, &state, message_id).await?;
-    llm::summarize_message(&app, &header, &text).await
+    llm::summarize_message(&app, &header, &text, fresh).await
 }
 
 /// A summary of the whole conversation the message belongs to (drafts
@@ -2273,6 +2275,7 @@ pub async fn summarize_thread(
     app: AppHandle,
     state: State<'_, AppState>,
     message_id: i64,
+    fresh: bool,
 ) -> Result<String, AppError> {
     let thread = storage::messages::thread_of(&state.pool, message_id).await?;
     let mut messages = Vec::with_capacity(thread.len());
@@ -2283,7 +2286,7 @@ pub async fn summarize_thread(
         let text = summarizable_text(&app, &state, header.id).await?;
         messages.push((header, text));
     }
-    llm::summarize_thread(&app, &messages).await
+    llm::summarize_thread(&app, &messages, fresh).await
 }
 
 /// The message's stored text, fetching the body if it is not cached yet.

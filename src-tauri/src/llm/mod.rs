@@ -21,7 +21,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::error::AppError;
 use crate::models::{LlmDownloadProgress, LlmModel, LlmModelState, LlmStatus, MessageHeader};
 use crate::state::AppState;
-use crate::storage::settings;
+use crate::storage::{self, settings};
 
 /// Progress events are throttled to this — the UI needs a moving bar, not
 /// one event per network chunk.
@@ -113,11 +113,13 @@ async fn ready_model(
 }
 
 /// Summarize one message with the picked model. `body_text` is the raw
-/// stored text; the prompt builder trims it.
+/// stored text; the prompt builder trims it. A cached summary of the same
+/// inputs is returned unless `fresh` asks for a new one.
 pub async fn summarize_message(
     app: &AppHandle,
     header: &MessageHeader,
     body_text: &str,
+    fresh: bool,
 ) -> Result<String, AppError> {
     let state = app.state::<AppState>();
     let (spec, model_path) = ready_model(app, &state.pool).await?;
@@ -127,13 +129,20 @@ pub async fn summarize_message(
         ));
     }
     let language = settings::llm_summary_language(&state.pool).await?;
+    let id = header.id.to_string();
+    let key = summarize::cache_key("message", spec.id, &language, [id.as_str(), body_text]);
+    if !fresh {
+        if let Some(cached) = storage::summaries::get(&state.pool, &key).await? {
+            return Ok(cached);
+        }
+    }
     let source = summarize::Source {
         from: header.from.clone(),
         date: header.date.clone(),
         subject: header.subject.clone(),
         text: body_text.to_string(),
     };
-    state
+    let text = state
         .llm_engine
         .complete(engine::Request {
             model_path,
@@ -141,14 +150,18 @@ pub async fn summarize_message(
             max_tokens: summarize::MAX_ANSWER_TOKENS,
             assistant_prefix: spec.assistant_prefix.to_string(),
         })
-        .await
+        .await?;
+    storage::summaries::put(&state.pool, &key, &text).await?;
+    Ok(text)
 }
 
 /// Summarize a whole conversation, `messages` oldest first as
-/// `(header, stored body text)`.
+/// `(header, stored body text)`. Cached like `summarize_message`; a
+/// conversation that gained a message hashes differently and is redone.
 pub async fn summarize_thread(
     app: &AppHandle,
     messages: &[(MessageHeader, String)],
+    fresh: bool,
 ) -> Result<String, AppError> {
     let state = app.state::<AppState>();
     let (spec, model_path) = ready_model(app, &state.pool).await?;
@@ -168,7 +181,18 @@ pub async fn summarize_thread(
         ));
     }
     let language = settings::llm_summary_language(&state.pool).await?;
-    state
+    let ids: Vec<String> = messages.iter().map(|(h, _)| h.id.to_string()).collect();
+    let parts = messages
+        .iter()
+        .zip(&ids)
+        .flat_map(|((_, text), id)| [id.as_str(), text.as_str()]);
+    let key = summarize::cache_key("thread", spec.id, &language, parts);
+    if !fresh {
+        if let Some(cached) = storage::summaries::get(&state.pool, &key).await? {
+            return Ok(cached);
+        }
+    }
+    let text = state
         .llm_engine
         .complete(engine::Request {
             model_path,
@@ -176,7 +200,9 @@ pub async fn summarize_thread(
             max_tokens: summarize::MAX_THREAD_ANSWER_TOKENS,
             assistant_prefix: spec.assistant_prefix.to_string(),
         })
-        .await
+        .await?;
+    storage::summaries::put(&state.pool, &key, &text).await?;
+    Ok(text)
 }
 
 /// Start fetching a model in the background; returns as soon as the task is

@@ -7,6 +7,8 @@
 //! actions, and its output is shown as plain text under an "AI summary"
 //! label — the worst case is a misleading summary, never an action.
 
+use sha2::{Digest, Sha256};
+
 use crate::llm::engine::ChatMessage;
 use crate::mail::parse::{is_url_token, strip_invisible};
 use crate::mail::quote::split_text_quote;
@@ -28,6 +30,9 @@ pub const MAX_ANSWER_TOKENS: usize = 400;
 pub const MAX_THREAD_ANSWER_TOKENS: usize = 600;
 /// The stored value meaning "write in the language of the message".
 pub const AUTO_LANGUAGE: &str = "auto";
+/// Bump when the prompts change, so cached summaries from the old wording
+/// are not served for the new one.
+const PROMPT_VERSION: &str = "1";
 
 /// One message as the prompt sees it.
 #[derive(Debug, Clone)]
@@ -168,6 +173,28 @@ fn thread_budgets(lengths: &[usize]) -> Vec<usize> {
     budgets
 }
 
+/// The cache key of a summary: a hash over everything that shaped it, so
+/// the same inputs hit and any change — another model, language, prompt
+/// wording, a message edited or a conversation grown — misses. `parts` are
+/// the message ids and texts, in order.
+pub fn cache_key<'a>(
+    scope: &str,
+    model_id: &str,
+    language: &str,
+    parts: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let mut hasher = Sha256::new();
+    for field in [PROMPT_VERSION, scope, model_id, language.trim()] {
+        hasher.update(field.as_bytes());
+        hasher.update([0]);
+    }
+    for part in parts {
+        hasher.update(part.as_bytes());
+        hasher.update([0]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 fn language_line(language: &str) -> String {
     if language == AUTO_LANGUAGE || language.trim().is_empty() {
         "Write in the same language as the message.".to_string()
@@ -300,6 +327,24 @@ mod tests {
         let budgets = thread_budgets(&[10_000; 100]);
         assert!(budgets.iter().all(|b| *b == THREAD_FLOOR_CHARS));
         assert!(thread_budgets(&[]).is_empty());
+    }
+
+    #[test]
+    fn cache_key_changes_with_any_input() {
+        let base = cache_key("message", "m", "auto", ["7", "hello"]);
+
+        assert_eq!(base, cache_key("message", "m", "auto", ["7", "hello"]));
+        assert_eq!(base.len(), 64);
+        assert_ne!(base, cache_key("thread", "m", "auto", ["7", "hello"]));
+        assert_ne!(base, cache_key("message", "other", "auto", ["7", "hello"]));
+        assert_ne!(base, cache_key("message", "m", "Slovak", ["7", "hello"]));
+        assert_ne!(base, cache_key("message", "m", "auto", ["7", "hello!"]));
+        assert_ne!(
+            base,
+            cache_key("message", "m", "auto", ["7", "hello", "8", "more"])
+        );
+        // Boundaries matter: "7"+"hello" is not "7h"+"ello".
+        assert_ne!(base, cache_key("message", "m", "auto", ["7h", "ello"]));
     }
 
     #[test]

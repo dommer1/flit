@@ -498,14 +498,21 @@ export function setLlmSummaryLanguage(language: string): Promise<void> {
 }
 
 /** A plain-text summary of one message, written by the local model.
- *  Rejects with guidance when the feature is off or no model is ready. */
-export function summarizeMessage(messageId: number): Promise<string> {
-  return invoke<string>("summarize_message", { messageId });
+ *  Rejects with guidance when the feature is off or no model is ready.
+ *  Cached per inputs; `fresh` asks for a new one. */
+export function summarizeMessage(
+  messageId: number,
+  fresh = false,
+): Promise<string> {
+  return invoke<string>("summarize_message", { messageId, fresh });
 }
 
 /** A plain-text summary of the conversation the message belongs to. */
-export function summarizeThread(messageId: number): Promise<string> {
-  return invoke<string>("summarize_thread", { messageId });
+export function summarizeThread(
+  messageId: number,
+  fresh = false,
+): Promise<string> {
+  return invoke<string>("summarize_thread", { messageId, fresh });
 }
 
 /** Start fetching a catalog model in the background. Progress arrives on

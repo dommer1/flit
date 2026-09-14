@@ -72,12 +72,12 @@
     error: string | null;
   } | null>(null);
 
-  async function summarizeConversation() {
+  async function summarizeConversation(fresh = false) {
     if (message === null) return;
     const id = message.id;
     threadSummary = { loading: true, text: null, error: null };
     try {
-      const text = await summarizeThread(id);
+      const text = await summarizeThread(id, fresh);
       if (message?.id === id) {
         threadSummary = { loading: false, text, error: null };
       }
@@ -277,7 +277,7 @@
             <SummaryPanel
               summary={threadSummary}
               label="Conversation summary"
-              onRetry={() => void summarizeConversation()}
+              onRetry={() => void summarizeConversation(true)}
               onClose={() => (threadSummary = null)}
             />
           </div>

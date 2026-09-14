@@ -60,11 +60,11 @@
     error: string | null;
   } | null>(null);
 
-  async function summarize() {
+  async function summarize(fresh = false) {
     const id = message.id;
     summary = { loading: true, text: null, error: null };
     try {
-      const text = await summarizeMessage(id);
+      const text = await summarizeMessage(id, fresh);
       if (message.id === id) summary = { loading: false, text, error: null };
     } catch (err) {
       if (message.id === id) {
@@ -360,7 +360,7 @@
         <div class="summary-slot">
           <SummaryPanel
             {summary}
-            onRetry={() => void summarize()}
+            onRetry={() => void summarize(true)}
             onClose={() => (summary = null)}
           />
         </div>

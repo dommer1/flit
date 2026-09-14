@@ -126,7 +126,7 @@ it("summarizes the message into bullet lines", async () => {
 
   await fireEvent.click(getByLabelText("Summarize this message"));
 
-  expect(api.summarizeMessage).toHaveBeenCalledWith(1);
+  expect(api.summarizeMessage).toHaveBeenCalledWith(1, false);
   expect(await findByText("Alice asks about the weekend")).toBeInTheDocument();
   expect(await findByText("Reply by Friday")).toBeInTheDocument();
   expect(getByRole("region", { name: "AI summary" })).toBeInTheDocument();
@@ -155,4 +155,14 @@ it("closes the summary panel", async () => {
   await fireEvent.click(getByLabelText("Close summary"));
 
   expect(queryByRole("region", { name: "AI summary" })).toBeNull();
+});
+
+it("asks for a fresh summary from the panel's retry", async () => {
+  const { getByLabelText, findByText } = renderCard({ canSummarize: true });
+  await fireEvent.click(getByLabelText("Summarize this message"));
+  await findByText("Reply by Friday");
+
+  await fireEvent.click(getByLabelText("Summarize again"));
+
+  expect(api.summarizeMessage).toHaveBeenLastCalledWith(1, true);
 });

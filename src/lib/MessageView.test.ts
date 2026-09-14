@@ -775,7 +775,7 @@ it("summarizes the whole conversation from its header", async () => {
     await screen.findByLabelText("Summarize this conversation"),
   );
 
-  expect(api.summarizeThread).toHaveBeenCalledWith(1);
+  expect(api.summarizeThread).toHaveBeenCalledWith(1, false);
   expect(await screen.findByText("Alice proposed Saturday")).toBeInTheDocument();
   expect(
     screen.getByRole("region", { name: "Conversation summary" }),
