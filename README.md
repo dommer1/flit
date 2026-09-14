@@ -48,15 +48,6 @@ treats these as rules, not preferences:
   (off by default, keyed by domain only, never by address)
 - Light and dark mode
 
-## Not yet / not planned
-
-Planned: Gmail OAuth2, keyboard navigation (j/k and friends), Windows and
-Linux builds, signed release downloads.
-
-Deliberately out of scope until the core is solid: rules and filters, snooze,
-PGP, calendar, contacts management, plugins. If you want a client that does
-everything, Flit is not it.
-
 ## Build from source
 
 Requirements: macOS, Xcode command line tools, Rust (via

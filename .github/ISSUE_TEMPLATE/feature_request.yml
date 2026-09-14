@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Flit is deliberately small. Check the "Not yet / not planned" list in the README first: rules and filters, snooze, PGP, calendar and plugins are out of scope until the core is solid.
+        Flit is deliberately small: a clean, fast client for reading and writing mail. Features that turn it into a productivity suite are unlikely to be accepted until the core is solid.
   - type: textarea
     id: problem
     attributes:
