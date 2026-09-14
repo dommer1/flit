@@ -13,7 +13,6 @@
     getAppearance,
     getAvatarLookupEnabled,
     getDateTimeFormat,
-    getLlmSummaryEnabled,
     getRemoteImagePolicy,
     getSwipeActions,
     getThreadOrder,
@@ -23,7 +22,6 @@
     setAppearance,
     setAvatarLookupEnabled,
     setDateTimeFormat,
-    setLlmSummaryEnabled,
     setRemoteImagePolicy,
     setSwipeActions,
     setThreadOrder,
@@ -46,6 +44,7 @@
     type TimeFormat,
   } from "./types";
   import AccountsPane from "./AccountsPane.svelte";
+  import ExperimentalPane from "./ExperimentalPane.svelte";
   import NotificationsPane from "./NotificationsPane.svelte";
   import ShortcutsPane from "./ShortcutsPane.svelte";
   import SignaturesPane from "./SignaturesPane.svelte";
@@ -98,7 +97,6 @@
   >("accounts");
   let policy = $state<RemoteImagePolicy>("ask");
   let avatarLookup = $state(false);
-  let llmSummary = $state(false);
   let swipes = $state<SwipeActions>(DEFAULT_SWIPE_ACTIONS);
   let appearance = $state<Appearance>("system");
   let threadOrder = $state<ThreadOrder>("newestLast");
@@ -219,18 +217,6 @@
     }
   }
 
-  async function toggleLlmSummary(next: boolean) {
-    lastError = null;
-    const previous = llmSummary;
-    llmSummary = next;
-    try {
-      await setLlmSummaryEnabled(next);
-    } catch (err) {
-      llmSummary = previous;
-      lastError = String(err);
-    }
-  }
-
   async function selectPolicy(next: RemoteImagePolicy) {
     lastError = null;
     const previous = policy;
@@ -322,7 +308,6 @@
     void refresh();
     void getRemoteImagePolicy().then((stored) => (policy = stored));
     void getAvatarLookupEnabled().then((stored) => (avatarLookup = stored));
-    void getLlmSummaryEnabled().then((stored) => (llmSummary = stored));
     void getSwipeActions().then((stored) => (swipes = stored));
     void getAppearance().then((stored) => (appearance = stored));
     void getThreadOrder().then((stored) => (threadOrder = stored));
@@ -535,31 +520,7 @@
   {:else if tab === "shortcuts"}
     <ShortcutsPane />
   {:else if tab === "experimental"}
-    <section class="content">
-      <div class="section-label">On-device summaries</div>
-      <div class="group">
-        <div class="choice">
-          <input
-            type="checkbox"
-            id="llm-summary"
-            checked={llmSummary}
-            onchange={(e) => void toggleLlmSummary(e.currentTarget.checked)}
-          />
-          <span>
-            <label for="llm-summary">
-              Summarize messages with a local AI model
-            </label>
-            <small>Adds a summarize button to messages and threads.</small>
-          </span>
-        </div>
-      </div>
-      <p class="explain">
-        Experimental. Summaries are written by a small language model that
-        runs entirely on this Mac — no message ever leaves it. The model is a
-        separate download you pick and start yourself; switching this on
-        downloads nothing by itself.
-      </p>
-    </section>
+    <ExperimentalPane />
   {:else}
     <section class="content">
       <div class="section-label">Remote images in messages</div>

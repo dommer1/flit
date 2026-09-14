@@ -245,27 +245,6 @@ it("saves switching sender avatar lookups on", async () => {
   expect(api.setAvatarLookupEnabled).toHaveBeenCalledWith(true);
 });
 
-it("shows on-device summaries switched off by default", async () => {
-  render(SettingsWindow);
-  await fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
-
-  expect(
-    await screen.findByLabelText("Summarize messages with a local AI model"),
-  ).not.toBeChecked();
-});
-
-it("saves switching on-device summaries on", async () => {
-  render(SettingsWindow);
-  await fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
-  const box = await screen.findByLabelText(
-    "Summarize messages with a local AI model",
-  );
-
-  await fireEvent.click(box);
-
-  expect(api.setLlmSummaryEnabled).toHaveBeenCalledWith(true);
-});
-
 it("shows the stored swipe actions on the swipes tab", async () => {
   vi.mocked(api.getSwipeActions).mockResolvedValueOnce({
     left: "trash",
