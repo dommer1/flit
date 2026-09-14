@@ -76,6 +76,11 @@ vi.mock("./api", () => ({
   })),
   setNotificationSettings: vi.fn(async () => undefined),
   setAccountNotifications: vi.fn(async () => undefined),
+  getShortcuts: vi.fn(async () => [
+    { action: "reply", combo: "Meta+R", defaultCombo: "Meta+R" },
+  ]),
+  setShortcut: vi.fn(async () => []),
+  resetShortcuts: vi.fn(async () => []),
 }));
 
 import * as api from "./api";
@@ -250,6 +255,20 @@ it("shows the stored swipe actions on the swipes tab", async () => {
   expect(screen.getByLabelText("Swipe right")).toHaveValue("reply");
   // conversation order lives on the General tab, not here
   expect(screen.queryByLabelText("Message order")).not.toBeInTheDocument();
+});
+
+it("shows the keyboard shortcuts on the shortcuts tab", async () => {
+  render(SettingsWindow);
+
+  await fireEvent.click(screen.getByRole("button", { name: "Shortcuts" }));
+
+  expect(
+    await screen.findByRole("button", { name: "Change shortcut for Reply" }),
+  ).toHaveTextContent("⌘R");
+  // Privacy is still its own tab, not the fallback under Shortcuts.
+  expect(
+    screen.queryByText("Remote images in messages"),
+  ).not.toBeInTheDocument();
 });
 
 it("saves a swipe action change", async () => {
