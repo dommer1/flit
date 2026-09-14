@@ -40,6 +40,9 @@ vi.mock("./api", () => ({
     async () => "- Alice proposed Saturday\n- Bob agreed, bring snacks",
   ),
   summarizeMessage: vi.fn(async () => "- one line"),
+  newRequestId: vi.fn(() => "req-1"),
+  onSummaryToken: vi.fn(async () => () => {}),
+  cancelSummary: vi.fn(async () => undefined),
 }));
 
 import * as api from "./api";
@@ -775,7 +778,7 @@ it("summarizes the whole conversation from its header", async () => {
     await screen.findByLabelText("Summarize this conversation"),
   );
 
-  expect(api.summarizeThread).toHaveBeenCalledWith(1, false);
+  expect(api.summarizeThread).toHaveBeenCalledWith(1, false, "req-1");
   expect(await screen.findByText("Alice proposed Saturday")).toBeInTheDocument();
   expect(
     screen.getByRole("region", { name: "Conversation summary" }),

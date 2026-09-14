@@ -10,6 +10,9 @@ vi.mock("./api", () => ({
   summarizeMessage: vi.fn(
     async () => "- Alice asks about the weekend\n- Reply by Friday",
   ),
+  newRequestId: vi.fn(() => "req-1"),
+  onSummaryToken: vi.fn(async () => () => {}),
+  cancelSummary: vi.fn(async () => undefined),
 }));
 
 import * as api from "./api";
@@ -126,7 +129,7 @@ it("summarizes the message into bullet lines", async () => {
 
   await fireEvent.click(getByLabelText("Summarize this message"));
 
-  expect(api.summarizeMessage).toHaveBeenCalledWith(1, false);
+  expect(api.summarizeMessage).toHaveBeenCalledWith(1, false, "req-1");
   expect(await findByText("Alice asks about the weekend")).toBeInTheDocument();
   expect(await findByText("Reply by Friday")).toBeInTheDocument();
   expect(getByRole("region", { name: "AI summary" })).toBeInTheDocument();
@@ -164,5 +167,18 @@ it("asks for a fresh summary from the panel's retry", async () => {
 
   await fireEvent.click(getByLabelText("Summarize again"));
 
-  expect(api.summarizeMessage).toHaveBeenLastCalledWith(1, true);
+  expect(api.summarizeMessage).toHaveBeenLastCalledWith(1, true, "req-1");
+});
+
+it("cancels a summary still being written and drops the panel", async () => {
+  vi.mocked(api.summarizeMessage).mockReturnValueOnce(new Promise(() => {}));
+  const { getByLabelText, findByLabelText, queryByRole } = renderCard({
+    canSummarize: true,
+  });
+  await fireEvent.click(getByLabelText("Summarize this message"));
+
+  await fireEvent.click(await findByLabelText("Cancel summary"));
+
+  expect(api.cancelSummary).toHaveBeenCalledWith("req-1");
+  expect(queryByRole("region", { name: "AI summary" })).toBeNull();
 });

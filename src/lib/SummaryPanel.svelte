@@ -2,17 +2,22 @@
   // A boxed on-device summary: plain text from the backend shown as bullet
   // lines — never interpreted as HTML. Shared by message cards and the
   // conversation header.
+  import type { SummaryState } from "./summaries";
+
   let {
     summary,
     label = "AI summary",
     onRetry,
     onClose,
+    onCancel,
   }: {
-    summary: { loading: boolean; text: string | null; error: string | null };
+    summary: SummaryState;
     /** Region name and heading. */
     label?: string;
     onRetry: () => void;
     onClose: () => void;
+    /** Stop a summary still being written (the × while loading). */
+    onCancel: () => void;
   } = $props();
 
   let lines = $derived(
@@ -36,21 +41,32 @@
     >
       ↻
     </button>
-    <button
-      class="summary-btn"
-      title="Close summary"
-      aria-label="Close summary"
-      onclick={onClose}
-    >
-      ×
-    </button>
+    {#if summary.loading}
+      <button
+        class="summary-btn"
+        title="Cancel"
+        aria-label="Cancel summary"
+        onclick={onCancel}
+      >
+        ×
+      </button>
+    {:else}
+      <button
+        class="summary-btn"
+        title="Close summary"
+        aria-label="Close summary"
+        onclick={onClose}
+      >
+        ×
+      </button>
+    {/if}
   </div>
-  {#if summary.loading}
+  {#if summary.loading && lines.length === 0}
     <p class="summary-status">Summarizing…</p>
   {:else if summary.error}
     <p class="summary-status error" role="alert">{summary.error}</p>
   {:else}
-    <ul class="summary-lines">
+    <ul class="summary-lines" class:writing={summary.loading}>
       {#each lines as line, i (i)}
         <li>{line}</li>
       {/each}
@@ -120,5 +136,19 @@
 
   .summary-lines li + li {
     margin-top: 2px;
+  }
+
+  /* A blinking caret after the last line while the model is still writing. */
+  .summary-lines.writing li:last-child::after {
+    content: "▍";
+    margin-left: 2px;
+    color: var(--text-secondary);
+    animation: blink 1s steps(2) infinite;
+  }
+
+  @keyframes blink {
+    to {
+      visibility: hidden;
+    }
   }
 </style>

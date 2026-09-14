@@ -1,10 +1,6 @@
 <script lang="ts">
-  import {
-    getMessageBody,
-    saveAllAttachments,
-    saveAttachment,
-    summarizeMessage,
-  } from "./api";
+  import { getMessageBody, saveAllAttachments, saveAttachment } from "./api";
+  import { runSummary, type SummaryRun, type SummaryState } from "./summaries";
   import { extColor, fileExt } from "./attachments";
   import { interceptBodyLinks } from "./bodyLinks";
   import { formatFileSize, formatFullDate, senderName } from "./format";
@@ -54,23 +50,21 @@
 
   // The on-device summary of this card, once asked for. Plain text from
   // the backend, shown as bullet lines — never interpreted as HTML.
-  let summary = $state<{
-    loading: boolean;
-    text: string | null;
-    error: string | null;
-  } | null>(null);
+  let summary = $state<SummaryState | null>(null);
+  let summaryRun: SummaryRun | null = null;
 
-  async function summarize(fresh = false) {
+  function summarize(fresh = false) {
     const id = message.id;
-    summary = { loading: true, text: null, error: null };
-    try {
-      const text = await summarizeMessage(id, fresh);
-      if (message.id === id) summary = { loading: false, text, error: null };
-    } catch (err) {
-      if (message.id === id) {
-        summary = { loading: false, text: null, error: String(err) };
-      }
-    }
+    summaryRun?.cancel();
+    summaryRun = runSummary("message", id, fresh, (state) => {
+      if (message.id === id) summary = state;
+    });
+  }
+
+  function cancelSummary() {
+    summaryRun?.cancel();
+    summaryRun = null;
+    summary = null;
   }
 
   /** Bare address out of `Name <addr>`; a plain address passes through. */
@@ -360,8 +354,9 @@
         <div class="summary-slot">
           <SummaryPanel
             {summary}
-            onRetry={() => void summarize(true)}
+            onRetry={() => summarize(true)}
             onClose={() => (summary = null)}
+            onCancel={cancelSummary}
           />
         </div>
       {/if}
@@ -541,7 +536,7 @@
             class="action"
             title="Summarize"
             aria-label="Summarize this message"
-            onclick={() => void summarize()}
+            onclick={() => summarize()}
           >
             <svg
               width="15"

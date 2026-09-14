@@ -1,12 +1,8 @@
 <script lang="ts">
-  import {
-    listThread,
-    setMessageRead,
-    summarizeThread,
-    threadBodies,
-  } from "./api";
+  import { listThread, setMessageRead, threadBodies } from "./api";
   import type { DraftKind } from "./draft";
   import MessageCard from "./MessageCard.svelte";
+  import { runSummary, type SummaryRun, type SummaryState } from "./summaries";
   import SummaryPanel from "./SummaryPanel.svelte";
   import { timed } from "./timing";
   import type { MessageBody, MessageHeader, ThreadOrder } from "./types";
@@ -66,26 +62,22 @@
   let threadEl = $state<HTMLDivElement | null>(null);
   let scrollTargetId = $state<number | null>(null);
   // The on-device summary of the whole conversation, once asked for.
-  let threadSummary = $state<{
-    loading: boolean;
-    text: string | null;
-    error: string | null;
-  } | null>(null);
+  let threadSummary = $state<SummaryState | null>(null);
+  let threadSummaryRun: SummaryRun | null = null;
 
-  async function summarizeConversation(fresh = false) {
+  function summarizeConversation(fresh = false) {
     if (message === null) return;
     const id = message.id;
-    threadSummary = { loading: true, text: null, error: null };
-    try {
-      const text = await summarizeThread(id, fresh);
-      if (message?.id === id) {
-        threadSummary = { loading: false, text, error: null };
-      }
-    } catch (err) {
-      if (message?.id === id) {
-        threadSummary = { loading: false, text: null, error: String(err) };
-      }
-    }
+    threadSummaryRun?.cancel();
+    threadSummaryRun = runSummary("thread", id, fresh, (state) => {
+      if (message?.id === id) threadSummary = state;
+    });
+  }
+
+  function cancelConversationSummary() {
+    threadSummaryRun?.cancel();
+    threadSummaryRun = null;
+    threadSummary = null;
   }
 
   $effect(() => {
@@ -95,7 +87,7 @@
       expandedIds = new Set();
       anchorId = null;
       scrollTargetId = null;
-      threadSummary = null;
+      cancelConversationSummary();
       return;
     }
     const id = message.id;
@@ -109,7 +101,7 @@
           // newest, for an ordinary folder row), load all bodies.
           anchorId = id;
           bodies = {};
-          threadSummary = null;
+          cancelConversationSummary();
           const anchor = focusSelected
             ? anchorMessage(thread, fallback)
             : newestMessage(thread);
@@ -254,7 +246,7 @@
               class="summarize"
               title="Summarize conversation"
               aria-label="Summarize this conversation"
-              onclick={() => void summarizeConversation()}
+              onclick={() => summarizeConversation()}
             >
               <svg
                 width="15"
@@ -277,8 +269,9 @@
             <SummaryPanel
               summary={threadSummary}
               label="Conversation summary"
-              onRetry={() => void summarizeConversation(true)}
+              onRetry={() => summarizeConversation(true)}
               onClose={() => (threadSummary = null)}
+              onCancel={cancelConversationSummary}
             />
           </div>
         {/if}
