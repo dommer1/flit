@@ -6,8 +6,8 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Flit is a minimal, privacy-first desktop email client: plain IMAP and SMTP,
-multiple accounts, one unified inbox, no telemetry and nothing phoning home.
-Built with Rust, Tauri and Svelte.
+multiple accounts, one unified inbox, no telemetry. Built with Rust, Tauri
+and Svelte.
 
 ![Flit's three-pane window with a unified inbox, shown half in light mode and half in dark mode](docs/flit-preview.png)
 
