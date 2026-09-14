@@ -69,6 +69,13 @@ vi.mock("./api", () => ({
     models: [],
   })),
   setLlmModel: vi.fn(async () => undefined),
+  getLlmSummaryLanguage: vi.fn(async () => "auto"),
+  setLlmSummaryLanguage: vi.fn(async () => undefined),
+  downloadLlmModel: vi.fn(async () => undefined),
+  cancelLlmDownload: vi.fn(async () => undefined),
+  removeLlmModel: vi.fn(async () => undefined),
+  onLlmDownloadProgress: vi.fn(async () => () => {}),
+  onLlmModelsChanged: vi.fn(async () => () => {}),
   getSwipeActions: vi.fn(async () => ({
     left: "archive",
     right: "toggleRead",

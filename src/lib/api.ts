@@ -487,6 +487,16 @@ export function setLlmModel(id: string): Promise<void> {
   return invoke<void>("set_llm_model", { id });
 }
 
+/** Language summaries are written in: "auto" (the message's own) or an
+ *  English language name such as "Slovak". */
+export function getLlmSummaryLanguage(): Promise<string> {
+  return invoke<string>("get_llm_summary_language");
+}
+
+export function setLlmSummaryLanguage(language: string): Promise<void> {
+  return invoke<void>("set_llm_summary_language", { language });
+}
+
 /** Start fetching a catalog model in the background. Progress arrives on
  *  onLlmDownloadProgress; the end (done, cancelled, failed) on
  *  onLlmModelsChanged. */

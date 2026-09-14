@@ -22,6 +22,7 @@ const SWIPE_RIGHT_KEY: &str = "swipe_right";
 const AVATAR_LOOKUP_KEY: &str = "avatar_lookup";
 const LLM_SUMMARY_KEY: &str = "llm_summary";
 const LLM_MODEL_KEY: &str = "llm_model";
+const LLM_SUMMARY_LANGUAGE_KEY: &str = "llm_summary_language";
 const MAINTENANCE_REV_KEY: &str = "maintenance_rev";
 
 async fn value(pool: &SqlitePool, key: &str) -> Result<Option<String>, AppError> {
@@ -158,6 +159,20 @@ pub async fn llm_model(pool: &SqlitePool) -> Result<Option<String>, AppError> {
 
 pub async fn set_llm_model(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
     upsert(pool, LLM_MODEL_KEY, id).await
+}
+
+/// The language summaries are written in: "auto" (the message's own) or an
+/// English language name the prompt uses verbatim ("Slovak"). Missing or
+/// blank reads as auto.
+pub async fn llm_summary_language(pool: &SqlitePool) -> Result<String, AppError> {
+    Ok(value(pool, LLM_SUMMARY_LANGUAGE_KEY)
+        .await?
+        .filter(|language| !language.trim().is_empty())
+        .unwrap_or_else(|| crate::llm::summarize::AUTO_LANGUAGE.to_string()))
+}
+
+pub async fn set_llm_summary_language(pool: &SqlitePool, language: &str) -> Result<(), AppError> {
+    upsert(pool, LLM_SUMMARY_LANGUAGE_KEY, language.trim()).await
 }
 
 /// The stored remote-image policy, falling back to the default (Ask) when
@@ -549,6 +564,19 @@ mod tests {
             .unwrap();
 
         assert_eq!(llm_model(&pool).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn llm_summary_language_is_auto_until_picked() {
+        let pool = test_pool().await;
+
+        assert_eq!(llm_summary_language(&pool).await.unwrap(), "auto");
+
+        set_llm_summary_language(&pool, " Slovak ").await.unwrap();
+        assert_eq!(llm_summary_language(&pool).await.unwrap(), "Slovak");
+
+        set_llm_summary_language(&pool, "").await.unwrap();
+        assert_eq!(llm_summary_language(&pool).await.unwrap(), "auto");
     }
 
     #[tokio::test]

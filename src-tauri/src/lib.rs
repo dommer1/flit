@@ -193,6 +193,8 @@ pub fn run() {
             commands::set_llm_summary_enabled,
             commands::llm_status,
             commands::set_llm_model,
+            commands::get_llm_summary_language,
+            commands::set_llm_summary_language,
             commands::download_llm_model,
             commands::cancel_llm_download,
             commands::remove_llm_model,

@@ -2233,6 +2233,22 @@ pub async fn set_llm_model(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_llm_summary_language(state: State<'_, AppState>) -> Result<String, AppError> {
+    storage::settings::llm_summary_language(&state.pool).await
+}
+
+#[tauri::command]
+pub async fn set_llm_summary_language(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    language: String,
+) -> Result<(), AppError> {
+    storage::settings::set_llm_summary_language(&state.pool, &language).await?;
+    app.emit("settings-changed", ())?;
+    Ok(())
+}
+
 /// Start downloading a catalog model; returns once the background task is
 /// spawned. The only user action that contacts a host other than the
 /// user's own mail servers or a sender's image host — see CLAUDE.md.

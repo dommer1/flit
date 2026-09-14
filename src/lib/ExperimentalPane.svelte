@@ -4,18 +4,34 @@
     cancelLlmDownload,
     downloadLlmModel,
     getLlmSummaryEnabled,
+    getLlmSummaryLanguage,
     llmStatus,
     onLlmDownloadProgress,
     onLlmModelsChanged,
     removeLlmModel,
     setLlmModel,
     setLlmSummaryEnabled,
+    setLlmSummaryLanguage,
   } from "./api";
   import { formatFileSize } from "./format";
   import type { LlmStatus } from "./types";
 
+  /** The prompt takes the English name verbatim ("Write in Slovak."). */
+  const LANGUAGES = [
+    "Slovak",
+    "Czech",
+    "English",
+    "German",
+    "Polish",
+    "Hungarian",
+    "French",
+    "Spanish",
+    "Italian",
+  ];
+
   let enabled = $state(false);
   let status = $state<LlmStatus | null>(null);
+  let language = $state("auto");
   let error = $state<string | null>(null);
 
   async function refresh() {
@@ -47,8 +63,21 @@
     }
   }
 
+  async function pickLanguage(next: string) {
+    error = null;
+    const previous = language;
+    language = next;
+    try {
+      await setLlmSummaryLanguage(next);
+    } catch (err) {
+      language = previous;
+      error = String(err);
+    }
+  }
+
   onMount(() => {
     void getLlmSummaryEnabled().then((stored) => (enabled = stored));
+    void getLlmSummaryLanguage().then((stored) => (language = stored));
     void refresh();
     // why patch in place: progress ticks several times a second and the
     // status call walks the models directory — re-reading it per tick
@@ -172,6 +201,27 @@
         picked one writes the summaries.
       </p>
     </fieldset>
+
+    <fieldset>
+      <legend>Summaries</legend>
+      <div class="setting">
+        <label for="llm-language">Summary language</label>
+        <select
+          id="llm-language"
+          value={language}
+          onchange={(e) => void pickLanguage(e.currentTarget.value)}
+        >
+          <option value="auto">Same as the message</option>
+          {#each LANGUAGES as name (name)}
+            <option value={name}>{name}</option>
+          {/each}
+        </select>
+      </div>
+      <p class="explain">
+        Small models follow the message's language well for common ones; pick
+        yours here if a summary comes back in the wrong language.
+      </p>
+    </fieldset>
   {/if}
 
   {#if error}
@@ -240,6 +290,30 @@
     margin: 6px 0 2px;
     font-size: 11.5px;
     color: var(--text-secondary);
+  }
+
+  .setting {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 5px 0;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .setting label {
+    width: 10rem;
+  }
+
+  select {
+    min-width: 11rem;
+    padding: 3px 8px;
+    border: 1px solid var(--border-chrome);
+    border-radius: 6px;
+    background: var(--bg-window);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 400;
   }
 
   .models {

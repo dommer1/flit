@@ -11,6 +11,8 @@ vi.mock("./api", () => ({
   getLlmSummaryEnabled: vi.fn(async () => enabled),
   setLlmSummaryEnabled: vi.fn(async () => undefined),
   llmStatus: vi.fn(async () => status),
+  getLlmSummaryLanguage: vi.fn(async () => "auto"),
+  setLlmSummaryLanguage: vi.fn(async () => undefined),
   setLlmModel: vi.fn(async () => undefined),
   downloadLlmModel: vi.fn(async () => undefined),
   cancelLlmDownload: vi.fn(async () => undefined),
@@ -220,4 +222,26 @@ it("removes a downloaded model from its card", async () => {
   await fireEvent.click(within(big).getByRole("button", { name: "Remove" }));
 
   expect(api.removeLlmModel).toHaveBeenCalledWith("big");
+});
+
+it("offers the summary language once switched on, auto by default", async () => {
+  enabled = true;
+  status.enabled = true;
+  render(ExperimentalPane);
+
+  const select = await screen.findByLabelText("Summary language");
+  expect(select).toHaveValue("auto");
+
+  await fireEvent.change(select, { target: { value: "Slovak" } });
+
+  expect(api.setLlmSummaryLanguage).toHaveBeenCalledWith("Slovak");
+});
+
+it("shows the stored summary language", async () => {
+  enabled = true;
+  status.enabled = true;
+  vi.mocked(api.getLlmSummaryLanguage).mockResolvedValueOnce("German");
+  render(ExperimentalPane);
+
+  expect(await screen.findByLabelText("Summary language")).toHaveValue("German");
 });
