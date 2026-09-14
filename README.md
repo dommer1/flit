@@ -1,10 +1,13 @@
 # Flit
 
+**A fast, private email client for macOS.** Your mail stays on your Mac.
+
 [![CI](https://github.com/dommer1/flit/actions/workflows/ci.yml/badge.svg)](https://github.com/dommer1/flit/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A minimal, privacy-first desktop email client. Plain IMAP + SMTP, multiple
-accounts, one unified inbox, nothing phoning home.
+Flit is a minimal, privacy-first desktop email client: plain IMAP and SMTP,
+multiple accounts, one unified inbox, no telemetry and nothing phoning home.
+Built with Rust, Tauri and Svelte.
 
 > **Status: early, macOS only, no binary releases yet.** Flit is the client
 > its author uses daily, but it is pre-1.0: expect rough edges, build it from
