@@ -32,9 +32,10 @@ pub const MAX_ANSWER_TOKENS: usize = 600;
 pub const MAX_THREAD_ANSWER_TOKENS: usize = 600;
 /// The stored value meaning "write in the language of the message".
 pub const AUTO_LANGUAGE: &str = "auto";
-/// Bump when the prompts change, so cached summaries from the old wording
-/// are not served for the new one.
-const PROMPT_VERSION: &str = "2";
+/// Part of every cache key together with the prompt texts themselves (see
+/// `cache_key`), so any change to the wording invalidates cached summaries
+/// by itself. Bump for changes the texts do not capture (limits, order).
+const PROMPT_VERSION: &str = "3";
 
 /// One message as the prompt sees it.
 #[derive(Debug, Clone)]
@@ -236,7 +237,16 @@ pub fn cache_key<'a>(
     parts: impl IntoIterator<Item = &'a str>,
 ) -> String {
     let mut hasher = Sha256::new();
-    for field in [PROMPT_VERSION, scope, model_id, language.trim()] {
+    // why the prompt texts: a tweak to the rules must never serve a summary
+    // written under the old ones, and nobody remembers to bump a version.
+    for field in [
+        PROMPT_VERSION,
+        RULES,
+        EXAMPLE,
+        scope,
+        model_id,
+        language.trim(),
+    ] {
         hasher.update(field.as_bytes());
         hasher.update([0]);
     }
