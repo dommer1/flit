@@ -31,7 +31,9 @@
   let lines = $derived(
     (summary?.text ?? "")
       .split("\n")
-      .map((line) => line.replace(/^\s*[-•*]\s*/, "").trim())
+      // A bullet marker goes; so do stray bold markers — the model is told
+      // "no markdown", but a small one slips now and then.
+      .map((line) => line.replace(/^\s*[-•*]\s*/, "").replace(/\*\*/g, "").trim())
       .filter((line) => line !== ""),
   );
   let hasText = $derived(summary !== null && !summary.loading && summary.text !== null);

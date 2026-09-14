@@ -213,3 +213,12 @@ it("cancels a summary still being written and drops the panel", async () => {
   expect(await findByLabelText("Summarize this message")).toBeInTheDocument();
   expect(queryByRole("alert")).toBeNull();
 });
+
+it("shows summary lines as plain text without stray markdown bold", async () => {
+  vi.mocked(api.summarizeMessage).mockResolvedValueOnce("- **Goal:** simplify");
+  const { getByLabelText, findByText } = renderCard({ canSummarize: true });
+
+  await fireEvent.click(getByLabelText("Summarize this message"));
+
+  expect(await findByText("Goal: simplify")).toBeInTheDocument();
+});

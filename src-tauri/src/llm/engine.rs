@@ -390,6 +390,42 @@ mod tests {
         assert!(bullets <= 3, "{answer:?}");
     }
 
+    /// Manual probe on any mail: `FLIT_PROBE_FILE=<body.txt>
+    /// FLIT_PROBE_SUBJECT=<subject> FLIT_TEST_MODEL=<model> cargo test
+    /// llm::engine::tests::probe_a_mail -- --ignored --nocapture` prints
+    /// the summary the current prompt gets for it.
+    #[tokio::test]
+    #[ignore]
+    async fn probe_a_mail_from_a_file() {
+        use crate::llm::summarize::{message_prompt, Source, AUTO_LANGUAGE, MAX_ANSWER_TOKENS};
+        let path = std::env::var("FLIT_TEST_MODEL").expect("FLIT_TEST_MODEL not set");
+        let file = std::env::var("FLIT_PROBE_FILE").expect("FLIT_PROBE_FILE not set");
+        let source = Source {
+            from: "probe <probe@example.com>".to_string(),
+            date: String::new(),
+            subject: std::env::var("FLIT_PROBE_SUBJECT").unwrap_or_default(),
+            text: std::fs::read_to_string(file).unwrap(),
+            attachments: Vec::new(),
+        };
+
+        let started = std::time::Instant::now();
+        let answer = test_engine()
+            .complete(Request {
+                model_path: PathBuf::from(path),
+                messages: message_prompt(&source, AUTO_LANGUAGE),
+                max_tokens: MAX_ANSWER_TOKENS,
+                assistant_prefix: "<think>\n\n</think>\n\n".to_string(),
+                on_token: None,
+                cancel: CancelFlag::default(),
+            })
+            .await
+            .unwrap();
+        eprintln!(
+            "--- probe summary ({:.1}s) ---\n{answer}\n---",
+            started.elapsed().as_secs_f32()
+        );
+    }
+
     /// Same setup as above; checks that the streamed pieces add up to the
     /// returned answer and that a raised flag stops generation.
     #[tokio::test]
