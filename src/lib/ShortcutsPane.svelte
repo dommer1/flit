@@ -226,8 +226,10 @@
     cursor: default;
   }
 
+  /* why a fixed width, not min-width: "Press keys…" is wider than most
+     combos, and a growing chip shoved the × and ↺ buttons sideways. */
   .chip {
-    min-width: 84px;
+    width: 96px;
     font-variant-numeric: tabular-nums;
   }
 
