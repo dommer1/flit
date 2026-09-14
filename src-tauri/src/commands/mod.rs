@@ -2262,15 +2262,47 @@ pub async fn summarize_message(
         .into_iter()
         .find(|h| h.id == message_id)
         .ok_or_else(|| AppError::Invalid("Message not found.".to_string()))?;
-    let body = load_body(&app, &state, message_id).await?;
+    let text = summarizable_text(&app, &state, message_id).await?;
+    llm::summarize_message(&app, &header, &text).await
+}
+
+/// A summary of the whole conversation the message belongs to (drafts
+/// left out), oldest message first.
+#[tauri::command]
+pub async fn summarize_thread(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> Result<String, AppError> {
+    let thread = storage::messages::thread_of(&state.pool, message_id).await?;
+    let mut messages = Vec::with_capacity(thread.len());
+    // why one by one: the conversation view has already pulled every body
+    // through thread_bodies by the time its button is clicked, so these
+    // are cache hits — a cold thread would open a session per message.
+    for header in thread.into_iter().filter(|h| !h.is_draft) {
+        let text = summarizable_text(&app, &state, header.id).await?;
+        messages.push((header, text));
+    }
+    llm::summarize_thread(&app, &messages).await
+}
+
+/// The message's stored text, fetching the body if it is not cached yet.
+async fn summarizable_text(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    message_id: i64,
+) -> Result<String, AppError> {
+    let body = load_body(app, state, message_id).await?;
     // why the html fallback: mail-parser fills body_text for html-only mail
     // at parse time, so this is for the odd cached row that has only html.
-    let text = body.text.or_else(|| {
-        body.html
-            .as_deref()
-            .map(mail_parser::decoders::html::html_to_text)
-    });
-    llm::summarize_message(&app, &header, text.as_deref().unwrap_or_default()).await
+    Ok(body
+        .text
+        .or_else(|| {
+            body.html
+                .as_deref()
+                .map(mail_parser::decoders::html::html_to_text)
+        })
+        .unwrap_or_default())
 }
 
 /// Start downloading a catalog model; returns once the background task is

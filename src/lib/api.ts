@@ -503,6 +503,11 @@ export function summarizeMessage(messageId: number): Promise<string> {
   return invoke<string>("summarize_message", { messageId });
 }
 
+/** A plain-text summary of the conversation the message belongs to. */
+export function summarizeThread(messageId: number): Promise<string> {
+  return invoke<string>("summarize_thread", { messageId });
+}
+
 /** Start fetching a catalog model in the background. Progress arrives on
  *  onLlmDownloadProgress; the end (done, cancelled, failed) on
  *  onLlmModelsChanged. */

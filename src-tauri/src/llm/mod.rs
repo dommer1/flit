@@ -144,6 +144,41 @@ pub async fn summarize_message(
         .await
 }
 
+/// Summarize a whole conversation, `messages` oldest first as
+/// `(header, stored body text)`.
+pub async fn summarize_thread(
+    app: &AppHandle,
+    messages: &[(MessageHeader, String)],
+) -> Result<String, AppError> {
+    let state = app.state::<AppState>();
+    let (spec, model_path) = ready_model(app, &state.pool).await?;
+    let sources: Vec<summarize::Source> = messages
+        .iter()
+        .filter(|(_, text)| !summarize::prepare_text(text, summarize::MESSAGE_CHARS).is_empty())
+        .map(|(header, text)| summarize::Source {
+            from: header.from.clone(),
+            date: header.date.clone(),
+            subject: header.subject.clone(),
+            text: text.clone(),
+        })
+        .collect();
+    if sources.is_empty() {
+        return Err(AppError::Invalid(
+            "This conversation has no text to summarize.".to_string(),
+        ));
+    }
+    let language = settings::llm_summary_language(&state.pool).await?;
+    state
+        .llm_engine
+        .complete(engine::Request {
+            model_path,
+            messages: summarize::thread_prompt(&sources, &language),
+            max_tokens: summarize::MAX_THREAD_ANSWER_TOKENS,
+            assistant_prefix: spec.assistant_prefix.to_string(),
+        })
+        .await
+}
+
 /// Start fetching a model in the background; returns as soon as the task is
 /// spawned. Progress arrives as `llm-download-progress` events and the end —
 /// done, cancelled or failed — as `llm-models-changed`.
