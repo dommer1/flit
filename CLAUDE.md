@@ -42,6 +42,7 @@ A minimal, privacy-first desktop email client for macOS (multiplatform later), m
 | Frontend tests | `npm test` |
 | Frontend type/lint check | `npm run check` |
 | Rust tests | `cargo test` (run in `src-tauri/`) |
+| Engine smoke test against a real model | `FLIT_TEST_MODEL=<path>.gguf cargo test llm::engine -- --ignored` |
 | Rust lint | `cargo clippy -- -D warnings` (in `src-tauri/`) |
 | Rust format | `cargo fmt` (in `src-tauri/`) |
 | Regenerate app icons | `npm run tauri icon -- icon.svg` |
@@ -76,6 +77,10 @@ pre-Tahoe macOS would show no icon at all.
 `.env.example`) and signs macOS builds — dev binaries and release bundles alike
 — with the local `flit-dev` identity, so the Keychain stops re-asking on every
 rebuild. Machines without that identity fall back to ad-hoc signing.
+
+The Rust build compiles llama.cpp from source (`llama-cpp-2`, for the experimental
+on-device summaries) and therefore needs `cmake` — see the `stack` skill for
+installing it without Homebrew.
 
 All of `npm run check` + `npm test` + `cargo test` + `cargo clippy` must pass before any commit.
 
