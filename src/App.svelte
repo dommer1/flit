@@ -1056,6 +1056,7 @@
   onArchive={handleArchive}
   onTrash={handleTrash}
   onMove={handleMove}
+  {shortcuts}
 />
 
 <div

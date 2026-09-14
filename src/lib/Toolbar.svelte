@@ -1,6 +1,12 @@
 <script lang="ts">
   import type { DraftKind } from "./draft";
-  import type { Mailbox, MessageHeader } from "./types";
+  import { formatCombo } from "./shortcuts";
+  import type {
+    Mailbox,
+    MessageHeader,
+    ShortcutAction,
+    ShortcutBinding,
+  } from "./types";
 
   let {
     sidebarCollapsed = false,
@@ -20,6 +26,7 @@
     onArchive,
     onTrash,
     onMove,
+    shortcuts = [],
   }: {
     sidebarCollapsed?: boolean;
     /** Current sidebar pane width — the traffic-light zone tracks it. */
@@ -46,7 +53,15 @@
     onArchive?: (id: number) => void;
     onTrash?: (id: number) => void;
     onMove?: (id: number, mailbox: string) => void;
+    /** Current keyboard bindings — named in the buttons' tooltips. */
+    shortcuts?: ShortcutBinding[];
   } = $props();
+
+  /** A button's tooltip: its name plus the shortcut, when one is bound. */
+  function tip(name: string, action: ShortcutAction): string {
+    const combo = shortcuts.find((b) => b.action === action)?.combo;
+    return combo ? `${name} (${formatCombo(combo)})` : name;
+  }
 
   let query = $state("");
   let searchEl = $state<HTMLInputElement | null>(null);
@@ -104,7 +119,7 @@
     <button
       class="icon-btn"
       aria-label="Toggle sidebar"
-      title="Toggle sidebar"
+      title={tip("Toggle sidebar", "toggle-sidebar")}
       onclick={onToggleSidebar}
     >
       <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -118,7 +133,7 @@
     <button
       class="action"
       aria-label="Check for new mail"
-      title="Check for new mail"
+      title={tip("Check for new mail", "check-mail")}
       disabled={refreshing}
       onclick={onRefresh}
     >
@@ -131,7 +146,7 @@
     <button
       class="action"
       aria-label="New Message"
-      title="New Message"
+      title={tip("New Message", "new-message")}
       onclick={onCompose}
     >
       <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -146,7 +161,7 @@
     <button
       class="action"
       aria-label="Reply"
-      title="Reply"
+      title={tip("Reply", "reply")}
       disabled={!selected}
       onclick={() => onDraft?.("reply")}
     >
@@ -159,7 +174,7 @@
     <button
       class="action"
       aria-label="Reply All"
-      title="Reply All"
+      title={tip("Reply All", "reply-all")}
       disabled={!selected}
       onclick={() => onDraft?.("reply-all")}
     >
@@ -173,7 +188,7 @@
     <button
       class="action"
       aria-label="Forward"
-      title="Forward"
+      title={tip("Forward", "forward")}
       disabled={!selected}
       onclick={() => onDraft?.("forward")}
     >
@@ -189,7 +204,7 @@
     <button
       class="action"
       aria-label={readTitle}
-      title={readTitle}
+      title={tip(readTitle, "toggle-read")}
       disabled={rows.length === 0}
       onclick={() => rows.length > 0 && onSetRead?.(rows[0].id, !allRead)}
     >
@@ -202,7 +217,7 @@
     <button
       class="action"
       aria-label={archiveTitle}
-      title={archiveTitle}
+      title={tip(archiveTitle, "archive")}
       disabled={rows.length === 0}
       onclick={() => rows.length > 0 && onArchive?.(rows[0].id)}
     >
@@ -251,7 +266,7 @@
     <button
       class="action"
       aria-label="Trash"
-      title="Trash"
+      title={tip("Trash", "trash")}
       disabled={rows.length === 0}
       onclick={() => rows.length > 0 && onTrash?.(rows[0].id)}
     >
