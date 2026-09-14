@@ -6,6 +6,7 @@
 //! chose and clicked to download — see CLAUDE.md's hard rules.
 
 pub mod catalog;
+pub mod download;
 pub mod store;
 
 use std::path::Path;

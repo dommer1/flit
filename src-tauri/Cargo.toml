@@ -61,6 +61,9 @@ image = { version = "0.25", default-features = false, features = [
 utf7-imap = "0.3.2"
 base64 = "0.22.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["native-tls"] }
+# why: a downloaded model file is hashed on the way down and checked against
+# the catalog pin before it is ever loaded (already in the tree via sqlx).
+sha2 = "0.10"
 lightningcss = { version = "=1.0.0-alpha.71", default-features = false }
 mail-builder = "0.4"
 # why: native new-mail notifications, sent from the Rust sync path only —
