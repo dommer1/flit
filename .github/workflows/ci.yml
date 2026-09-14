@@ -1,0 +1,60 @@
+name: CI
+
+# The same four gates CLAUDE.md requires before every commit, run on GitHub's
+# macOS runner for every push to main and every pull request. Flit is a
+# macOS-only Tauri app for now, so a Linux runner would need extra system
+# packages and still not build the same binary.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: check + test + clippy
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      # why: Tauri's dependency tree compiles for several minutes from cold;
+      # caching ~/.cargo and target/ keeps a typical run under ten.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend type check
+        run: npm run check
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Rust format
+        run: cargo fmt --check
+        working-directory: src-tauri
+
+      - name: Rust lint
+        run: cargo clippy -- -D warnings
+        working-directory: src-tauri
+
+      - name: Rust tests
+        run: cargo test
+        working-directory: src-tauri
