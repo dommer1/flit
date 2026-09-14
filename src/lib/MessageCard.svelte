@@ -840,7 +840,9 @@
 
   .body {
     margin: 0;
-    padding-top: 2px;
+    /* why 8px: matches the 0.5rem body margin HTML mail gets inside its
+       frame (BODY_STYLE), so plain text doesn't sit on the header rule. */
+    padding-top: 8px;
     /* why: overflow-y auto alone computes overflow-x to auto — clip
        sideways, the conversation column is the only scroller. */
     overflow-x: hidden;
@@ -853,6 +855,7 @@
   }
 
   .body.quoted {
+    padding-top: 2px;
     color: var(--text-secondary);
   }
 
