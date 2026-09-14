@@ -395,7 +395,8 @@ mod tests {
     /// Manual probe on any mail: `FLIT_PROBE_FILE=<body.txt>
     /// FLIT_PROBE_SUBJECT=<subject> FLIT_TEST_MODEL=<model> cargo test
     /// llm::engine::tests::probe_a_mail -- --ignored --nocapture` prints
-    /// the summary the current prompt gets for it.
+    /// the summary the current prompt gets for it. `FLIT_PROBE_LANGUAGE`
+    /// plays the summary-language setting ("auto" when unset).
     #[tokio::test]
     #[ignore]
     async fn probe_a_mail_from_a_file() {
@@ -414,7 +415,10 @@ mod tests {
         let answer = test_engine()
             .complete(Request {
                 model_path: PathBuf::from(path),
-                messages: message_prompt(&source, AUTO_LANGUAGE),
+                messages: message_prompt(
+                    &source,
+                    &std::env::var("FLIT_PROBE_LANGUAGE").unwrap_or(AUTO_LANGUAGE.to_string()),
+                ),
                 max_tokens: MAX_ANSWER_TOKENS,
                 assistant_prefix: "<think>\n\n</think>\n\n".to_string(),
                 on_token: None,
