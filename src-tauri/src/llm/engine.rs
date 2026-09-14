@@ -27,7 +27,9 @@ use crate::error::AppError;
 
 /// Tokens of context per request: prompt plus answer. The prompt builders
 /// budget against this (see summarize.rs); the engine only enforces it.
-pub const N_CTX: u32 = 8192;
+/// why 16k: a 24k-char newsletter in a diacritics-heavy language can run
+/// past 8k tokens; the KV cache for 16k is still a few hundred MB.
+pub const N_CTX: u32 = 16384;
 /// Tokens fed per decode call while reading the prompt.
 const N_BATCH: u32 = 512;
 /// A loaded model is dropped after this long without a request, giving the
