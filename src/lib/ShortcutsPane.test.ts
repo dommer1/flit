@@ -188,3 +188,10 @@ it("lists the fixed shortcuts that cannot be changed", async () => {
   expect(await screen.findByText("Fixed")).toBeInTheDocument();
   expect(screen.getByText("⌘,")).toBeInTheDocument();
 });
+
+it("spells out Esc in the fixed list", async () => {
+  render(ShortcutsPane);
+
+  expect(await screen.findByText("Esc")).toBeInTheDocument();
+  expect(screen.queryByText("⎋")).not.toBeInTheDocument();
+});

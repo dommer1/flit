@@ -81,7 +81,7 @@ const GLYPHS: Record<string, string> = {
   Enter: "↩",
   Backspace: "⌫",
   Delete: "⌦",
-  Escape: "⎋",
+  Escape: "Esc",
   Tab: "⇥",
   ArrowUp: "↑",
   ArrowDown: "↓",

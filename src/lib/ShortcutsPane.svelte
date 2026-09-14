@@ -23,7 +23,7 @@
     { keys: "↑ / ↓", label: "Previous / next message" },
     { keys: "⇧↑ / ⇧↓", label: "Extend the selection" },
     { keys: "⌘,", label: "Settings" },
-    { keys: "⎋", label: "Close a dialog or Settings" },
+    { keys: "Esc", label: "Close a dialog or Settings" },
   ];
 
   let bindings = $state<ShortcutBinding[]>([]);
