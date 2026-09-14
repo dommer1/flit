@@ -48,7 +48,6 @@
 
 <div class="summary" class:empty={summary === null} role="region" aria-label={label}>
   <div class="summary-head">
-    <span class="summary-title">{label}</span>
     {#if summary === null}
       <button class="start" aria-label={startLabel} onclick={onStart}>
         <svg
@@ -67,7 +66,8 @@
         Summarize
       </button>
     {:else}
-      <span class="summary-note">local model · may be inaccurate</span>
+      <span class="summary-title">{label}</span>
+      <span class="summary-note">· local model, may be inaccurate</span>
       {#if summary.loading}
         <button
           class="summary-btn"
@@ -116,32 +116,31 @@
 </div>
 
 <style>
-  /* Boxed so it reads as a note about the mail, not as part of it. */
+  /* Deliberately quiet: no box, a hairline underneath, and the text sits
+     in the same column as the mail — a note above the body, not a widget. */
   .summary {
-    padding: 8px 12px 10px;
-    border: 1px solid var(--hairline);
-    border-radius: 8px;
-    background: var(--bg-hover);
+    padding: 4px 0 8px;
+    border-bottom: 1px solid var(--hairline);
     font-size: 12.5px;
   }
 
-  /* Before a summary exists the section is a single quiet row. */
   .summary.empty {
-    padding-bottom: 8px;
+    padding: 2px 0 4px;
   }
 
   .summary-head {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    min-height: 22px;
   }
 
   .summary:not(.empty) .summary-head {
-    margin-bottom: 4px;
+    margin-bottom: 2px;
   }
 
   .summary-title {
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -150,42 +149,47 @@
 
   .summary-note {
     flex: 1;
-    font-size: 11px;
+    font-size: 10.5px;
     color: var(--text-secondary);
+    opacity: 0.8;
   }
 
+  /* A text button, not a pill: the sparkle and one word. */
   .start {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    margin-left: auto;
-    padding: 2px 9px;
-    border: 1px solid var(--border-chrome);
-    border-radius: 6px;
-    background: var(--bg-window);
-    font: inherit;
-    font-size: 11.5px;
-    font-weight: 500;
-    color: var(--text-primary);
-    cursor: default;
-  }
-
-  .start:hover {
-    background: var(--bg-selected-muted);
-  }
-
-  .summary-btn {
-    padding: 0 4px;
+    margin-left: -4px;
+    padding: 2px 4px;
     border: none;
+    border-radius: 5px;
     background: none;
     font: inherit;
-    font-size: 14px;
-    line-height: 1;
+    font-size: 12px;
+    font-weight: 500;
     color: var(--text-secondary);
     cursor: default;
   }
 
+  .start:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .summary-btn {
+    padding: 0 3px;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--text-secondary);
+    opacity: 0.7;
+    cursor: default;
+  }
+
   .summary-btn:hover:not(:disabled) {
+    opacity: 1;
     color: var(--text-primary);
   }
 
@@ -200,7 +204,8 @@
 
   .summary-lines {
     margin: 2px 0 0;
-    padding-left: 18px;
+    padding-left: 16px;
+    color: var(--text-primary);
   }
 
   .summary-lines li + li {
