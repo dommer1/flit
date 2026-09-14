@@ -135,16 +135,128 @@ pub fn fold_html_quote(html: String) -> String {
 }
 
 /// Earliest safe fold point: the first `<blockquote>`, or the opening tag
-/// of the element whose text begins with the "&gt;" quote prefix.
+/// of the element whose text begins with the "&gt;" quote prefix — then
+/// backed up over the attribution line ("On …, X wrote:") right above it,
+/// which belongs to the quote the way the text path already treats it.
 fn html_quote_start(html: &str) -> Option<usize> {
     let blockquote = html.find("<blockquote");
     // ">&gt;" = an opening tag closing right before a quote marker
     // (`<p>&gt; …`, `<br>&gt; …`); back up to that element's "<".
     let quote_para = html.find(">&gt;").and_then(|gt| html[..gt].rfind('<'));
-    match (blockquote, quote_para) {
+    let at = match (blockquote, quote_para) {
         (Some(a), Some(b)) => Some(a.min(b)),
         (a, b) => a.or(b),
+    }?;
+    let start = attribution_start(&html[..at]).unwrap_or(at);
+    Some(wrapper_start(html, start, at).unwrap_or(start))
+}
+
+/// Start of the attribution element sitting directly above the quote (only
+/// whitespace between the two), `None` when there is none. The returned
+/// index is the "<" of its opening tag, so cutting there keeps the markup
+/// well-formed.
+fn attribution_start(before: &str) -> Option<usize> {
+    let before = before.trim_end();
+    // The element must be closed — `…</p>` / `…</div>` — for us to know
+    // where it began.
+    let close_lt = before.rfind('<')?;
+    let name = before[close_lt..]
+        .strip_prefix("</")?
+        .strip_suffix('>')?
+        .trim()
+        .to_ascii_lowercase();
+    let open_lt = last_opening_tag(&before[..close_lt], &name)?;
+    let open_end = before[open_lt..].find('>')? + open_lt;
+    if open_end >= close_lt {
+        return None;
     }
+    // why: attribution lines carry text and <br> only. A nested element of
+    // the same name means `open_lt` is an inner tag, not the one this
+    // closing tag belongs to — bail rather than cut mid-element.
+    let inner = &before[open_end + 1..close_lt];
+    if inner.contains(&format!("</{name}")) {
+        return None;
+    }
+    // Gmail (and our own drafts) label the line explicitly; no need to
+    // parse the class list for a token this specific.
+    if before[open_lt..=open_end].contains("gmail_attr") {
+        return Some(open_lt);
+    }
+    // `is_attribution` wants the bare line ending in ':', so drop tags
+    // (a trailing <br> is common) and decode the few entities that can
+    // show up in a name or address.
+    if matches!(name.as_str(), "p" | "div") && is_attribution(&visible_text(inner)) {
+        return Some(open_lt);
+    }
+    None
+}
+
+/// When the attribution and the quote are alone inside a wrapper `<div>`
+/// (our own drafts and Gmail use `<div class="gmail_quote">…</div>`), the
+/// fold takes the wrapper too — otherwise its `</div>` would be stranded
+/// inside the `<details>` with its opening tag left outside.
+fn wrapper_start(html: &str, attribution: usize, quote: usize) -> Option<usize> {
+    let before = html[..attribution].trim_end();
+    let open_lt = before.rfind('<')?;
+    let tag = &before[open_lt..];
+    // The wrapper's opening tag has to be the last thing before the
+    // attribution, and it has to be a plain `<div …>`.
+    let rest = tag.strip_suffix('>')?.strip_prefix("<div")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    // …and it has to close at the very end, with exactly one `</div>` in
+    // the quote that nothing there opened — that one is the wrapper's.
+    let quoted = html[quote..].trim_end();
+    if !quoted.ends_with("</div>") {
+        return None;
+    }
+    // "</div>" does not contain "<div", so these two counts don't overlap.
+    let opened = quoted.matches("<div").count();
+    let closed = quoted.matches("</div>").count();
+    (closed == opened + 1).then_some(open_lt)
+}
+
+/// Last opening tag of `name` in `html` (`<p`, `<div …`), ignoring closing
+/// tags and longer names that merely start the same way.
+fn last_opening_tag(html: &str, name: &str) -> Option<usize> {
+    // ASCII-lowercasing never changes byte lengths, so indexes still line
+    // up with the original.
+    let lower = html.to_ascii_lowercase();
+    let needle = format!("<{name}");
+    let mut found = None;
+    let mut from = 0;
+    while let Some(offset) = lower[from..].find(&needle) {
+        let at = from + offset;
+        let after = lower[at + needle.len()..].chars().next();
+        if matches!(after, Some(c) if c == '>' || c == '/' || c.is_whitespace()) {
+            found = Some(at);
+        }
+        from = at + 1;
+    }
+    found
+}
+
+/// The text a reader would see in a fragment: tags dropped, the handful of
+/// entities that reach an attribution line decoded, edges trimmed.
+fn visible_text(html: &str) -> String {
+    let mut text = String::new();
+    let mut inside_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => inside_tag = true,
+            '>' => inside_tag = false,
+            c if !inside_tag => text.push(c),
+            _ => {}
+        }
+    }
+    text.replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        // why: "&amp;" last, so "&amp;lt;" decodes to "&lt;", not "<".
+        .replace("&amp;", "&")
+        .trim()
+        .to_string()
 }
 
 /// Cut the trailing quoted history out of a *sanitized* HTML fragment —
@@ -482,5 +594,132 @@ mod tests {
         // The whole body is one big quote — folding would blank the card.
         let all_quote = "<blockquote><p>iba citát</p></blockquote>".to_string();
         assert_eq!(fold_html_quote(all_quote.clone()), all_quote);
+    }
+
+    #[test]
+    fn folds_our_own_sent_quote_including_the_attribution() {
+        // The exact shape `src/lib/draft.ts` builds for a reply.
+        let html = "<p>Vďaka, pozriem sa na to.</p>\
+                    <br><div class=\"gmail_quote flit-draft-quote\">\
+                    <div class=\"gmail_attr\">On 13.09.2026 11:27, Jakub Šarvaic wrote:</div>\
+                    <blockquote class=\"gmail_quote\" type=\"cite\"><p>pôvodná správa</p></blockquote>\
+                    </div>"
+            .to_string();
+
+        let folded = fold_html_quote(html);
+
+        // Own text stays above the fold…
+        assert!(
+            folded.starts_with("<p>Vďaka, pozriem sa na to.</p><br><details class=\"flit-quote\">")
+        );
+        // …the attribution goes under it, wrapper and all.
+        assert!(folded.contains(
+            "</summary><div class=\"gmail_quote flit-draft-quote\">\
+             <div class=\"gmail_attr\">On 13.09.2026 11:27, Jakub Šarvaic wrote:</div>"
+        ));
+        assert!(folded.ends_with("</div></details>"));
+    }
+
+    #[test]
+    fn folds_a_gmail_web_reply_including_the_attribution() {
+        // Gmail's own reply markup: dir attribute, trailing <br>, wrapper div.
+        let html = "<div dir=\"ltr\">Own text</div><br>\
+                    <div class=\"gmail_quote gmail_quote_container\">\
+                    <div dir=\"ltr\" class=\"gmail_attr\">On Sat, 13 Sept 2026 at 11:27, Jakub wrote:<br></div>\
+                    <blockquote class=\"gmail_quote\"><div dir=\"ltr\">q</div></blockquote></div>"
+            .to_string();
+
+        let folded = fold_html_quote(html);
+
+        assert!(
+            folded.starts_with("<div dir=\"ltr\">Own text</div><br><details class=\"flit-quote\">")
+        );
+        assert!(folded.contains("</summary><div class=\"gmail_quote gmail_quote_container\">"));
+        assert!(folded.ends_with("</blockquote></div></details>"));
+    }
+
+    #[test]
+    fn folds_a_plain_paragraph_attribution_with_the_quote() {
+        let html = "<p>Own text</p><p>On Jul 24, 2026, Peter wrote:</p>\
+                    <blockquote><p>q</p></blockquote>"
+            .to_string();
+
+        let folded = fold_html_quote(html);
+
+        assert!(folded.starts_with("<p>Own text</p><details class=\"flit-quote\">"));
+        assert!(folded.contains("</summary><p>On Jul 24, 2026, Peter wrote:</p><blockquote>"));
+    }
+
+    #[test]
+    fn folds_an_apple_mail_attribution_div_with_the_quote() {
+        let html = "<p>Own text</p><div>On 13 Sep 2026, at 11:27, Jakub wrote:<br></div>\
+                    <blockquote type=\"cite\"><p>q</p></blockquote>"
+            .to_string();
+
+        let folded = fold_html_quote(html);
+
+        assert!(folded.starts_with("<p>Own text</p><details class=\"flit-quote\">"));
+        assert!(folded.contains("</summary><div>On 13 Sep 2026, at 11:27, Jakub wrote:<br></div>"));
+    }
+
+    #[test]
+    fn folds_a_slovak_attribution_with_the_quote() {
+        let html = "<p>Dobre, súhlasím.</p><p>Dňa 13. 9. 2026 o 11:27 Jakub napísal(a):</p>\
+                    <blockquote><p>q</p></blockquote>"
+            .to_string();
+
+        let folded = fold_html_quote(html);
+
+        assert!(folded.starts_with("<p>Dobre, súhlasím.</p><details class=\"flit-quote\">"));
+        assert!(folded.contains("</summary><p>Dňa 13. 9. 2026 o 11:27 Jakub napísal(a):</p>"));
+    }
+
+    #[test]
+    fn a_colon_line_that_is_not_an_attribution_stays_visible() {
+        let html = "<p>Own text</p><p>See below:</p><blockquote><p>q</p></blockquote>".to_string();
+
+        let folded = fold_html_quote(html);
+
+        assert!(
+            folded.starts_with("<p>Own text</p><p>See below:</p><details class=\"flit-quote\">")
+        );
+    }
+
+    #[test]
+    fn an_attribution_not_touching_the_quote_stays_visible() {
+        let html = "<p>On Jul 24, 2026, Peter wrote:</p><p>middle</p>\
+                    <blockquote><p>q</p></blockquote>"
+            .to_string();
+
+        let folded = fold_html_quote(html);
+
+        assert!(folded.starts_with(
+            "<p>On Jul 24, 2026, Peter wrote:</p><p>middle</p><details class=\"flit-quote\">"
+        ));
+    }
+
+    #[test]
+    fn strip_html_quote_cuts_the_attribution_too() {
+        let html = "<p>Vďaka, pozriem sa na to.</p>\
+                    <br><div class=\"gmail_quote flit-draft-quote\">\
+                    <div class=\"gmail_attr\">On 13.09.2026 11:27, Jakub Šarvaic wrote:</div>\
+                    <blockquote class=\"gmail_quote\" type=\"cite\"><p>pôvodná správa</p></blockquote>\
+                    </div>"
+            .to_string();
+
+        assert_eq!(
+            strip_html_quote(html),
+            "<p>Vďaka, pozriem sa na to.</p><br>"
+        );
+    }
+
+    #[test]
+    fn a_body_that_is_only_attribution_and_quote_stays_whole() {
+        let html = "<div class=\"gmail_attr\">On 13.09.2026 11:27, Jakub wrote:</div>\
+                    <blockquote><p>iba citát</p></blockquote>"
+            .to_string();
+
+        assert_eq!(fold_html_quote(html.clone()), html);
+        assert_eq!(strip_html_quote(html.clone()), html);
     }
 }
