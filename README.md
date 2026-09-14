@@ -9,10 +9,20 @@ Flit is a minimal, privacy-first desktop email client: plain IMAP and SMTP,
 multiple accounts, one unified inbox, no telemetry and nothing phoning home.
 Built with Rust, Tauri and Svelte.
 
-> **Status: early, macOS only, no binary releases yet.** Flit is the client
-> its author uses daily, but it is pre-1.0: expect rough edges, build it from
-> source, and keep your existing mail client around. Windows and Linux builds
-> are planned once the core flow is solid.
+> **Status: early, macOS only.** Flit is the client its author uses daily,
+> but it is pre-1.0: expect rough edges and keep your existing mail client
+> around. Windows and Linux builds are planned once the core flow is solid.
+
+## Install
+
+Download the `.dmg` for your Mac from the
+[Releases page](https://github.com/dommer1/flit/releases): `aarch64` for
+Apple Silicon (M1 and newer), `x64` for Intel. Open it and drag Flit to
+Applications.
+
+The builds are not yet signed with an Apple Developer ID, so on first launch
+macOS will refuse to open Flit. Go to System Settings → Privacy & Security,
+scroll down and click **Open Anyway** once; after that it opens normally.
 
 ## Why Flit
 
@@ -52,6 +62,8 @@ treats these as rules, not preferences:
 - Light and dark mode
 
 ## Build from source
+
+If you would rather build it yourself, or want to hack on it:
 
 Requirements: macOS, Xcode command line tools, Rust (via
 [rustup](https://rustup.rs)), Node.js 22 LTS.
