@@ -471,7 +471,7 @@ fn decode_padding_entities(text: &str) -> String {
 
 /// A whitespace-delimited token that is just a URL, optionally wrapped in the
 /// RFC 3676 angle brackets senders use to delimit bare links in plain text.
-fn is_url_token(word: &str) -> bool {
+pub(crate) fn is_url_token(word: &str) -> bool {
     let unwrapped = word.trim_start_matches('<').trim_end_matches('>');
     unwrapped.starts_with("http://") || unwrapped.starts_with("https://")
 }

@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod download;
 pub mod engine;
 pub mod store;
+pub mod summarize;
 
 use std::collections::HashMap;
 use std::path::Path;
