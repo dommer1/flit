@@ -61,6 +61,9 @@ treats these as rules, not preferences:
 - Local full-text search across all accounts
 - Sender avatars: monograms by default, optional per-domain favicon lookup
   (off by default, keyed by domain only, never by address)
+- Experimental: summaries of a message or a whole conversation, written by a
+  small language model that runs on your Mac (off by default; the model is a
+  separate download you pick and start yourself)
 - Light and dark mode
 
 ## Build from source
@@ -68,7 +71,10 @@ treats these as rules, not preferences:
 If you would rather build it yourself, or want to hack on it:
 
 Requirements: macOS, Xcode command line tools, Rust (via
-[rustup](https://rustup.rs)), Node.js 22 LTS.
+[rustup](https://rustup.rs)), Node.js 22 LTS, and `cmake` (the summaries
+engine compiles llama.cpp from source; `brew install cmake`, or without
+Homebrew `python3 -m pip install --user cmake` and point `CMAKE` at it in
+`.env`).
 
 ```bash
 xcode-select --install
@@ -94,13 +100,14 @@ both connections succeed. Credentials go straight into the macOS Keychain.
 
 ## What leaves your machine
 
-Exactly three things, all initiated by you:
+Exactly four things, all initiated by you:
 
 | Traffic | When | Where |
 |---|---|---|
 | IMAP / SMTP | sync, send | your mail servers only |
 | Remote images in a message | only if you set the policy to "ask" or "always" | the image hosts, over TLS, no cookies, no referrer, known trackers stripped |
 | Sender favicon lookup | only if you turn it on | the sender's **domain** (never an address), at most once per domain per 30 days, batched at list load so it cannot act as a read receipt |
+| Summary model download | only when you click Download on a model in Settings → Experimental | huggingface.co, over TLS, no cookies, no referrer; one pinned file, verified by SHA-256. Summaries themselves run on your Mac — no message text ever leaves it |
 
 Everything else is local. There is no update check either; releases will be
 announced on GitHub.
