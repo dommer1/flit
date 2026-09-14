@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { getMessageBody, saveAllAttachments, saveAttachment } from "./api";
+  import {
+    getMessageBody,
+    saveAllAttachments,
+    saveAttachment,
+    summarizeMessage,
+  } from "./api";
   import { extColor, fileExt } from "./attachments";
   import { interceptBodyLinks } from "./bodyLinks";
   import { formatFileSize, formatFullDate, senderName } from "./format";
@@ -21,6 +26,7 @@
     onToggle,
     onDraft,
     onDelete,
+    canSummarize = false,
   }: {
     message: MessageHeader;
     /** This message's body from the conversation's bulk load; null while
@@ -40,7 +46,37 @@
     onDraft: (kind: "reply" | "reply-all") => void;
     /** Draft cards only: remove the draft from the server. */
     onDelete?: () => void;
+    /** Offer the local-model summary button (Experimental switch on and a
+     * model downloaded). */
+    canSummarize?: boolean;
   } = $props();
+
+  // The on-device summary of this card, once asked for. Plain text from
+  // the backend, shown as bullet lines — never interpreted as HTML.
+  let summary = $state<{
+    loading: boolean;
+    text: string | null;
+    error: string | null;
+  } | null>(null);
+  let summaryLines = $derived(
+    (summary?.text ?? "")
+      .split("\n")
+      .map((line) => line.replace(/^\s*[-•*]\s*/, "").trim())
+      .filter((line) => line !== ""),
+  );
+
+  async function summarize() {
+    const id = message.id;
+    summary = { loading: true, text: null, error: null };
+    try {
+      const text = await summarizeMessage(id);
+      if (message.id === id) summary = { loading: false, text, error: null };
+    } catch (err) {
+      if (message.id === id) {
+        summary = { loading: false, text: null, error: String(err) };
+      }
+    }
+  }
 
   /** Bare address out of `Name <addr>`; a plain address passes through. */
   function bareAddress(from: string): string {
@@ -325,6 +361,42 @@
       class="content"
       onclick={message.isDraft ? onToggle : undefined}
     >
+      {#if summary}
+        <div class="summary" role="region" aria-label="AI summary">
+          <div class="summary-head">
+            <span class="summary-title">AI summary</span>
+            <span class="summary-note">local model · may be inaccurate</span>
+            <button
+              class="summary-btn"
+              title="Summarize again"
+              aria-label="Summarize again"
+              disabled={summary.loading}
+              onclick={() => void summarize()}
+            >
+              ↻
+            </button>
+            <button
+              class="summary-btn"
+              title="Close summary"
+              aria-label="Close summary"
+              onclick={() => (summary = null)}
+            >
+              ×
+            </button>
+          </div>
+          {#if summary.loading}
+            <p class="summary-status">Summarizing…</p>
+          {:else if summary.error}
+            <p class="summary-status error" role="alert">{summary.error}</p>
+          {:else}
+            <ul class="summary-lines">
+              {#each summaryLines as line, i (i)}
+                <li>{line}</li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      {/if}
       {#if shown && shown.attachments.length > 0}
         <div class="atts-label">
           <svg
@@ -496,6 +568,28 @@
         </div>
       {:else}
       <div class="actions">
+        {#if canSummarize}
+          <button
+            class="action"
+            title="Summarize"
+            aria-label="Summarize this message"
+            onclick={() => void summarize()}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M10 2.5 11.8 8.2 17.5 10l-5.7 1.8L10 17.5l-1.8-5.7L2.5 10l5.7-1.8z" />
+              <path d="M16 2v3M14.5 3.5h3" />
+            </svg>
+          </button>
+        {/if}
         <button
           class="action"
           title="Reply"
@@ -542,6 +636,71 @@
 </section>
 
 <style>
+  /* The on-device summary, boxed above the body so it reads as a note
+     about the message, not as part of it. */
+  .summary {
+    margin: 0 0 12px;
+    padding: 8px 12px 10px;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    background: var(--bg-hover);
+    font-size: 12.5px;
+  }
+
+  .summary-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .summary-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+
+  .summary-note {
+    flex: 1;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  .summary-btn {
+    padding: 0 4px;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--text-secondary);
+    cursor: default;
+  }
+
+  .summary-btn:hover:not(:disabled) {
+    color: var(--text-primary);
+  }
+
+  .summary-status {
+    margin: 2px 0 0;
+    color: var(--text-secondary);
+  }
+
+  .summary-status.error {
+    color: var(--danger);
+  }
+
+  .summary-lines {
+    margin: 2px 0 0;
+    padding-left: 18px;
+  }
+
+  .summary-lines li + li {
+    margin-top: 2px;
+  }
+
   .card {
     background: var(--bg-card);
     border: 1px solid var(--card-border);

@@ -15,6 +15,7 @@
     onDraft,
     onEditDraft,
     onDeleteDraft,
+    canSummarize = false,
   }: {
     message: MessageHeader | null;
     /** How many rows the list has selected. Past one there is no single
@@ -36,6 +37,8 @@
     onEditDraft?: (id: number) => void;
     /** The draft card's Delete action — removes the server draft. */
     onDeleteDraft?: (message: MessageHeader) => void;
+    /** Whether cards offer the on-device summary button. */
+    canSummarize?: boolean;
   } = $props();
 
   // The whole conversation of the selected row, oldest first. Falls back to
@@ -221,6 +224,7 @@
           <MessageCard
             message={entry}
             body={bodies[entry.id] ?? null}
+            canSummarize={canSummarize && !entry.isDraft}
             loading={bodiesLoading}
             error={bodiesError}
             expanded={entry.isDraft || expandedIds.has(entry.id)}

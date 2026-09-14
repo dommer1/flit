@@ -300,6 +300,13 @@ vi.mock("./lib/api", () => ({
   getSwipeActions: vi.fn(async () => currentSwipeActions),
   getShortcuts: vi.fn(async () => currentShortcuts),
   getDateTimeFormat: vi.fn(async () => currentDateTimeFormat),
+  onLlmModelsChanged: vi.fn(async () => () => {}),
+  llmStatus: vi.fn(async () => ({
+    enabled: false,
+    activeModel: null,
+    ready: false,
+    models: [],
+  })),
   onSettingsChanged: vi.fn(async (callback: () => void) => {
     settingsChanged = callback;
     return () => {};

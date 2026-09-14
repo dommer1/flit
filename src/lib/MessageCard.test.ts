@@ -7,7 +7,12 @@ vi.mock("./api", () => ({
   getMessageBody: vi.fn(async () => ({})),
   saveAttachment: vi.fn(async () => {}),
   saveAllAttachments: vi.fn(async () => {}),
+  summarizeMessage: vi.fn(
+    async () => "- Alice asks about the weekend\n- Reply by Friday",
+  ),
 }));
+
+import * as api from "./api";
 
 const message: MessageHeader = {
   id: 1,
@@ -42,7 +47,7 @@ const body: MessageBody = {
   senderAnomaly: null,
 };
 
-function renderCard() {
+function renderCard(extra: Record<string, unknown> = {}) {
   return render(MessageCard, {
     props: {
       message,
@@ -55,6 +60,7 @@ function renderCard() {
       accountColor: null,
       onToggle: vi.fn(),
       onDraft: vi.fn(),
+      ...extra,
     },
   });
 }
@@ -105,4 +111,48 @@ it("removes the frame's own load listener when the card is destroyed", () => {
 
   unmount();
   expect(loadListeners(add, remove)).toBe(0);
+});
+
+it("offers no summarize button unless summaries are ready", () => {
+  const { queryByLabelText } = renderCard();
+
+  expect(queryByLabelText("Summarize this message")).toBeNull();
+});
+
+it("summarizes the message into bullet lines", async () => {
+  const { getByLabelText, findByText, getByRole } = renderCard({
+    canSummarize: true,
+  });
+
+  await fireEvent.click(getByLabelText("Summarize this message"));
+
+  expect(api.summarizeMessage).toHaveBeenCalledWith(1);
+  expect(await findByText("Alice asks about the weekend")).toBeInTheDocument();
+  expect(await findByText("Reply by Friday")).toBeInTheDocument();
+  expect(getByRole("region", { name: "AI summary" })).toBeInTheDocument();
+});
+
+it("shows why a summary failed", async () => {
+  vi.mocked(api.summarizeMessage).mockRejectedValueOnce(
+    new Error("Summaries are switched off"),
+  );
+  const { getByLabelText, findByRole } = renderCard({ canSummarize: true });
+
+  await fireEvent.click(getByLabelText("Summarize this message"));
+
+  expect(await findByRole("alert")).toHaveTextContent(
+    "Summaries are switched off",
+  );
+});
+
+it("closes the summary panel", async () => {
+  const { getByLabelText, findByText, queryByRole } = renderCard({
+    canSummarize: true,
+  });
+  await fireEvent.click(getByLabelText("Summarize this message"));
+  await findByText("Reply by Friday");
+
+  await fireEvent.click(getByLabelText("Close summary"));
+
+  expect(queryByRole("region", { name: "AI summary" })).toBeNull();
 });
