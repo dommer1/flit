@@ -23,7 +23,12 @@ vi.mock("./api", () => ({
 }));
 
 import * as api from "./api";
-import { runSummary, type SummaryState } from "./summaries";
+import {
+  isCollapsed,
+  runSummary,
+  setCollapsed,
+  type SummaryState,
+} from "./summaries";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -91,4 +96,13 @@ it("summarizes a conversation through the thread command", async () => {
 
   expect(api.summarizeThread).toHaveBeenCalledWith(3, false, "req-1");
   expect(states.at(-1)).toEqual({ loading: false, text: "- thread", error: null });
+});
+
+it("remembers which panels were folded", () => {
+  expect(isCollapsed("m1")).toBe(false);
+  setCollapsed("m1", true);
+  expect(isCollapsed("m1")).toBe(true);
+  expect(isCollapsed("m2")).toBe(false);
+  setCollapsed("m1", false);
+  expect(isCollapsed("m1")).toBe(false);
 });

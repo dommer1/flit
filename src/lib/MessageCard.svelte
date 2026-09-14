@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { getMessageBody, saveAllAttachments, saveAttachment } from "./api";
+  import {
+    cachedSummary,
+    getMessageBody,
+    saveAllAttachments,
+    saveAttachment,
+  } from "./api";
   import { runSummary, type SummaryRun, type SummaryState } from "./summaries";
   import { extColor, fileExt } from "./attachments";
   import { interceptBodyLinks } from "./bodyLinks";
@@ -66,6 +71,23 @@
     summaryRun = null;
     summary = null;
   }
+
+  // An opened card shows the summary it already has — written earlier in
+  // this or another session — without being asked again. One lookup per
+  // card instance; a new selection makes a new card.
+  let cacheChecked = false;
+  $effect(() => {
+    if (!expanded || !canSummarize || cacheChecked) return;
+    cacheChecked = true;
+    const id = message.id;
+    cachedSummary(id)
+      .then((text) => {
+        if (text !== null && message.id === id && summary === null) {
+          summary = { loading: false, text, error: null };
+        }
+      })
+      .catch(() => undefined);
+  });
 
   /** Bare address out of `Name <addr>`; a plain address passes through. */
   function bareAddress(from: string): string {
@@ -350,12 +372,13 @@
       class="content"
       onclick={message.isDraft ? onToggle : undefined}
     >
-      {#if summary}
+      {#if canSummarize}
         <div class="summary-slot">
           <SummaryPanel
             {summary}
+            collapseKey="m{message.id}"
+            onStart={() => summarize()}
             onRetry={() => summarize(true)}
-            onClose={() => (summary = null)}
             onCancel={cancelSummary}
           />
         </div>
@@ -531,28 +554,6 @@
         </div>
       {:else}
       <div class="actions">
-        {#if canSummarize}
-          <button
-            class="action"
-            title="Summarize"
-            aria-label="Summarize this message"
-            onclick={() => summarize()}
-          >
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 20 20"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M10 2.5 11.8 8.2 17.5 10l-5.7 1.8L10 17.5l-1.8-5.7L2.5 10l5.7-1.8z" />
-              <path d="M16 2v3M14.5 3.5h3" />
-            </svg>
-          </button>
-        {/if}
         <button
           class="action"
           title="Reply"

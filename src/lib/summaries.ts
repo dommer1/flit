@@ -64,3 +64,16 @@ export function runSummary(
     done,
   };
 }
+
+// Panels the user folded, by key ("m<id>" / "t<id>"), for this window's
+// lifetime — switching messages and back keeps a folded summary folded.
+const collapsed = new Set<string>();
+
+export function isCollapsed(key: string): boolean {
+  return collapsed.has(key);
+}
+
+export function setCollapsed(key: string, value: boolean): void {
+  if (value) collapsed.add(key);
+  else collapsed.delete(key);
+}

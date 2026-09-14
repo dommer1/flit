@@ -13,6 +13,7 @@ vi.mock("./api", () => ({
   newRequestId: vi.fn(() => "req-1"),
   onSummaryToken: vi.fn(async () => () => {}),
   cancelSummary: vi.fn(async () => undefined),
+  cachedSummary: vi.fn(async () => null),
 }));
 
 import * as api from "./api";
@@ -148,16 +149,44 @@ it("shows why a summary failed", async () => {
   );
 });
 
-it("closes the summary panel", async () => {
-  const { getByLabelText, findByText, queryByRole } = renderCard({
+it("folds the summary and unfolds it again", async () => {
+  const { getByLabelText, findByText, queryByText, getByRole } = renderCard({
     canSummarize: true,
   });
   await fireEvent.click(getByLabelText("Summarize this message"));
   await findByText("Reply by Friday");
 
-  await fireEvent.click(getByLabelText("Close summary"));
+  await fireEvent.click(getByLabelText("Hide summary"));
 
-  expect(queryByRole("region", { name: "AI summary" })).toBeNull();
+  expect(queryByText("Reply by Friday")).toBeNull();
+  expect(getByRole("region", { name: "AI summary" })).toBeInTheDocument();
+
+  await fireEvent.click(getByLabelText("Show summary"));
+
+  expect(await findByText("Reply by Friday")).toBeInTheDocument();
+});
+
+it("shows the summary section with its button before any summary exists", () => {
+  const { getByRole, getByLabelText } = renderCard({ canSummarize: true });
+
+  expect(getByRole("region", { name: "AI summary" })).toBeInTheDocument();
+  expect(getByLabelText("Summarize this message")).toBeInTheDocument();
+});
+
+it("shows an already-written summary when the card opens", async () => {
+  vi.mocked(api.cachedSummary).mockResolvedValueOnce("- Written earlier");
+  const { findByText, queryByLabelText } = renderCard({ canSummarize: true });
+
+  expect(await findByText("Written earlier")).toBeInTheDocument();
+  expect(api.cachedSummary).toHaveBeenCalledWith(1);
+  expect(api.summarizeMessage).not.toHaveBeenCalled();
+  expect(queryByLabelText("Summarize this message")).toBeNull();
+});
+
+it("asks for no cached summary while summaries are not ready", () => {
+  renderCard();
+
+  expect(api.cachedSummary).not.toHaveBeenCalled();
 });
 
 it("asks for a fresh summary from the panel's retry", async () => {
@@ -180,5 +209,7 @@ it("cancels a summary still being written and drops the panel", async () => {
   await fireEvent.click(await findByLabelText("Cancel summary"));
 
   expect(api.cancelSummary).toHaveBeenCalledWith("req-1");
-  expect(queryByRole("region", { name: "AI summary" })).toBeNull();
+  // Back to the empty section with its button.
+  expect(await findByLabelText("Summarize this message")).toBeInTheDocument();
+  expect(queryByRole("alert")).toBeNull();
 });

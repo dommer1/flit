@@ -1,67 +1,108 @@
 <script lang="ts">
-  // A boxed on-device summary: plain text from the backend shown as bullet
-  // lines — never interpreted as HTML. Shared by message cards and the
-  // conversation header.
-  import type { SummaryState } from "./summaries";
+  // The on-device summary section of a message or conversation: a slim
+  // row with a Summarize button until one exists, then the bullet lines
+  // (plain text from the backend — never interpreted as HTML), foldable so
+  // it stays out of the way once read.
+  import { isCollapsed, setCollapsed, type SummaryState } from "./summaries";
 
   let {
     summary,
     label = "AI summary",
+    startLabel = "Summarize this message",
+    collapseKey,
+    onStart,
     onRetry,
-    onClose,
     onCancel,
   }: {
-    summary: SummaryState;
+    /** Null until a summary was asked for. */
+    summary: SummaryState | null;
     /** Region name and heading. */
     label?: string;
+    /** Accessible name of the button that asks for the first summary. */
+    startLabel?: string;
+    /** Identifies the message/conversation so a fold survives switching. */
+    collapseKey: string;
+    onStart: () => void;
     onRetry: () => void;
-    onClose: () => void;
     /** Stop a summary still being written (the × while loading). */
     onCancel: () => void;
   } = $props();
 
   let lines = $derived(
-    (summary.text ?? "")
+    (summary?.text ?? "")
       .split("\n")
       .map((line) => line.replace(/^\s*[-•*]\s*/, "").trim())
       .filter((line) => line !== ""),
   );
+  let hasText = $derived(summary !== null && !summary.loading && summary.text !== null);
+  let collapsed = $state(false);
+  $effect(() => {
+    collapsed = isCollapsed(collapseKey);
+  });
+
+  function toggle() {
+    collapsed = !collapsed;
+    setCollapsed(collapseKey, collapsed);
+  }
 </script>
 
-<div class="summary" role="region" aria-label={label}>
+<div class="summary" class:empty={summary === null} role="region" aria-label={label}>
   <div class="summary-head">
     <span class="summary-title">{label}</span>
-    <span class="summary-note">local model · may be inaccurate</span>
-    <button
-      class="summary-btn"
-      title="Summarize again"
-      aria-label="Summarize again"
-      disabled={summary.loading}
-      onclick={onRetry}
-    >
-      ↻
-    </button>
-    {#if summary.loading}
-      <button
-        class="summary-btn"
-        title="Cancel"
-        aria-label="Cancel summary"
-        onclick={onCancel}
-      >
-        ×
+    {#if summary === null}
+      <button class="start" aria-label={startLabel} onclick={onStart}>
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M10 2.5 11.8 8.2 17.5 10l-5.7 1.8L10 17.5l-1.8-5.7L2.5 10l5.7-1.8z" />
+          <path d="M16 2v3M14.5 3.5h3" />
+        </svg>
+        Summarize
       </button>
     {:else}
-      <button
-        class="summary-btn"
-        title="Close summary"
-        aria-label="Close summary"
-        onclick={onClose}
-      >
-        ×
-      </button>
+      <span class="summary-note">local model · may be inaccurate</span>
+      {#if summary.loading}
+        <button
+          class="summary-btn"
+          title="Cancel"
+          aria-label="Cancel summary"
+          onclick={onCancel}
+        >
+          ×
+        </button>
+      {:else}
+        <button
+          class="summary-btn"
+          title="Summarize again"
+          aria-label="Summarize again"
+          onclick={onRetry}
+        >
+          ↻
+        </button>
+        {#if hasText}
+          <button
+            class="summary-btn"
+            title={collapsed ? "Show summary" : "Hide summary"}
+            aria-label={collapsed ? "Show summary" : "Hide summary"}
+            aria-expanded={!collapsed}
+            onclick={toggle}
+          >
+            {collapsed ? "▸" : "▾"}
+          </button>
+        {/if}
+      {/if}
     {/if}
   </div>
-  {#if summary.loading && lines.length === 0}
+  {#if summary === null || (hasText && collapsed)}
+    <!-- nothing below the head -->
+  {:else if summary.loading && lines.length === 0}
     <p class="summary-status">Summarizing…</p>
   {:else if summary.error}
     <p class="summary-status error" role="alert">{summary.error}</p>
@@ -84,10 +125,18 @@
     font-size: 12.5px;
   }
 
+  /* Before a summary exists the section is a single quiet row. */
+  .summary.empty {
+    padding-bottom: 8px;
+  }
+
   .summary-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 8px;
+  }
+
+  .summary:not(.empty) .summary-head {
     margin-bottom: 4px;
   }
 
@@ -103,6 +152,26 @@
     flex: 1;
     font-size: 11px;
     color: var(--text-secondary);
+  }
+
+  .start {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    padding: 2px 9px;
+    border: 1px solid var(--border-chrome);
+    border-radius: 6px;
+    background: var(--bg-window);
+    font: inherit;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    cursor: default;
+  }
+
+  .start:hover {
+    background: var(--bg-selected-muted);
   }
 
   .summary-btn {

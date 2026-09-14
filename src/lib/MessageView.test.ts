@@ -43,6 +43,7 @@ vi.mock("./api", () => ({
   newRequestId: vi.fn(() => "req-1"),
   onSummaryToken: vi.fn(async () => () => {}),
   cancelSummary: vi.fn(async () => undefined),
+  cachedSummary: vi.fn(async () => null),
 }));
 
 import * as api from "./api";
@@ -791,4 +792,20 @@ it("hides the conversation summary button while summaries are not ready", async 
   await screen.findByText("Weekend plans");
 
   expect(screen.queryByLabelText("Summarize this conversation")).toBeNull();
+});
+
+it("opens a conversation with the summary it already has", async () => {
+  vi.mocked(api.summarizeThread).mockClear();
+  vi.mocked(api.listThread).mockResolvedValueOnce(conversation);
+  vi.mocked(api.threadBodies).mockResolvedValueOnce(conversationBodies);
+  vi.mocked(api.cachedSummary).mockImplementation(async (_id, thread) =>
+    thread ? "- Agreed on Saturday" : null,
+  );
+  renderView({ message: { ...message, id: 3 }, canSummarize: true });
+
+  expect(await screen.findByText("Agreed on Saturday")).toBeInTheDocument();
+  expect(api.cachedSummary).toHaveBeenCalledWith(3, true);
+  expect(api.summarizeThread).not.toHaveBeenCalled();
+  vi.mocked(api.cachedSummary).mockReset();
+  vi.mocked(api.cachedSummary).mockResolvedValue(null);
 });

@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { listThread, setMessageRead, threadBodies } from "./api";
+  import {
+    cachedSummary,
+    listThread,
+    setMessageRead,
+    threadBodies,
+  } from "./api";
   import type { DraftKind } from "./draft";
   import MessageCard from "./MessageCard.svelte";
   import { runSummary, type SummaryRun, type SummaryState } from "./summaries";
@@ -150,7 +155,10 @@
     // any body at all — every member of the thread has to land first.
     timed("threadBodies", () => threadBodies(anchor))
       .then((loaded) => {
-        if (anchorId === anchor) bodies = loaded;
+        if (anchorId === anchor) {
+          bodies = loaded;
+          showCachedConversationSummary(anchor);
+        }
       })
       .catch((err: unknown) => {
         if (anchorId === anchor) bodiesError = String(err);
@@ -158,6 +166,20 @@
       .finally(() => {
         if (anchorId === anchor) bodiesLoading = false;
       });
+  }
+
+  // A conversation opens with the summary it already has. Asked only once
+  // its bodies are here, so the lookup is a cache hit and never a second
+  // server fetch racing the bulk one.
+  function showCachedConversationSummary(anchor: number) {
+    if (!canSummarize || thread.length < 2 || threadSummary !== null) return;
+    cachedSummary(anchor, true)
+      .then((text) => {
+        if (text !== null && anchorId === anchor && threadSummary === null) {
+          threadSummary = { loading: false, text, error: null };
+        }
+      })
+      .catch(() => undefined);
   }
 
   /** Open a card (fresh selections replace the set), marking it read —
@@ -241,36 +263,16 @@
       <div class="stack">
         <div class="thread-head">
           <h2 class="subject">{message.subject}</h2>
-          {#if canSummarize && thread.length > 1}
-            <button
-              class="summarize"
-              title="Summarize conversation"
-              aria-label="Summarize this conversation"
-              onclick={() => summarizeConversation()}
-            >
-              <svg
-                width="15"
-                height="15"
-                viewBox="0 0 20 20"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M10 2.5 11.8 8.2 17.5 10l-5.7 1.8L10 17.5l-1.8-5.7L2.5 10l5.7-1.8z" />
-                <path d="M16 2v3M14.5 3.5h3" />
-              </svg>
-            </button>
-          {/if}
         </div>
-        {#if threadSummary}
+        {#if canSummarize && thread.length > 1}
           <div class="thread-summary">
             <SummaryPanel
               summary={threadSummary}
               label="Conversation summary"
+              startLabel="Summarize this conversation"
+              collapseKey="t{message.id}"
+              onStart={() => summarizeConversation()}
               onRetry={() => summarizeConversation(true)}
-              onClose={() => (threadSummary = null)}
               onCancel={cancelConversationSummary}
             />
           </div>
@@ -345,24 +347,6 @@
     color: var(--text-primary);
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .summarize {
-    display: inline-flex;
-    flex-shrink: 0;
-    align-items: center;
-    align-self: center;
-    padding: 3px;
-    border: none;
-    border-radius: 6px;
-    background: none;
-    color: var(--text-secondary);
-    cursor: default;
-  }
-
-  .summarize:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
   }
 
   .thread-summary {
