@@ -6,9 +6,10 @@
 //! cookies, no Referer, and every byte is hashed on the way down — a file
 //! whose SHA-256 differs from the catalog pin is deleted, never used.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
@@ -48,6 +49,111 @@ pub enum Outcome {
 /// A raisable stop signal shared between the download task and the cancel
 /// command. Plain atomic, not a channel: the loop only ever polls it.
 pub type CancelFlag = Arc<AtomicBool>;
+
+/// What Settings sees of a download in flight (or one that failed and has
+/// not been retried or dismissed yet).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub received: u64,
+    pub total: u64,
+    /// Set once the task gave up; the entry then stays until the user
+    /// retries or removes the model, so the failure is visible.
+    pub error: Option<String>,
+}
+
+struct Entry {
+    received: u64,
+    total: u64,
+    cancel: CancelFlag,
+    error: Option<String>,
+}
+
+/// The downloads currently running or failed, keyed by model id. Lives in
+/// AppState so the commands and the download tasks share one view.
+#[derive(Default)]
+pub struct Downloads {
+    inner: Mutex<HashMap<String, Entry>>,
+}
+
+impl Downloads {
+    /// Claim the model's download slot; `None` when a download of it is
+    /// already running. A failed entry is replaced — that is a retry.
+    pub fn begin(&self, id: &str, total: u64) -> Option<CancelFlag> {
+        let mut map = self.lock();
+        if map.get(id).is_some_and(|e| e.error.is_none()) {
+            return None;
+        }
+        let cancel = CancelFlag::default();
+        map.insert(
+            id.to_string(),
+            Entry {
+                received: 0,
+                total,
+                cancel: cancel.clone(),
+                error: None,
+            },
+        );
+        Some(cancel)
+    }
+
+    pub fn progress(&self, id: &str, received: u64) {
+        if let Some(entry) = self.lock().get_mut(id) {
+            entry.received = received;
+        }
+    }
+
+    pub fn fail(&self, id: &str, error: String) {
+        if let Some(entry) = self.lock().get_mut(id) {
+            entry.error = Some(error);
+        }
+    }
+
+    /// Forget the entry: the download finished, was cancelled, or its
+    /// failure was dismissed.
+    pub fn finish(&self, id: &str) {
+        self.lock().remove(id);
+    }
+
+    /// Raise the running download's stop flag; false when nothing is
+    /// running for this id.
+    pub fn cancel(&self, id: &str) -> bool {
+        match self.lock().get(id) {
+            Some(entry) if entry.error.is_none() => {
+                entry.cancel.store(true, Ordering::Relaxed);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_running(&self, id: &str) -> bool {
+        self.lock().get(id).is_some_and(|e| e.error.is_none())
+    }
+
+    pub fn snapshot(&self) -> HashMap<String, Snapshot> {
+        self.lock()
+            .iter()
+            .map(|(id, e)| {
+                (
+                    id.clone(),
+                    Snapshot {
+                        received: e.received,
+                        total: e.total,
+                        error: e.error.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    // why unwrap_or_else(into_inner): a poisoned lock only means a task
+    // panicked mid-update; the map is still coherent.
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Entry>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
 
 /// Stream `spec.url` into `<dir>/<file>.part`, verify, then rename into
 /// place. `on_progress` gets the running byte count after every chunk.
@@ -198,6 +304,50 @@ mod tests {
     /// TLS-only and cannot talk to it.
     fn test_client() -> reqwest::Client {
         reqwest::Client::builder().build().unwrap()
+    }
+
+    #[test]
+    fn a_running_download_blocks_a_second_claim_until_finished() {
+        let downloads = Downloads::default();
+
+        assert!(downloads.begin("m", 10).is_some());
+        assert!(downloads.begin("m", 10).is_none());
+        assert!(downloads.is_running("m"));
+        assert!(downloads.begin("other", 10).is_some());
+
+        downloads.finish("m");
+        assert!(!downloads.is_running("m"));
+        assert!(downloads.begin("m", 10).is_some());
+    }
+
+    #[test]
+    fn a_failed_download_stays_visible_until_retried() {
+        let downloads = Downloads::default();
+        downloads.begin("m", 10);
+        downloads.progress("m", 4);
+        downloads.fail("m", "boom".to_string());
+
+        let snap = downloads.snapshot().remove("m").unwrap();
+        assert_eq!(snap.received, 4);
+        assert_eq!(snap.total, 10);
+        assert_eq!(snap.error.as_deref(), Some("boom"));
+        assert!(!downloads.is_running("m"));
+        // Cancel has nothing to stop...
+        assert!(!downloads.cancel("m"));
+        // ...but a retry replaces the failed entry.
+        assert!(downloads.begin("m", 10).is_some());
+        assert_eq!(downloads.snapshot()["m"].error, None);
+    }
+
+    #[test]
+    fn cancel_raises_the_running_downloads_flag() {
+        let downloads = Downloads::default();
+        let flag = downloads.begin("m", 10).unwrap();
+
+        assert!(!flag.load(Ordering::Relaxed));
+        assert!(downloads.cancel("m"));
+        assert!(flag.load(Ordering::Relaxed));
+        assert!(!downloads.cancel("unknown"));
     }
 
     #[tokio::test]

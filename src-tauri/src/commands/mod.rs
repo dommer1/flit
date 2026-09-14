@@ -2233,6 +2233,25 @@ pub async fn set_llm_model(
     Ok(())
 }
 
+/// Start downloading a catalog model; returns once the background task is
+/// spawned. The only user action that contacts a host other than the
+/// user's own mail servers or a sender's image host — see CLAUDE.md.
+#[tauri::command]
+pub async fn download_llm_model(app: AppHandle, id: String) -> Result<(), AppError> {
+    llm::start_download(app, &id)
+}
+
+#[tauri::command]
+pub async fn cancel_llm_download(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    state.llm_downloads.cancel(&id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn remove_llm_model(app: AppHandle, id: String) -> Result<(), AppError> {
+    llm::remove_model(&app, &id).await
+}
+
 /// Icons for the given sender domains, as data: URIs. Domains without one are
 /// simply absent and the list falls back to its monogram.
 #[tauri::command]

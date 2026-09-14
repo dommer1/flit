@@ -326,7 +326,25 @@ pub struct LlmModel {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LlmModelState {
     Missing,
+    Downloading {
+        received: u64,
+        total: u64,
+    },
+    /// The last download failed; the card shows why until the user retries
+    /// or removes the model.
+    Failed {
+        error: String,
+    },
     Ready,
+}
+
+/// Payload of the `llm-download-progress` event.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmDownloadProgress {
+    pub id: String,
+    pub received: u64,
+    pub total: u64,
 }
 
 /// Order of messages in the conversation view.

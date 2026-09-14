@@ -7,6 +7,7 @@ import type {
   Alias,
   AttachmentInfo,
   Contact,
+  LlmDownloadProgress,
   LlmStatus,
   DateTimeFormat,
   Mailbox,
@@ -484,6 +485,35 @@ export function llmStatus(): Promise<LlmStatus> {
 
 export function setLlmModel(id: string): Promise<void> {
   return invoke<void>("set_llm_model", { id });
+}
+
+/** Start fetching a catalog model in the background. Progress arrives on
+ *  onLlmDownloadProgress; the end (done, cancelled, failed) on
+ *  onLlmModelsChanged. */
+export function downloadLlmModel(id: string): Promise<void> {
+  return invoke<void>("download_llm_model", { id });
+}
+
+export function cancelLlmDownload(id: string): Promise<void> {
+  return invoke<void>("cancel_llm_download", { id });
+}
+
+/** Delete a downloaded model file, or dismiss a failed download. */
+export function removeLlmModel(id: string): Promise<void> {
+  return invoke<void>("remove_llm_model", { id });
+}
+
+export function onLlmDownloadProgress(
+  callback: (progress: LlmDownloadProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<LlmDownloadProgress>("llm-download-progress", (event) =>
+    callback(event.payload),
+  );
+}
+
+/** Fires when a model download ends or a model file is removed. */
+export function onLlmModelsChanged(callback: () => void): Promise<UnlistenFn> {
+  return listen("llm-models-changed", callback);
 }
 
 /** Icons for sender domains, keyed by domain and ready to use as an img src.

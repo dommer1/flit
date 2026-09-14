@@ -9,25 +9,43 @@ pub mod catalog;
 pub mod download;
 pub mod store;
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::AppError;
-use crate::models::{LlmModel, LlmModelState, LlmStatus};
+use crate::models::{LlmDownloadProgress, LlmModel, LlmModelState, LlmStatus};
+use crate::state::AppState;
 use crate::storage::settings;
+
+/// Progress events are throttled to this — the UI needs a moving bar, not
+/// one event per network chunk.
+const PROGRESS_EVERY: Duration = Duration::from_millis(200);
 
 /// The current state of the feature, for Settings and the main window.
 pub async fn status(app: &AppHandle, pool: &SqlitePool) -> Result<LlmStatus, AppError> {
     let enabled = settings::llm_summary_enabled(pool).await?;
     let active = settings::llm_model(pool).await?;
-    Ok(describe(&store::models_dir(app)?, enabled, active))
+    let downloads = app.state::<AppState>().llm_downloads.snapshot();
+    Ok(describe(
+        &store::models_dir(app)?,
+        enabled,
+        active,
+        &downloads,
+    ))
 }
 
 /// Assemble the status from its inputs — kept free of app handles and the
 /// database so it can be tested against a scratch directory.
-fn describe(dir: &Path, enabled: bool, active_model: Option<String>) -> LlmStatus {
+fn describe(
+    dir: &Path,
+    enabled: bool,
+    active_model: Option<String>,
+    downloads: &HashMap<String, download::Snapshot>,
+) -> LlmStatus {
     let models: Vec<LlmModel> = catalog::MODELS
         .iter()
         .map(|spec| LlmModel {
@@ -36,10 +54,18 @@ fn describe(dir: &Path, enabled: bool, active_model: Option<String>) -> LlmStatu
             description: spec.description.to_string(),
             size: spec.size,
             recommended: spec.recommended,
-            state: if store::is_ready(dir, spec) {
-                LlmModelState::Ready
-            } else {
-                LlmModelState::Missing
+            state: match downloads.get(spec.id) {
+                Some(download::Snapshot {
+                    error: Some(error), ..
+                }) => LlmModelState::Failed {
+                    error: error.clone(),
+                },
+                Some(snapshot) => LlmModelState::Downloading {
+                    received: snapshot.received,
+                    total: snapshot.total,
+                },
+                None if store::is_ready(dir, spec) => LlmModelState::Ready,
+                None => LlmModelState::Missing,
             },
         })
         .collect();
@@ -54,6 +80,84 @@ fn describe(dir: &Path, enabled: bool, active_model: Option<String>) -> LlmStatu
         ready,
         models,
     }
+}
+
+/// Start fetching a model in the background; returns as soon as the task is
+/// spawned. Progress arrives as `llm-download-progress` events and the end —
+/// done, cancelled or failed — as `llm-models-changed`.
+pub fn start_download(app: AppHandle, id: &str) -> Result<(), AppError> {
+    let spec =
+        catalog::find(id).ok_or_else(|| AppError::Invalid(format!("Unknown model: {id}")))?;
+    let dir = store::models_dir(&app)?;
+    if store::is_ready(&dir, spec) {
+        return Ok(());
+    }
+    let Some(cancel) = app
+        .state::<AppState>()
+        .llm_downloads
+        .begin(spec.id, spec.size)
+    else {
+        return Ok(()); // already running — the running task covers it
+    };
+    let client = download::client()?;
+
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let mut last_emit = Instant::now();
+        let result = download::fetch(&client, spec, &dir, &cancel, |received| {
+            state.llm_downloads.progress(spec.id, received);
+            if last_emit.elapsed() >= PROGRESS_EVERY {
+                last_emit = Instant::now();
+                let _ = app.emit(
+                    "llm-download-progress",
+                    LlmDownloadProgress {
+                        id: spec.id.to_string(),
+                        received,
+                        total: spec.size,
+                    },
+                );
+            }
+        })
+        .await;
+
+        match result {
+            Ok(download::Outcome::Done) => {
+                state.llm_downloads.finish(spec.id);
+                // The first model to arrive becomes the pick — the user
+                // downloaded it to use it, and an explicit choice is one
+                // radio click away.
+                if let Ok(None) = settings::llm_model(&state.pool).await {
+                    let _ = settings::set_llm_model(&state.pool, spec.id).await;
+                }
+            }
+            Ok(download::Outcome::Cancelled) => state.llm_downloads.finish(spec.id),
+            Err(err) => state.llm_downloads.fail(spec.id, err.to_string()),
+        }
+        let _ = app.emit("llm-models-changed", ());
+    });
+    Ok(())
+}
+
+/// Delete a downloaded model file (or dismiss a failed download). A
+/// download still running must be cancelled first.
+pub async fn remove_model(app: &AppHandle, id: &str) -> Result<(), AppError> {
+    let spec =
+        catalog::find(id).ok_or_else(|| AppError::Invalid(format!("Unknown model: {id}")))?;
+    let downloads = &app.state::<AppState>().llm_downloads;
+    if downloads.is_running(spec.id) {
+        return Err(AppError::Invalid(
+            "This model is still downloading — cancel the download first.".to_string(),
+        ));
+    }
+    downloads.finish(spec.id);
+    let path = store::model_path(&store::models_dir(app)?, spec);
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    app.emit("llm-models-changed", ())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -78,7 +182,7 @@ mod tests {
 
     #[test]
     fn lists_every_catalog_model_as_missing_on_a_fresh_machine() {
-        let status = describe(&scratch_dir("fresh"), true, None);
+        let status = describe(&scratch_dir("fresh"), true, None, &HashMap::new());
 
         assert_eq!(status.models.len(), catalog::MODELS.len());
         assert!(status
@@ -93,14 +197,15 @@ mod tests {
         let dir = scratch_dir("ready");
         fake_download(&dir, "qwen3.5-2b");
 
+        let none = HashMap::new();
         // File present but the feature is off.
-        assert!(!describe(&dir, false, Some("qwen3.5-2b".into())).ready);
+        assert!(!describe(&dir, false, Some("qwen3.5-2b".into()), &none).ready);
         // On, but nothing picked.
-        assert!(!describe(&dir, true, None).ready);
+        assert!(!describe(&dir, true, None, &none).ready);
         // On, but the pick is a model that is not downloaded.
-        assert!(!describe(&dir, true, Some("qwen3.5-4b".into())).ready);
+        assert!(!describe(&dir, true, Some("qwen3.5-4b".into()), &none).ready);
 
-        let status = describe(&dir, true, Some("qwen3.5-2b".into()));
+        let status = describe(&dir, true, Some("qwen3.5-2b".into()), &none);
         assert!(status.ready);
         assert_eq!(
             status
@@ -110,5 +215,54 @@ mod tests {
                 .map(|m| m.state.clone()),
             Some(LlmModelState::Ready)
         );
+    }
+
+    #[test]
+    fn a_download_in_flight_or_failed_shows_as_such() {
+        let dir = scratch_dir("downloading");
+        let mut downloads = HashMap::new();
+        downloads.insert(
+            "qwen3.5-2b".to_string(),
+            download::Snapshot {
+                received: 5,
+                total: 10,
+                error: None,
+            },
+        );
+        downloads.insert(
+            "qwen3.5-4b".to_string(),
+            download::Snapshot {
+                received: 3,
+                total: 10,
+                error: Some("boom".to_string()),
+            },
+        );
+
+        let status = describe(&dir, true, Some("qwen3.5-2b".into()), &downloads);
+
+        let state_of = |id: &str| {
+            status
+                .models
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| m.state.clone())
+                .unwrap()
+        };
+        assert_eq!(
+            state_of("qwen3.5-2b"),
+            LlmModelState::Downloading {
+                received: 5,
+                total: 10
+            }
+        );
+        assert_eq!(
+            state_of("qwen3.5-4b"),
+            LlmModelState::Failed {
+                error: "boom".to_string()
+            }
+        );
+        assert_eq!(state_of("gemma-4-e2b"), LlmModelState::Missing);
+        // Picked but still downloading is not ready.
+        assert!(!status.ready);
     }
 }

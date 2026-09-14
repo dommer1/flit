@@ -5,6 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::auth::{self, PasswordCache};
 use crate::error::AppError;
+use crate::llm;
 use crate::models::OutgoingMessage;
 
 /// Shared app state managed by Tauri; commands receive it via `tauri::State`.
@@ -36,6 +37,8 @@ pub struct AppState {
     /// pushes run in save order — a later save can never reach the server
     /// before the version it is meant to replace.
     draft_pushes: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
+    /// Model downloads in flight or failed (see llm::download::Downloads).
+    pub llm_downloads: llm::download::Downloads,
 }
 
 /// Proof of holding an account's sync slot. Dropping it releases the slot —
@@ -75,6 +78,7 @@ impl AppState {
             syncing: Mutex::new(HashSet::new()),
             backfilling: Mutex::new(HashSet::new()),
             draft_pushes: Mutex::new(HashMap::new()),
+            llm_downloads: llm::download::Downloads::default(),
         }
     }
 

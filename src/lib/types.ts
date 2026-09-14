@@ -196,7 +196,18 @@ export interface LlmModel {
   state: LlmModelState;
 }
 
-export type LlmModelState = { kind: "missing" } | { kind: "ready" };
+export type LlmModelState =
+  | { kind: "missing" }
+  | { kind: "downloading"; received: number; total: number }
+  | { kind: "failed"; error: string }
+  | { kind: "ready" };
+
+/** Mirrors LlmDownloadProgress in models.rs. */
+export interface LlmDownloadProgress {
+  id: string;
+  received: number;
+  total: number;
+}
 
 /** What one direction of the message-list swipe gesture does;
  * "none" disables that direction. */
