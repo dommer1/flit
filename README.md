@@ -9,6 +9,8 @@ Flit is a minimal, privacy-first desktop email client: plain IMAP and SMTP,
 multiple accounts, one unified inbox, no telemetry and nothing phoning home.
 Built with Rust, Tauri and Svelte.
 
+![Flit's three-pane window with a unified inbox, shown half in light mode and half in dark mode](docs/flit-preview.png)
+
 > **Status: early, macOS only.** Flit is the client its author uses daily,
 > but it is pre-1.0: expect rough edges and keep your existing mail client
 > around. Windows and Linux builds are planned once the core flow is solid.
