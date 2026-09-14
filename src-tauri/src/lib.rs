@@ -2,6 +2,7 @@ pub mod auth;
 mod commands;
 pub mod error;
 mod idle;
+pub mod llm;
 pub mod mail;
 mod models;
 mod notify;
