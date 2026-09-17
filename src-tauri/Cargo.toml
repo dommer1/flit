@@ -90,3 +90,14 @@ tauri-plugin-opener = "2.5.4"
 lto = true
 codegen-units = 1
 strip = true
+
+# why: without this, `strip` above also applies to build-time proc-macro
+# dylibs (sqlx-macros here) — rustc dlopen's those the moment they're built,
+# in the same process, and stripping them post-link deterministically
+# corrupts the Mach-O LINKEDIT string table on this toolchain (dyld then
+# refuses to dlopen it: "mis-aligned LINKEDIT string pool"). Proc-macro
+# crates never ship in the app bundle, so there's nothing to gain from
+# stripping or optimizing them anyway.
+[profile.release.build-override]
+opt-level = 0
+strip = false
