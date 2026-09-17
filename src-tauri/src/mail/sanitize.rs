@@ -276,6 +276,7 @@ fn sanitize(
     let remote = remote.clone();
     let blocked = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&blocked);
+    let untrusted_html = rename_foreign_named_tags(untrusted_html);
 
     let html = ammonia::Builder::default()
         // Both schemes must be whitelisted or ammonia's scheme pass strips
@@ -352,11 +353,108 @@ fn sanitize(
             }
             Some(value.into())
         })
-        .clean(untrusted_html)
+        .clean(&untrusted_html)
         .to_string();
 
     let blocked = blocked.load(Ordering::Relaxed);
     (html, blocked)
+}
+
+/// Tag names ammonia treats as SVG/MathML elements when checking for
+/// namespace switches (`is_svg_tag`/`is_mathml_tag` in ammonia 4.1.3). An
+/// HTML element carrying one of these names fails that check and is removed
+/// TOGETHER WITH ITS CONTENT — unlike any other unknown tag, which ammonia
+/// merely unwraps. Templating engines do emit such names as custom tags in
+/// plain HTML mail (DPD: `<text>`), so the sanitizer sees `<span>` instead,
+/// which ammonia filters like every other element. Left out on purpose:
+/// `a`, `font`, `span`, `title`, `style`, `script` (ammonia accepts them as
+/// HTML), `svg` and `math` (real namespace roots, handled by ammonia) and
+/// `image` (html5ever already parses it as `<img>`).
+#[rustfmt::skip]
+const FOREIGN_NAMED_TAGS: &[&str] = &[
+    // SVG
+    "animate", "animateMotion", "animateTransform", "circle", "clipPath", "defs", "desc",
+    "discard", "ellipse", "feBlend", "feColorMatrix", "feComponentTransfer", "feComposite",
+    "feConvolveMatrix", "feDiffuseLighting", "feDisplacementMap", "feDistantLight",
+    "feDropShadow", "feFlood", "feFuncA", "feFuncB", "feFuncG", "feFuncR", "feGaussianBlur",
+    "feImage", "feMerge", "feMergeNode", "feMorphology", "feOffset", "fePointLight",
+    "feSpecularLighting", "feSpotLight", "feTile", "feTurbulence", "filter", "foreignObject",
+    "g", "line", "linearGradient", "marker", "mask", "metadata", "mpath", "path", "pattern",
+    "polygon", "polyline", "radialGradient", "rect", "set", "stop", "switch", "symbol", "text",
+    "textPath", "tspan", "use", "view",
+    // MathML
+    "abs", "and", "annotation", "annotation-xml", "apply", "approx", "arccos", "arccosh",
+    "arccot", "arccoth", "arccsc", "arccsch", "arcsec", "arcsech", "arcsin", "arcsinh",
+    "arctan", "arctanh", "arg", "bind", "bvar", "card", "cartesianproduct", "cbytes", "ceiling",
+    "cerror", "ci", "cn", "codomain", "complexes", "compose", "condition", "conjugate", "cos",
+    "cosh", "cot", "coth", "cs", "csc", "csch", "csymbol", "curl", "declare", "degree",
+    "determinant", "diff", "divergence", "divide", "domain", "domainofapplication", "emptyset",
+    "eq", "equivalent", "eulergamma", "exists", "exp", "exponentiale", "factorial", "factorof",
+    "false", "floor", "fn", "forall", "gcd", "geq", "grad", "gt", "ident", "imaginary",
+    "imaginaryi", "implies", "in", "infinity", "int", "integers", "intersect", "interval",
+    "inverse", "lambda", "laplacian", "lcm", "leq", "limit", "list", "ln", "log", "logbase",
+    "lowlimit", "lt", "maction", "maligngroup", "malignmark", "matrix", "matrixrow", "max",
+    "mean", "median", "menclose", "merror", "mfenced", "mfrac", "mglyph", "mi", "min", "minus",
+    "mlabeledtr", "mlongdiv", "mmultiscripts", "mn", "mo", "mode", "moment", "momentabout",
+    "mover", "mpadded", "mphantom", "mprescripts", "mroot", "mrow", "ms", "mscarries",
+    "mscarry", "msgroup", "msline", "mspace", "msqrt", "msrow", "mstack", "mstyle", "msub",
+    "msubsup", "msup", "mtable", "mtd", "mtext", "mtr", "munder", "munderover",
+    "naturalnumbers", "neq", "none", "not", "notanumber", "notin", "notprsubset", "notsubset",
+    "or", "otherwise", "outerproduct", "partialdiff", "pi", "piece", "piecewise", "plus",
+    "power", "primes", "product", "prsubset", "quotient", "rationals", "real", "reals", "reln",
+    "rem", "root", "scalarproduct", "sdev", "sec", "sech", "selector", "semantics", "sep",
+    "setdiff", "share", "sin", "sinh", "subset", "sum", "tan", "tanh", "tendsto", "times",
+    "transpose", "true", "union", "uplimit", "variance", "vector", "vectorproduct", "xor",
+];
+
+/// Rewrite start/end tags named in FOREIGN_NAMED_TAGS to `span` before the
+/// HTML reaches ammonia (see the constant for why). Works on the tag token
+/// alone, the way the tokenizer delimits it: `<`, optional `/`, a name that
+/// runs to whitespace, `/` or `>`. Attributes, text and entities are left
+/// as they are. Raw-text content (script, style, title, comments) is scanned
+/// too, but ammonia drops all of it anyway.
+fn rename_foreign_named_tags(html: &str) -> String {
+    let bytes = html.as_bytes();
+    let mut out = String::with_capacity(html.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let mut start = i + 1;
+        if bytes.get(start) == Some(&b'/') {
+            start += 1;
+        }
+        if !bytes.get(start).is_some_and(u8::is_ascii_alphabetic) {
+            i += 1;
+            continue;
+        }
+        let mut end = start;
+        while end < bytes.len()
+            && !matches!(
+                bytes[end],
+                b' ' | b'\t' | b'\n' | b'\r' | b'\x0c' | b'/' | b'>'
+            )
+        {
+            end += 1;
+        }
+        // why: `start`/`end` sit right before ASCII bytes (or at EOF), so
+        // they are char boundaries and slicing cannot panic.
+        let name = &html[start..end];
+        if FOREIGN_NAMED_TAGS
+            .iter()
+            .any(|tag| tag.eq_ignore_ascii_case(name))
+        {
+            out.push_str(&html[copied..start]);
+            out.push_str("span");
+            copied = end;
+        }
+        i = end;
+    }
+    out.push_str(&html[copied..]);
+    out
 }
 
 /// The https image URLs a message references, in document order, deduped —
@@ -380,7 +478,7 @@ pub fn remote_image_urls(untrusted_html: &str) -> Vec<String> {
             }
             Some(value.into())
         })
-        .clean(untrusted_html);
+        .clean(&rename_foreign_named_tags(untrusted_html));
     seen.lock().map(|urls| urls.clone()).unwrap_or_default()
 }
 
@@ -848,5 +946,57 @@ mod tests {
         assert!(!doc.contains("t.example"));
         assert!(!doc.to_lowercase().contains("position:fixed"));
         assert!(doc.contains("color: red"));
+    }
+
+    // DPD's template engine wraps every variable in <text>, and the PIN in
+    // <hide>. ammonia unwraps unknown tags (keeping their text) — except an
+    // HTML element whose NAME is an SVG/MathML element's ("text", "set",
+    // "view", "list", …), which its namespace check removes with its content.
+    // The name, PIN and deadline of a parcel notice vanished that way.
+    #[test]
+    fn keeps_text_inside_tags_named_like_svg_or_mathml_elements() {
+        let doc = srcdoc(
+            "<td>Dobrý deň <text>Dominik,</text><br>\
+             <span style=\"color:#DC0032\"><text>PIN: <hide>360005</hide></text></span>\
+             <TEXT>20.9.2026</TEXT> <set>a</set> <list>b</list></td>",
+            &[],
+        );
+
+        assert!(doc.contains("Dobrý deň <span>Dominik,</span>"));
+        assert!(doc.contains("PIN: 360005"));
+        assert!(doc.contains("<span>20.9.2026</span>"));
+        assert!(doc.contains("<span>a</span> <span>b</span>"));
+        assert!(!doc.to_lowercase().contains("<text"));
+    }
+
+    #[test]
+    fn remote_image_urls_sees_images_inside_such_tags() {
+        let urls = remote_image_urls(r#"<text><img src="https://t.example/x.png"></text>"#);
+
+        assert_eq!(urls, vec!["https://t.example/x.png".to_string()]);
+    }
+
+    #[test]
+    fn real_svg_still_never_renders() {
+        let doc = srcdoc(
+            "<p>a</p><svg><text>x</text><script>alert(1)</script></svg>",
+            &[],
+        );
+
+        assert!(!doc.to_lowercase().contains("<svg"));
+        assert!(!doc.to_lowercase().contains("<script"));
+        assert!(doc.contains("<p>a</p>"));
+    }
+
+    #[test]
+    fn renames_only_whole_tag_names() {
+        let html = "<textarea><text-block><text class=\"x\">a</text ><TEXT/>\
+                    <image src=\"i\"> 1 < 2 &lt;text&gt;";
+
+        assert_eq!(
+            rename_foreign_named_tags(html),
+            "<textarea><text-block><span class=\"x\">a</span ><span/>\
+             <image src=\"i\"> 1 < 2 &lt;text&gt;"
+        );
     }
 }
