@@ -44,12 +44,18 @@ const BODY_STYLE: &str = "html{overflow-y:hidden}\
 /// declarations and @rules, so only these property names — with a valid
 /// value — reach the webview.
 ///
-/// One whole class is deliberately absent: **URL-bearing** properties
-/// (`background`, `background-image`, `list-style-image`, `cursor`, `content`,
-/// `border-image`, `mask`) — the CSS network/tracking vector. CSP
-/// (`img-src data:`) would block the load, but the sanitizer must hold on its
-/// own, so they never survive here. `background-color` (colour only) stands in
-/// for solid backgrounds.
+/// Most **URL-bearing** properties (`list-style-image`, `cursor`, `content`,
+/// `border-image`, `mask`) are deliberately absent — the CSS network/tracking
+/// vector. CSP (`img-src data:`) would block the load, but the sanitizer must
+/// hold on its own, so they never survive here. `background-color` (colour
+/// only) stands in for solid backgrounds.
+///
+/// `background-image` is the one exception, and only for the inline `style`
+/// ATTRIBUTE filter (`inline_style_property_set`, never this set directly —
+/// see its doc comment): decided 2026-09-18, it gets the same resolve-or-
+/// leave-inert treatment as `<img src>` instead of a blanket strip, because
+/// senders commonly paint a banner photo that way and CSP backstops an
+/// unresolved reference exactly as it does for `<img>`.
 ///
 /// why positioning IS allowed: senders hide preheader/preview text with
 /// `position:absolute;left:-9999px` and the sr-only pattern, so stripping
@@ -191,6 +197,40 @@ fn style_property_set() -> HashSet<&'static str> {
     STYLE_PROPERTIES.iter().copied().collect()
 }
 
+/// `style_property_set()` plus `background-image` and its non-url layout
+/// companions — used ONLY for the inline `style` ATTRIBUTE filter
+/// (ammonia's `.filter_style_properties()` call in `sanitize()`), never for
+/// `<style>`-block content (mail::css keeps plain `style_property_set()`
+/// there).
+///
+/// Why the split matters: this set only governs whether a PROPERTY NAME
+/// survives with a syntactically valid value — it has no idea whether a
+/// `url(...)` inside that value points at an already-resolved data: URI or a
+/// still-remote https: URL. For the inline attribute that's fine, because
+/// `resolve_style_background_images` runs first (in `attribute_filter`,
+/// before this allowlist is ever consulted) and has ALREADY swapped every
+/// resolvable URL for its data: URI and left every other one exactly as
+/// `img_src` leaves an unresolved `<img src>` — inert, backstopped by CSP.
+/// A `<style>` block never goes through that rewrite (ammonia drops
+/// `<style>` content outright; mail::css re-parses the original text
+/// separately), so widening ITS allowlist the same way would let a raw,
+/// never-examined `url(https://…)` straight through — that stays blocked.
+fn inline_style_property_set() -> HashSet<&'static str> {
+    let mut set = style_property_set();
+    set.extend([
+        "background-image",
+        "background-repeat",
+        "background-position",
+        "background-position-x",
+        "background-position-y",
+        "background-size",
+        "background-attachment",
+        "background-origin",
+        "background-clip",
+    ]);
+    set
+}
+
 /// What `build_srcdoc` hands back: the locked-down document plus how many
 /// loadable remote images stayed blocked (drives the "Load images" banner).
 #[derive(Debug)]
@@ -299,21 +339,23 @@ fn sanitize(
         // (no url-bearing, no positioning) with a valid value — the rest,
         // and any @rule, is dropped.
         .add_generic_attributes(&["style"])
-        .filter_style_properties(style_property_set())
+        .filter_style_properties(inline_style_property_set())
         // `class`/`id` are the hooks the injected <style> selectors match on
         // (mail::css). `hidden` is another way senders hide preheader text.
         // None can reference a URL or run script.
         .add_generic_attributes(&["class", "id", "hidden"])
         // Legacy presentational HTML that older mail (and many ESP templates)
-        // still relies on. `<font>` plus per-tag layout attributes — none can
-        // reference a URL. The url-bearing `background` attribute is pointedly
-        // NOT here: it is the attribute twin of CSS background-image.
+        // still relies on. `<font>` plus per-tag layout attributes. Decided
+        // 2026-09-18: `background` is now here too — the attribute twin of
+        // CSS background-image, resolved by the SAME policy as `<img src>`
+        // below (img_src), not a blanket carve-out.
         .add_tags(&["font", "center"])
         .add_tag_attributes("font", &["color", "face", "size"])
         .add_tag_attributes(
             "table",
             &[
                 "bgcolor",
+                "background",
                 "width",
                 "height",
                 "cellpadding",
@@ -323,17 +365,33 @@ fn sanitize(
                 "valign",
             ],
         )
-        .add_tag_attributes("tr", &["bgcolor", "align", "valign"])
+        .add_tag_attributes("tr", &["bgcolor", "background", "align", "valign"])
         .add_tag_attributes(
             "td",
             &[
-                "bgcolor", "width", "height", "align", "valign", "colspan", "rowspan", "nowrap",
+                "bgcolor",
+                "background",
+                "width",
+                "height",
+                "align",
+                "valign",
+                "colspan",
+                "rowspan",
+                "nowrap",
             ],
         )
         .add_tag_attributes(
             "th",
             &[
-                "bgcolor", "width", "height", "align", "valign", "colspan", "rowspan", "nowrap",
+                "bgcolor",
+                "background",
+                "width",
+                "height",
+                "align",
+                "valign",
+                "colspan",
+                "rowspan",
+                "nowrap",
             ],
         )
         .add_tag_attributes(
@@ -341,14 +399,26 @@ fn sanitize(
             &["width", "height", "align", "border", "hspace", "vspace"],
         )
         .attribute_filter(move |element, attribute, value| {
-            if element == "img" && attribute == "src" {
+            let is_img_src = element == "img" && attribute == "src";
+            let is_background_attr =
+                attribute == "background" && matches!(element, "table" | "tr" | "td" | "th");
+            if is_img_src || is_background_attr {
                 return img_src(value, &data_uris, &remote, &counter);
+            }
+            if attribute == "style" {
+                // Decided 2026-09-18: a CSS background-image is the same
+                // network vector as <img src>, so it gets the same
+                // resolve-or-leave-inert treatment (img_src) instead of a
+                // blanket strip. Only the bytes inside url(...) are ever
+                // touched; the rest of the declaration list is untouched.
+                return Some(resolve_style_background_images(
+                    value, &data_uris, &remote, &counter,
+                ));
             }
             // Everywhere else (a href, blockquote cite, …) data: and cid:
             // are removed — a data: link in the sandbox is still a webview
-            // navigation and has no legitimate use in mail. `style` is left
-            // for filter_style_properties (it runs after this filter).
-            if attribute != "style" && (scheme_is(value, "data") || scheme_is(value, "cid")) {
+            // navigation and has no legitimate use in mail.
+            if scheme_is(value, "data") || scheme_is(value, "cid") {
                 return None;
             }
             Some(value.into())
@@ -460,20 +530,39 @@ fn rename_foreign_named_tags(html: &str) -> String {
 /// The https image URLs a message references, in document order, deduped —
 /// the fetch work-list for "load remote images". Collected through the same
 /// ammonia pass as rendering, so only references that would actually appear
-/// in the sanitized document are ever fetched.
+/// in the sanitized document are ever fetched. Covers `<img src>`, the
+/// `background` attribute on a table cell, and `background-image` inside an
+/// inline `style` attribute — the same three places `sanitize()` resolves.
 pub fn remote_image_urls(untrusted_html: &str) -> Vec<String> {
     let seen = Arc::new(Mutex::new(Vec::<String>::new()));
     let collector = Arc::clone(&seen);
+    let record = move |value: &str| {
+        if scheme_is(value, "https") {
+            let url = effective_url(value);
+            // why: no unwrap — a poisoned lock just yields fewer URLs.
+            if let Ok(mut urls) = collector.lock() {
+                if !urls.contains(&url) {
+                    urls.push(url);
+                }
+            }
+        }
+    };
     let _ = ammonia::Builder::default()
         .add_url_schemes(&["cid", "data"])
+        .add_generic_attributes(&["style"])
+        .add_tag_attributes("table", &["background"])
+        .add_tag_attributes("tr", &["background"])
+        .add_tag_attributes("td", &["background"])
+        .add_tag_attributes("th", &["background"])
         .attribute_filter(move |element, attribute, value| {
-            if element == "img" && attribute == "src" && scheme_is(value, "https") {
-                let url = effective_url(value);
-                // why: no unwrap — a poisoned lock just yields fewer URLs.
-                if let Ok(mut urls) = collector.lock() {
-                    if !urls.contains(&url) {
-                        urls.push(url);
-                    }
+            let is_img_src = element == "img" && attribute == "src";
+            let is_background_attr =
+                attribute == "background" && matches!(element, "table" | "tr" | "td" | "th");
+            if is_img_src || is_background_attr {
+                record(value);
+            } else if attribute == "style" {
+                for (_, url) in background_image_url_ranges(value) {
+                    record(url);
                 }
             }
             Some(value.into())
@@ -512,6 +601,93 @@ fn img_src<'v>(
         blocked.fetch_add(1, Ordering::Relaxed);
     }
     Some(value.into())
+}
+
+/// Byte range (into `style`) of the URL argument — already unquoted and
+/// trimmed — for every `background-image: url(...)` declaration in an
+/// inline `style` attribute value, in document order. A plain textual scan,
+/// not a CSS parser: a `style` attribute is a flat declaration list (no
+/// nested `{}`/@rules), so splitting on `;` boundaries is well defined. The
+/// one thing it does NOT understand is a CSS-escaped property/token
+/// (`\62 ackground-image`, `\75rl(`) — such a declaration is left alone here
+/// and simply falls to the ordinary property-name allowlist afterward
+/// (`background-image` is allowed, so ammonia's own value parser, which DOES
+/// unescape, may still admit it unresolved — inert, same as an unresolved
+/// `<img src>`, never as a fetched load).
+///
+/// Shared by `resolve_style_background_images` (which uses the ranges to
+/// splice in a resolved value) and `remote_image_urls` (which only needs the
+/// URLs, to build the fetch work-list) — one scanner, both agree on what
+/// counts as a background-image reference.
+fn background_image_url_ranges(style: &str) -> Vec<(std::ops::Range<usize>, &str)> {
+    let lower = style.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut search_from = 0;
+    while let Some(rel) = lower[search_from..].find("background-image") {
+        let name_start = search_from + rel;
+        let name_end = name_start + "background-image".len();
+        search_from = name_end;
+        // Property-name position: only whitespace, or nothing, before it
+        // back to the start of the string or the previous `;`.
+        let at_boundary =
+            style[..name_start].trim().is_empty() || style[..name_start].trim_end().ends_with(';');
+        if !at_boundary {
+            continue;
+        }
+        let Some(colon_rel) = lower[name_end..].find(':') else {
+            continue;
+        };
+        if !lower[name_end..name_end + colon_rel].trim().is_empty() {
+            continue; // not whitespace-only before ':' — a longer property name
+        }
+        let value_start = name_end + colon_rel + 1;
+        let decl_end = lower[value_start..]
+            .find(';')
+            .map_or(style.len(), |i| value_start + i);
+        let Some(url_rel) = lower[value_start..decl_end].find("url(") else {
+            continue;
+        };
+        let url_start = value_start + url_rel + "url(".len();
+        let Some(close_rel) = style[url_start..decl_end].find(')') else {
+            continue;
+        };
+        let url_end = url_start + close_rel;
+        let raw = style[url_start..url_end].trim().trim_matches(['\'', '"']);
+        out.push((url_start..url_end, raw));
+        search_from = decl_end;
+    }
+    out
+}
+
+/// Resolve every `background-image: url(...)` reference inside an inline
+/// `style` attribute value through the same policy as `<img src>` (`img_src`
+/// — cid resolves, data:image/* passes, a fetched https: URL becomes its
+/// data: URI, everything else survives inert for CSP to block). Only the
+/// bytes inside `url(...)` are ever replaced; the rest of the declaration
+/// list — including any `;` inside a substituted `data:...;base64,...` URI —
+/// is left byte-for-byte untouched, which is why this splices by byte range
+/// instead of splitting the string on `;` and rejoining.
+fn resolve_style_background_images<'a>(
+    style: &'a str,
+    data_uris: &HashMap<String, String>,
+    remote: &HashMap<String, String>,
+    blocked: &AtomicUsize,
+) -> Cow<'a, str> {
+    let ranges = background_image_url_ranges(style);
+    if ranges.is_empty() {
+        return Cow::Borrowed(style);
+    }
+    let mut out = String::with_capacity(style.len());
+    let mut copied = 0;
+    for (range, raw) in ranges {
+        if let Some(resolved) = img_src(raw, data_uris, remote, blocked) {
+            out.push_str(&style[copied..range.start]);
+            out.push_str(&resolved);
+            copied = range.end;
+        }
+    }
+    out.push_str(&style[copied..]);
+    Cow::Owned(out)
 }
 
 /// The URL as a browser's parser would see it: WHATWG strips leading and
@@ -819,11 +995,18 @@ mod tests {
     }
 
     #[test]
-    fn strips_url_bearing_style_properties() {
-        // Every CSS property that can reach the network is dropped by the
-        // allowlist — CSP would block the load too, but the sanitizer must
-        // hold on its own. background-color (no url) still survives.
-        let doc = srcdoc(
+    fn strips_url_bearing_style_properties_except_background_image() {
+        // Every OTHER CSS property that can reach the network is still
+        // dropped by the allowlist. background-color (no url) still
+        // survives. Decided 2026-09-18: background-image is the one
+        // exception — it survives unresolved here (no `remote` entry for
+        // it), the same way an unresolved <img src> does: inert, backstopped
+        // by CSP, never fetched by the sanitizer itself. See
+        // `resolves_background_image_style_property_when_remote_has_it` for
+        // the resolved case. Uses sanitize_fragment (bare, no document
+        // wrapper) so the assertions can't accidentally match our own
+        // trusted base CSS, which also has a "cursor" declaration.
+        let fragment = sanitize_fragment(
             r#"<div style="background-image:url(https://t.example/p.png);
                background:url(https://t.example/q.png);
                list-style-image:url(https://t.example/r.png);
@@ -832,36 +1015,97 @@ mod tests {
             &[],
         );
 
-        assert!(!doc.to_lowercase().contains("url("));
-        assert!(!doc.contains("t.example"));
-        assert!(doc.contains("background-color:#fff"));
+        assert!(fragment.contains("background-image:url(https://t.example/p.png)"));
+        assert!(!fragment.contains("background:url(https://t.example/q.png)"));
+        assert!(!fragment.contains("list-style-image"));
+        assert!(!fragment.contains("cursor"));
+        assert!(fragment.contains("background-color:#fff"));
     }
 
     #[test]
-    fn strips_encoded_url_in_style() {
-        // A CSS-escaped "url(" must not slip a remote load past the filter.
-        // background-image isn't in the allowlist, so the whole declaration
-        // goes regardless of how the url token is spelled.
-        let doc = srcdoc(
+    fn escaped_background_image_url_still_only_survives_inert() {
+        // A CSS-escaped "url(" doesn't let the sanitizer's OWN scanner spot
+        // and resolve the reference (background_image_url_ranges only
+        // understands a literal "url(") — but ammonia's value parser
+        // unescapes it when validating the now-allowed background-image
+        // property, so the declaration still lands in exactly the same
+        // inert, CSP-backstopped state as the plain-spelled version. No
+        // `remote` entry exists for it either way, so nothing here could
+        // have been swapped for a data: URI regardless of the escape.
+        let fragment = sanitize_fragment(
             r#"<div style="background-image:\75rl(https://t.example/p.png)">x</div>"#,
             &[],
         );
 
-        assert!(!doc.contains("t.example"));
+        assert!(fragment.contains("background-image:url(https://t.example/p.png)"));
+        assert!(!fragment.contains("data:"));
     }
 
     #[test]
     fn empties_the_style_attribute_when_nothing_survives() {
         // ammonia leaves an inert style="" rather than removing the attribute
-        // — what matters is that the forbidden declaration is gone.
+        // — what matters is that the forbidden declaration is gone. Uses
+        // list-style-image (still fully blocked) rather than background-image
+        // (which is the one url-bearing property now allowed to survive
+        // unresolved — see the test above).
         let doc = srcdoc(
-            r#"<p style="background-image:url(https://t/x.png)">hi</p>"#,
+            r#"<p style="list-style-image:url(https://t/x.png)">hi</p>"#,
             &[],
         );
 
         assert!(!doc.to_lowercase().contains("url("));
         assert!(!doc.contains("t/x.png"));
         assert!(doc.contains("hi"));
+    }
+
+    #[test]
+    fn resolves_background_image_style_property_when_remote_has_it() {
+        let mut remote = HashMap::new();
+        remote.insert(
+            "https://t.example/banner.png".to_string(),
+            "data:image/png;base64,iVBORw0KGgo=".to_string(),
+        );
+        let doc = build_srcdoc(
+            r#"<table><tr><td style="background-image:url(https://t.example/banner.png);
+               background-repeat:no-repeat;background-size:cover;
+               background-position:center top">x</td></tr></table>"#,
+            &[],
+            &remote,
+            false,
+        )
+        .html;
+
+        assert!(doc.contains("background-image:url(data:image/png;base64,iVBORw0KGgo=)"));
+        assert!(!doc.contains("t.example"));
+        // The non-url companions needed to actually position/size the image
+        // survive alongside it, unconditionally (they carry no URL).
+        assert!(doc.contains("background-repeat:no-repeat"));
+        assert!(doc.contains("background-size:cover"));
+        assert!(doc.contains("background-position:center top"));
+    }
+
+    #[test]
+    fn resolving_one_background_image_does_not_disturb_a_neighbouring_declaration() {
+        // The substituted data: URI contains a literal ';' of its own
+        // ("data:image/png;base64,…") — resolve_style_background_images
+        // splices by byte range, not by splitting the string on ';', so
+        // that embedded ';' must not be mistaken for a declaration boundary
+        // and swallow the next real declaration.
+        let mut remote = HashMap::new();
+        remote.insert(
+            "https://t.example/banner.png".to_string(),
+            "data:image/png;base64,iVBORw0KGgo=".to_string(),
+        );
+        let doc = build_srcdoc(
+            r#"<table><tr><td style="background-image:url(https://t.example/banner.png);color:red">x</td></tr></table>"#,
+            &[],
+            &remote,
+            false,
+        )
+        .html;
+
+        assert!(doc.contains("background-image:url(data:image/png;base64,iVBORw0KGgo=)"));
+        assert!(doc.contains("color:red"));
     }
 
     #[test]
@@ -895,11 +1139,47 @@ mod tests {
     }
 
     #[test]
-    fn strips_url_bearing_background_attribute() {
+    fn background_attribute_survives_unresolved_like_img_src() {
         // `background="url"` on a table/cell is the attribute-level twin of
-        // CSS background-image — a remote load, so it must never survive.
+        // <img src> and, decided 2026-09-18, resolved by the exact same
+        // policy (img_src): unresolved here (no `remote` entry), so it
+        // survives inert for layout, backstopped by CSP, never fetched by
+        // the sanitizer itself.
         let doc = srcdoc(
             r#"<table background="https://t.example/bg.png"><tr><td>hi</td></tr></table>"#,
+            &[],
+        );
+
+        assert!(doc.contains(r#"background="https://t.example/bg.png""#));
+    }
+
+    #[test]
+    fn resolves_background_attribute_when_remote_has_it() {
+        let mut remote = HashMap::new();
+        remote.insert(
+            "https://t.example/bg.png".to_string(),
+            "data:image/png;base64,iVBORw0KGgo=".to_string(),
+        );
+        let doc = build_srcdoc(
+            r#"<table background="https://t.example/bg.png"><tr><td>hi</td></tr></table>"#,
+            &[],
+            &remote,
+            false,
+        )
+        .html;
+
+        assert!(doc.contains(r#"background="data:image/png;base64,iVBORw0KGgo=""#));
+        assert!(!doc.contains("t.example"));
+    }
+
+    #[test]
+    fn background_attribute_ignored_outside_table_cells() {
+        // The attribute is only meaningful (and only resolved) on
+        // table/tr/td/th — matching bgcolor's existing scope. Anywhere else
+        // ammonia strips it before attribute_filter ever sees it, unchanged
+        // from before this feature.
+        let doc = srcdoc(
+            r#"<body background="https://t.example/bg.png">hi</body>"#,
             &[],
         );
 
@@ -974,6 +1254,18 @@ mod tests {
         let urls = remote_image_urls(r#"<text><img src="https://t.example/x.png"></text>"#);
 
         assert_eq!(urls, vec!["https://t.example/x.png".to_string()]);
+    }
+
+    #[test]
+    fn remote_image_urls_collects_background_attribute_and_style() {
+        let urls = remote_image_urls(
+            r#"<table background="https://t.example/bg.png"><tr><td
+               style="background-image:url(https://t.example/banner.png)">hi</td></tr></table>"#,
+        );
+
+        assert_eq!(urls.len(), 2);
+        assert!(urls.contains(&"https://t.example/bg.png".to_string()));
+        assert!(urls.contains(&"https://t.example/banner.png".to_string()));
     }
 
     #[test]
