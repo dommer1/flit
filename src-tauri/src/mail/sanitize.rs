@@ -50,12 +50,15 @@ const BODY_STYLE: &str = "html{overflow-y:hidden}\
 /// hold on its own, so they never survive here. `background-color` (colour
 /// only) stands in for solid backgrounds.
 ///
-/// `background-image` is the one exception, and only for the inline `style`
-/// ATTRIBUTE filter (`inline_style_property_set`, never this set directly —
-/// see its doc comment): decided 2026-09-18, it gets the same resolve-or-
-/// leave-inert treatment as `<img src>` instead of a blanket strip, because
-/// senders commonly paint a banner photo that way and CSP backstops an
-/// unresolved reference exactly as it does for `<img>`.
+/// `background` and `background-image` are the exception, and only for the
+/// inline `style` ATTRIBUTE filter (`inline_style_property_set`, never this
+/// set directly — see its doc comment): decided 2026-09-18, any `url(...)`
+/// inside either gets the same resolve-or-leave-inert treatment as
+/// `<img src>` instead of a blanket strip (senders commonly paint a banner
+/// photo that way, and CSP backstops an unresolved reference exactly as it
+/// does for `<img>`) — and a url-less `background:<color>` (most real-world
+/// uses, e.g. a button background) now needs no resolution at all to
+/// survive, the same as `background-color` always has.
 ///
 /// why positioning IS allowed: senders hide preheader/preview text with
 /// `position:absolute;left:-9999px` and the sr-only pattern, so stripping
@@ -197,27 +200,31 @@ fn style_property_set() -> HashSet<&'static str> {
     STYLE_PROPERTIES.iter().copied().collect()
 }
 
-/// `style_property_set()` plus `background-image` and its non-url layout
-/// companions — used ONLY for the inline `style` ATTRIBUTE filter
-/// (ammonia's `.filter_style_properties()` call in `sanitize()`), never for
-/// `<style>`-block content (mail::css keeps plain `style_property_set()`
-/// there).
+/// `style_property_set()` plus `background`/`background-image` and the
+/// latter's non-url layout companions — used ONLY for the inline `style`
+/// ATTRIBUTE filter (ammonia's `.filter_style_properties()` call in
+/// `sanitize()`), never for `<style>`-block content (mail::css keeps plain
+/// `style_property_set()` there).
 ///
 /// Why the split matters: this set only governs whether a PROPERTY NAME
 /// survives with a syntactically valid value — it has no idea whether a
-/// `url(...)` inside that value points at an already-resolved data: URI or a
-/// still-remote https: URL. For the inline attribute that's fine, because
-/// `resolve_style_background_images` runs first (in `attribute_filter`,
-/// before this allowlist is ever consulted) and has ALREADY swapped every
-/// resolvable URL for its data: URI and left every other one exactly as
-/// `img_src` leaves an unresolved `<img src>` — inert, backstopped by CSP.
-/// A `<style>` block never goes through that rewrite (ammonia drops
-/// `<style>` content outright; mail::css re-parses the original text
-/// separately), so widening ITS allowlist the same way would let a raw,
-/// never-examined `url(https://…)` straight through — that stays blocked.
+/// `url(...)` inside that value points at an already-resolved data: URI, a
+/// still-remote https: URL, or isn't there at all (most `background:` mail
+/// uses are a plain solid colour, e.g. a button's `background:#fa9e2a` —
+/// that survives untouched and needs no resolution). For the inline
+/// attribute that's fine, because `resolve_style_backgrounds` runs first (in
+/// `attribute_filter`, before this allowlist is ever consulted) and has
+/// ALREADY swapped every resolvable URL for its data: URI and left every
+/// other one exactly as `img_src` leaves an unresolved `<img src>` — inert,
+/// backstopped by CSP. A `<style>` block never goes through that rewrite
+/// (ammonia drops `<style>` content outright; mail::css re-parses the
+/// original text separately), so widening ITS allowlist the same way would
+/// let a raw, never-examined `url(https://…)` straight through — that stays
+/// blocked.
 fn inline_style_property_set() -> HashSet<&'static str> {
     let mut set = style_property_set();
     set.extend([
+        "background",
         "background-image",
         "background-repeat",
         "background-position",
@@ -406,12 +413,15 @@ fn sanitize(
                 return img_src(value, &data_uris, &remote, &counter);
             }
             if attribute == "style" {
-                // Decided 2026-09-18: a CSS background-image is the same
-                // network vector as <img src>, so it gets the same
-                // resolve-or-leave-inert treatment (img_src) instead of a
-                // blanket strip. Only the bytes inside url(...) are ever
-                // touched; the rest of the declaration list is untouched.
-                return Some(resolve_style_background_images(
+                // Decided 2026-09-18: a CSS background/background-image is
+                // the same network vector as <img src>, so any url(...)
+                // inside either gets the same resolve-or-leave-inert
+                // treatment (img_src) instead of a blanket strip. A
+                // url-less background (a solid colour — most real mail
+                // buttons) is left alone entirely; only the bytes inside
+                // url(...) are ever touched, everything else in the
+                // declaration list is untouched.
+                return Some(resolve_style_backgrounds(
                     value, &data_uris, &remote, &counter,
                 ));
             }
@@ -561,7 +571,7 @@ pub fn remote_image_urls(untrusted_html: &str) -> Vec<String> {
             if is_img_src || is_background_attr {
                 record(value);
             } else if attribute == "style" {
-                for (_, url) in background_image_url_ranges(value) {
+                for (_, url) in background_url_ranges(value) {
                     record(url);
                 }
             }
@@ -604,29 +614,44 @@ fn img_src<'v>(
 }
 
 /// Byte range (into `style`) of the URL argument — already unquoted and
-/// trimmed — for every `background-image: url(...)` declaration in an
-/// inline `style` attribute value, in document order. A plain textual scan,
-/// not a CSS parser: a `style` attribute is a flat declaration list (no
-/// nested `{}`/@rules), so splitting on `;` boundaries is well defined. The
-/// one thing it does NOT understand is a CSS-escaped property/token
+/// trimmed — for every `background: url(...)` or `background-image:
+/// url(...)` declaration in an inline `style` attribute value, in document
+/// order. A plain textual scan, not a CSS parser: a `style` attribute is a
+/// flat declaration list (no nested `{}`/@rules), so splitting on `;`
+/// boundaries is well defined.
+///
+/// Matching "background" alone (the shorthand — e.g. a button's
+/// `background:#fa9e2a`, no url at all) also naturally excludes every OTHER
+/// `background-*` longhand (`background-color`, `background-position`, …):
+/// each is found by the same `background` substring search, but then fails
+/// the colon-boundary check below (`-color`/`-position`/… sits between the
+/// name and the colon, not whitespace), so only bare `background` and
+/// `background-image` ever reach the `url(` search.
+///
+/// The one thing this does NOT understand is a CSS-escaped property/token
 /// (`\62 ackground-image`, `\75rl(`) — such a declaration is left alone here
 /// and simply falls to the ordinary property-name allowlist afterward
 /// (`background-image` is allowed, so ammonia's own value parser, which DOES
 /// unescape, may still admit it unresolved — inert, same as an unresolved
 /// `<img src>`, never as a fetched load).
 ///
-/// Shared by `resolve_style_background_images` (which uses the ranges to
-/// splice in a resolved value) and `remote_image_urls` (which only needs the
-/// URLs, to build the fetch work-list) — one scanner, both agree on what
-/// counts as a background-image reference.
-fn background_image_url_ranges(style: &str) -> Vec<(std::ops::Range<usize>, &str)> {
+/// Shared by `resolve_style_backgrounds` (which uses the ranges to splice in
+/// a resolved value) and `remote_image_urls` (which only needs the URLs, to
+/// build the fetch work-list) — one scanner, both agree on what counts as a
+/// background reference.
+fn background_url_ranges(style: &str) -> Vec<(std::ops::Range<usize>, &str)> {
     let lower = style.to_ascii_lowercase();
     let mut out = Vec::new();
     let mut search_from = 0;
-    while let Some(rel) = lower[search_from..].find("background-image") {
+    while let Some(rel) = lower[search_from..].find("background") {
         let name_start = search_from + rel;
-        let name_end = name_start + "background-image".len();
-        search_from = name_end;
+        search_from = name_start + "background".len();
+        let name_len = if lower[name_start..].starts_with("background-image") {
+            "background-image".len()
+        } else {
+            "background".len()
+        };
+        let name_end = name_start + name_len;
         // Property-name position: only whitespace, or nothing, before it
         // back to the start of the string or the previous `;`.
         let at_boundary =
@@ -645,7 +670,7 @@ fn background_image_url_ranges(style: &str) -> Vec<(std::ops::Range<usize>, &str
             .find(';')
             .map_or(style.len(), |i| value_start + i);
         let Some(url_rel) = lower[value_start..decl_end].find("url(") else {
-            continue;
+            continue; // e.g. a solid `background:#fa9e2a` — nothing to resolve
         };
         let url_start = value_start + url_rel + "url(".len();
         let Some(close_rel) = style[url_start..decl_end].find(')') else {
@@ -659,21 +684,22 @@ fn background_image_url_ranges(style: &str) -> Vec<(std::ops::Range<usize>, &str
     out
 }
 
-/// Resolve every `background-image: url(...)` reference inside an inline
-/// `style` attribute value through the same policy as `<img src>` (`img_src`
-/// — cid resolves, data:image/* passes, a fetched https: URL becomes its
-/// data: URI, everything else survives inert for CSP to block). Only the
-/// bytes inside `url(...)` are ever replaced; the rest of the declaration
-/// list — including any `;` inside a substituted `data:...;base64,...` URI —
-/// is left byte-for-byte untouched, which is why this splices by byte range
+/// Resolve every `background`/`background-image` `url(...)` reference
+/// inside an inline `style` attribute value through the same policy as
+/// `<img src>` (`img_src` — cid resolves, data:image/* passes, a fetched
+/// https: URL becomes its data: URI, everything else survives inert for CSP
+/// to block). Only the bytes inside `url(...)` are ever replaced; the rest
+/// of the declaration list — including any `;` inside a substituted
+/// `data:...;base64,...` URI, and any url-less `background:<color>` — is
+/// left byte-for-byte untouched, which is why this splices by byte range
 /// instead of splitting the string on `;` and rejoining.
-fn resolve_style_background_images<'a>(
+fn resolve_style_backgrounds<'a>(
     style: &'a str,
     data_uris: &HashMap<String, String>,
     remote: &HashMap<String, String>,
     blocked: &AtomicUsize,
 ) -> Cow<'a, str> {
-    let ranges = background_image_url_ranges(style);
+    let ranges = background_url_ranges(style);
     if ranges.is_empty() {
         return Cow::Borrowed(style);
     }
@@ -995,17 +1021,20 @@ mod tests {
     }
 
     #[test]
-    fn strips_url_bearing_style_properties_except_background_image() {
+    fn strips_url_bearing_style_properties_except_background() {
         // Every OTHER CSS property that can reach the network is still
         // dropped by the allowlist. background-color (no url) still
-        // survives. Decided 2026-09-18: background-image is the one
-        // exception — it survives unresolved here (no `remote` entry for
-        // it), the same way an unresolved <img src> does: inert, backstopped
-        // by CSP, never fetched by the sanitizer itself. See
-        // `resolves_background_image_style_property_when_remote_has_it` for
-        // the resolved case. Uses sanitize_fragment (bare, no document
-        // wrapper) so the assertions can't accidentally match our own
-        // trusted base CSS, which also has a "cursor" declaration.
+        // survives. Decided 2026-09-18: background and background-image are
+        // the exception — url(...) inside either survives unresolved here
+        // (no `remote` entry for it), the same way an unresolved <img src>
+        // does: inert, backstopped by CSP, never fetched by the sanitizer
+        // itself. See `resolves_background_image_style_property_when_remote_has_it`
+        // and `resolves_background_shorthand_url_when_remote_has_it` for the
+        // resolved cases, and `keeps_solid_color_background_shorthand` for
+        // the far more common url-less case (a button's `background:#color`).
+        // Uses sanitize_fragment (bare, no document wrapper) so the
+        // assertions can't accidentally match our own trusted base CSS,
+        // which also has a "cursor" declaration.
         let fragment = sanitize_fragment(
             r#"<div style="background-image:url(https://t.example/p.png);
                background:url(https://t.example/q.png);
@@ -1016,16 +1045,52 @@ mod tests {
         );
 
         assert!(fragment.contains("background-image:url(https://t.example/p.png)"));
-        assert!(!fragment.contains("background:url(https://t.example/q.png)"));
+        assert!(fragment.contains("background:url(https://t.example/q.png)"));
         assert!(!fragment.contains("list-style-image"));
         assert!(!fragment.contains("cursor"));
         assert!(fragment.contains("background-color:#fff"));
     }
 
     #[test]
+    fn keeps_solid_color_background_shorthand() {
+        // The actual bug this closes: bunny.net's "Manage Billing" button is
+        // `background:#fa9e2a` (a plain colour, no url at all) with white
+        // text — previously stripped outright along with every other
+        // `background:` use, leaving white-on-white, unreadable text. A
+        // url-less background needs no resolution and survives
+        // unconditionally, the same as background-color always has.
+        let fragment = sanitize_fragment(
+            r#"<a style="background:#fa9e2a;color:#FFFFFF">Manage Billing</a>"#,
+            &[],
+        );
+
+        assert!(fragment.contains("background:#fa9e2a"));
+        assert!(fragment.contains("color:#FFFFFF") || fragment.contains("color:#ffffff"));
+    }
+
+    #[test]
+    fn resolves_background_shorthand_url_when_remote_has_it() {
+        let mut remote = HashMap::new();
+        remote.insert(
+            "https://t.example/bg.png".to_string(),
+            "data:image/png;base64,iVBORw0KGgo=".to_string(),
+        );
+        let doc = build_srcdoc(
+            r#"<table><tr><td style="background:url(https://t.example/bg.png) #fff">x</td></tr></table>"#,
+            &[],
+            &remote,
+            false,
+        )
+        .html;
+
+        assert!(doc.contains("background:url(data:image/png;base64,iVBORw0KGgo=) #fff"));
+        assert!(!doc.contains("t.example"));
+    }
+
+    #[test]
     fn escaped_background_image_url_still_only_survives_inert() {
         // A CSS-escaped "url(" doesn't let the sanitizer's OWN scanner spot
-        // and resolve the reference (background_image_url_ranges only
+        // and resolve the reference (background_url_ranges only
         // understands a literal "url(") — but ammonia's value parser
         // unescapes it when validating the now-allowed background-image
         // property, so the declaration still lands in exactly the same
@@ -1087,7 +1152,7 @@ mod tests {
     #[test]
     fn resolving_one_background_image_does_not_disturb_a_neighbouring_declaration() {
         // The substituted data: URI contains a literal ';' of its own
-        // ("data:image/png;base64,…") — resolve_style_background_images
+        // ("data:image/png;base64,…") — resolve_style_backgrounds
         // splices by byte range, not by splitting the string on ';', so
         // that embedded ';' must not be mistaken for a declaration boundary
         // and swallow the next real declaration.
