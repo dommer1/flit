@@ -347,6 +347,8 @@
     color: var(--text-primary);
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* why: the body opts chrome out of selection; the subject is content. */
+    user-select: text;
   }
 
   .thread-summary {

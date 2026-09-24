@@ -208,6 +208,8 @@
     margin: 2px 0 0;
     padding-left: 16px;
     color: var(--text-primary);
+    /* why: the body opts chrome out of selection; the summary is content. */
+    user-select: text;
   }
 
   .summary-lines li + li {
