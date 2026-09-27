@@ -381,6 +381,13 @@ pub async fn prefetch_bodies(
         if budget == 0 {
             break;
         }
+        // why: Spam and Trash are mail the user does not want; downloading
+        // their bodies ahead of time only costs bandwidth and disk. Opening
+        // one still fetches it on demand.
+        if matches!(folder.role.as_deref(), Some("junk" | "trash")) {
+            messages::skip_prefetch_in_mailbox(pool, account.id, &folder.name).await?;
+            continue;
+        }
         let missing = messages::uids_missing_body(pool, account.id, &folder.name, budget).await?;
         if missing.is_empty() {
             continue;

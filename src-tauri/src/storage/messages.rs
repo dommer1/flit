@@ -928,6 +928,26 @@ pub async fn skip_prefetch(pool: &SqlitePool, message_id: i64) -> Result<(), App
     Ok(())
 }
 
+/// Take every body-less message of one folder off the prefetch queue —
+/// for folders whose mail is not worth downloading ahead (Spam, Trash).
+/// Returns how many rows were newly skipped.
+pub async fn skip_prefetch_in_mailbox(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+) -> Result<u64, AppError> {
+    let done = sqlx::query(
+        "UPDATE messages SET prefetch_skipped = 1
+         WHERE account_id = ? AND mailbox = ?
+           AND body_text IS NULL AND body_html IS NULL AND prefetch_skipped = 0",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
+}
+
 /// Whether any cached message of this account, in any folder, still lacks
 /// a body — lets the prefetcher skip connecting when there is nothing to do.
 pub async fn has_missing_bodies(pool: &SqlitePool, account_id: i64) -> Result<bool, AppError> {
@@ -2862,6 +2882,45 @@ mod tests {
         // uid 4 has no Message-ID: it can never be matched, not even to
         // another id-less row (uid 5) that has a body.
         assert_eq!(flagged, vec![(4, false), (3, false), (2, true)]);
+    }
+
+    #[tokio::test]
+    async fn a_whole_folder_can_leave_the_prefetch_queue() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "Spam",
+            &[header(1, "Win", "2026-07-01T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(2, "Hi", "2026-07-02T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            skip_prefetch_in_mailbox(&pool, id, "Spam").await.unwrap(),
+            1
+        );
+
+        assert!(uids_missing_body(&pool, id, "Spam", 10)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            uids_missing_body(&pool, id, "INBOX", 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
