@@ -1,29 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { Editor, generateHTML, generateJSON } from "@tiptap/core";
-  import Image from "@tiptap/extension-image";
-  import StarterKit from "@tiptap/starter-kit";
+  import { EXTENSIONS } from "./editorExtensions";
   import { quotedPlainText, textToHtml } from "./richtext";
-
-  // SECURITY: the compose editor may hold an expanded reply-quote — images
-  // are limited to the message's own inline forms (data:/cid:). A remote
-  // URL would be a network load in the app's main frame, so it is rejected
-  // at parse time and the node is dropped.
-  const InlineImage = Image.extend({
-    parseHTML() {
-      return [
-        {
-          tag: "img[src]",
-          getAttrs: (element) =>
-            /^(data:image\/|cid:)/i.test(element.getAttribute("src") ?? "")
-              ? null
-              : false,
-        },
-      ];
-    },
-  });
-
-  const EXTENSIONS = [StarterKit, InlineImage];
 
   /** Any HTML → the exact string this editor's getHTML() would produce for
    * it, so stored fragments become string-comparable with live content. */
