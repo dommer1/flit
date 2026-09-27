@@ -324,19 +324,30 @@ fn missing_uids(on_server: Vec<i64>, cached: &std::collections::HashSet<i64>) ->
         .collect()
 }
 
-/// Cross the prefetch work-list with the sizes the server reported: keep
-/// only messages known to be small enough. No size reported → skipped —
-/// never download blind.
-fn prefetch_plan(missing: &[(i64, i64)], sizes: &[(i64, u32)], max_bytes: u32) -> Vec<(i64, i64)> {
-    missing
-        .iter()
-        .filter(|(_, uid)| {
-            sizes
-                .iter()
-                .any(|(sized_uid, size)| sized_uid == uid && *size <= max_bytes)
-        })
-        .copied()
-        .collect()
+/// Cross the prefetch work-list with the sizes the server reported: fetch
+/// only messages known to be small enough, refuse the rest. No size
+/// reported → refused — never download blind.
+fn prefetch_plan(missing: &[(i64, i64)], sizes: &[(i64, u32)], max_bytes: u32) -> PrefetchPlan {
+    let mut plan = PrefetchPlan::default();
+    for &(message_id, uid) in missing {
+        let small = sizes
+            .iter()
+            .any(|&(sized_uid, size)| sized_uid == uid && size <= max_bytes);
+        if small {
+            plan.fetch.push((message_id, uid));
+        } else {
+            plan.skip.push(message_id);
+        }
+    }
+    plan
+}
+
+/// What one folder's prefetch batch does: download these `(message id,
+/// uid)` bodies, and take these message ids off the queue for good.
+#[derive(Debug, Default)]
+struct PrefetchPlan {
+    fetch: Vec<(i64, i64)>,
+    skip: Vec<i64>,
 }
 
 /// Download and cache bodies for messages that have none, so search covers
@@ -370,7 +381,14 @@ pub async fn prefetch_bodies(
         let uids: Vec<i64> = missing.iter().map(|(_, uid)| *uid).collect();
         let sizes = imap::fetch_sizes(session, &uids).await?;
 
-        for (message_id, uid) in prefetch_plan(&missing, &sizes, MAX_PREFETCH_BYTES) {
+        let plan = prefetch_plan(&missing, &sizes, MAX_PREFETCH_BYTES);
+        // why: without the mark, refused rows would head this folder's queue
+        // on every pass, and a folder whose newest missing bodies are all
+        // large would never be prefetched any further.
+        for message_id in plan.skip {
+            messages::skip_prefetch(pool, message_id).await?;
+        }
+        for (message_id, uid) in plan.fetch {
             // why: a UID can vanish mid-run (deleted on another device) —
             // skip it rather than aborting the whole batch.
             let Some(raw) = imap::fetch_body(session, uid).await? else {
@@ -686,7 +704,12 @@ mod tests {
         // 102 is over the cap; 103 never got a size back from the server.
         let sizes = [(101, 10_000), (102, 999_999)];
 
-        assert_eq!(prefetch_plan(&missing, &sizes, 262_144), vec![(1, 101)]);
+        let plan = prefetch_plan(&missing, &sizes, 262_144);
+
+        assert_eq!(plan.fetch, vec![(1, 101)]);
+        // Refused rows are named, so they can leave the queue for good —
+        // otherwise they head it again on every pass.
+        assert_eq!(plan.skip, vec![2, 3]);
     }
 
     #[test]
