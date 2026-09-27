@@ -1427,6 +1427,7 @@ dependencies = [
  "async-imap",
  "async-native-tls",
  "base64 0.22.1",
+ "cssparser 0.33.0",
  "encoding_rs",
  "futures",
  "image",

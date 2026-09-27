@@ -77,6 +77,10 @@ encoding_rs = "0.8"
 # detection, no data files, MIT.
 whatlang = "0.18"
 lightningcss = { version = "=1.0.0-alpha.71", default-features = false }
+# why: the tokenizer lightningcss parses with (same version, already in the
+# tree through it). mail::css measures a stylesheet's nesting depth with it
+# before handing the sheet to lightningcss, whose recursion has no limit.
+cssparser = "0.33"
 mail-builder = "0.4"
 # why: native new-mail notifications, sent from the Rust sync path only —
 # the webview never gets the notification IPC permission.
