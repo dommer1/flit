@@ -32,6 +32,14 @@ pub struct AppState {
     /// prefetch, header backfill). Separate from `syncing`: that work runs
     /// for minutes and must never block an inbox sync (or vice versa).
     background: Mutex<HashSet<i64>>,
+    /// When each account last started a full pass (SyncScope::Everything),
+    /// in Unix seconds — what lets a folder switch skip a pass that just ran.
+    ///
+    /// why wall-clock seconds and not Instant: Instant stands still while
+    /// the Mac sleeps, so a pass from before a night's sleep would still look
+    /// a few seconds old in the morning, and the first click would sync
+    /// nothing.
+    last_full_pass: Mutex<HashMap<i64, i64>>,
     /// Per-account queue for background draft pushes (append / delete /
     /// folder sync). tokio's Mutex hands the lock out in FIFO order, so
     /// pushes run in save order — a later save can never reach the server
@@ -116,6 +124,7 @@ impl AppState {
             passwords: PasswordCache::default(),
             syncing: Mutex::new(SyncSlots::default()),
             background: Mutex::new(HashSet::new()),
+            last_full_pass: Mutex::new(HashMap::new()),
             draft_pushes: Mutex::new(HashMap::new()),
             llm_downloads: llm::download::Downloads::default(),
             llm_engine: llm::engine::Engine::default(),
@@ -165,6 +174,19 @@ impl AppState {
         self.passwords
             .get_or_fetch(account_id, || auth::get_password(account_id))
             .await
+    }
+
+    /// Record that a full pass of the account starts at `now` (Unix secs).
+    pub fn note_full_pass(&self, account_id: i64, now: i64) {
+        self.lock_last_full_pass().insert(account_id, now);
+    }
+
+    /// Whether the account started a full pass less than `window` seconds
+    /// before `now`.
+    pub fn full_pass_within(&self, account_id: i64, now: i64, window: i64) -> bool {
+        self.lock_last_full_pass()
+            .get(&account_id)
+            .is_some_and(|started| now - started < window)
     }
 
     /// The account's draft-push queue lock — hold it across the whole
@@ -217,6 +239,12 @@ impl AppState {
 
     fn lock_syncing(&self) -> MutexGuard<'_, SyncSlots> {
         self.syncing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_last_full_pass(&self) -> MutexGuard<'_, HashMap<i64, i64>> {
+        self.last_full_pass
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -333,6 +361,19 @@ mod tests {
 
         drop(background);
         assert!(state.try_begin_background(1).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_full_pass_counts_as_recent_for_its_window_only() {
+        let state = AppState::new(test_pool().await);
+        assert!(!state.full_pass_within(1, 1_000, 60));
+
+        state.note_full_pass(1, 1_000);
+
+        assert!(state.full_pass_within(1, 1_059, 60));
+        assert!(!state.full_pass_within(1, 1_060, 60));
+        // Per account.
+        assert!(!state.full_pass_within(2, 1_000, 60));
     }
 
     #[tokio::test]
