@@ -1789,35 +1789,7 @@ pub async fn thread_bodies(
             &password,
         )
         .await?;
-        let fetched = async {
-            for (mailbox, entries) in &missing {
-                session
-                    .select(mailbox)
-                    .await
-                    .map_err(|e| AppError::Imap(format!("select {mailbox}: {e}")))?;
-                for (id, uid) in entries {
-                    // why skip: a uid can vanish mid-run (deleted elsewhere) —
-                    // the rest of the conversation must still load.
-                    let Some(raw) = mail::imap::fetch_body(&mut session, *uid).await? else {
-                        continue;
-                    };
-                    let parsed = mail::parse::parse_body(&raw);
-                    storage::messages::set_body(
-                        &state.pool,
-                        *id,
-                        parsed.text.as_deref(),
-                        parsed.html.as_deref(),
-                        &parsed.snippet,
-                        &parsed.images,
-                        &parsed.attachments,
-                        parsed.auth.as_ref(),
-                    )
-                    .await?;
-                }
-            }
-            Ok::<(), AppError>(())
-        }
-        .await;
+        let fetched = download_thread_bodies(&state.pool, &mut session, &missing).await;
         let _ = session.logout().await;
         fetched?;
         // why: snippets just became real — lists should refresh.
@@ -1859,6 +1831,41 @@ pub async fn thread_bodies(
         bodies.insert(header.id, body);
     }
     Ok(bodies)
+}
+
+/// Download and cache the bodies listed in `missing` (folder → (row id,
+/// uid)) over one session, one SELECT per folder.
+async fn download_thread_bodies(
+    pool: &sqlx::SqlitePool,
+    session: &mut mail::imap::ImapSession,
+    missing: &std::collections::BTreeMap<String, Vec<(i64, i64)>>,
+) -> Result<(), AppError> {
+    for (mailbox, entries) in missing {
+        session
+            .select(mailbox)
+            .await
+            .map_err(|e| AppError::Imap(format!("select {mailbox}: {e}")))?;
+        for (id, uid) in entries {
+            // why skip: a uid can vanish mid-run (deleted elsewhere) —
+            // the rest of the conversation must still load.
+            let Some(raw) = mail::imap::fetch_body(session, *uid).await? else {
+                continue;
+            };
+            let parsed = mail::parse::parse_body(&raw);
+            storage::messages::set_body(
+                pool,
+                *id,
+                parsed.text.as_deref(),
+                parsed.html.as_deref(),
+                &parsed.snippet,
+                &parsed.images,
+                &parsed.attachments,
+                parsed.auth.as_ref(),
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// Download the raw RFC822 bytes of one cached message from its server.
