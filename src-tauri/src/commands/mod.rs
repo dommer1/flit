@@ -1616,6 +1616,8 @@ pub async fn get_message_body(
 ) -> Result<MessageBody, AppError> {
     let _t = timing::start("cmd::get_message_body");
     let loaded = load_body(&app, &state, message_id).await?;
+    // Shown now: its HTML's retention period starts over.
+    storage::messages::touch_html(&state.pool, message_id, now_epoch()).await?;
 
     let policy = storage::settings::remote_image_policy(&state.pool).await?;
     let redundant = quote_repeats_thread(&state.pool, message_id, loaded.text.as_deref()).await?;
@@ -1702,9 +1704,11 @@ fn parse_auth(json: Option<&str>) -> Option<AuthResults> {
 }
 
 /// A message's raw cached body — HTML, text and inline images — fetched
-/// from the server on a cache miss, or refetched once for cache rows
-/// written before message_images/message_attachments existed (they'd
-/// otherwise render blanks/nothing forever).
+/// from the server on a cache miss, refetched once for cache rows written
+/// before message_images/message_attachments existed (they'd otherwise
+/// render blanks/nothing forever), and refetched when retention dropped the
+/// HTML. When a refetch fails but text is cached (offline, say), the text
+/// is served instead of an error.
 async fn load_body(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -1720,7 +1724,7 @@ async fn load_body(
                     .await?
                     .is_empty()));
 
-    if cached && !backfill {
+    if cached && !backfill && !row.html_dropped {
         let images = storage::messages::images(&state.pool, message_id).await?;
         return Ok(LoadedBody {
             html: row.body_html,
@@ -1730,17 +1734,38 @@ async fn load_body(
             from: row.from_addr,
         });
     }
-    let account = storage::accounts::get(&state.pool, row.account_id).await?;
-    let password = state.password(account.id).await?;
-    let parsed = mail::sync::fetch_body_into_cache(
-        &state.pool,
-        &account,
-        &password,
-        message_id,
-        &row.mailbox,
-        row.uid,
-    )
-    .await?;
+    let fetched = async {
+        let account = storage::accounts::get(&state.pool, row.account_id).await?;
+        let password = state.password(account.id).await?;
+        mail::sync::fetch_body_into_cache(
+            &state.pool,
+            &account,
+            &password,
+            message_id,
+            &row.mailbox,
+            row.uid,
+        )
+        .await
+    }
+    .await;
+    let parsed = match fetched {
+        Ok(parsed) => parsed,
+        // why fall back only when something is cached: with nothing to show
+        // the error is the answer; with the text still here (HTML dropped by
+        // retention, or a legacy row), a read that works beats a failure.
+        Err(err) if cached => {
+            eprintln!("could not refetch the body of message {message_id}: {err}");
+            let images = storage::messages::images(&state.pool, message_id).await?;
+            return Ok(LoadedBody {
+                html: row.body_html,
+                text: row.body_text,
+                images,
+                auth: parse_auth(row.auth_results.as_deref()),
+                from: row.from_addr,
+            });
+        }
+        Err(err) => return Err(err),
+    };
     // why: the snippet just became real — lists should refresh.
     app.emit("messages-changed", MessagesChanged::reload(row.account_id))?;
     Ok(LoadedBody {
@@ -1765,12 +1790,18 @@ pub async fn thread_bodies(
     let _t = timing::start("cmd::thread_bodies");
     let thread = storage::messages::thread_of(&state.pool, message_id).await?;
 
-    // Members whose body is not cached yet, grouped by the folder to select.
+    // Members to download, grouped by the folder to select: those with no
+    // cached body yet, and those whose HTML retention dropped.
     let mut missing: std::collections::BTreeMap<String, Vec<(i64, i64)>> = Default::default();
     let mut fetch_account = None;
+    // True when some member has nothing cached at all — then a failed
+    // download is an error. Otherwise every member still has its text.
+    let mut must_fetch = false;
     for header in &thread {
         let row = storage::messages::get_body(&state.pool, header.id).await?;
-        if row.body_text.is_none() && row.body_html.is_none() {
+        let empty = row.body_text.is_none() && row.body_html.is_none();
+        if empty || row.html_dropped {
+            must_fetch |= empty;
             fetch_account = Some(row.account_id);
             missing
                 .entry(row.mailbox)
@@ -1780,20 +1811,30 @@ pub async fn thread_bodies(
     }
 
     if let Some(account_id) = fetch_account {
-        let account = storage::accounts::get(&state.pool, account_id).await?;
-        let password = state.password(account_id).await?;
-        let mut session = mail::imap::connect(
-            &account.imap_host,
-            account.imap_port,
-            &account.username,
-            &password,
-        )
-        .await?;
-        let fetched = download_thread_bodies(&state.pool, &mut session, &missing).await;
-        let _ = session.logout().await;
-        fetched?;
-        // why: snippets just became real — lists should refresh.
-        app.emit("messages-changed", MessagesChanged::reload(account_id))?;
+        let downloaded = async {
+            let account = storage::accounts::get(&state.pool, account_id).await?;
+            let password = state.password(account_id).await?;
+            let mut session = mail::imap::connect(
+                &account.imap_host,
+                account.imap_port,
+                &account.username,
+                &password,
+            )
+            .await?;
+            let fetched = download_thread_bodies(&state.pool, &mut session, &missing).await;
+            let _ = session.logout().await;
+            fetched
+        }
+        .await;
+        match downloaded {
+            // why: snippets just became real — lists should refresh.
+            Ok(()) => app.emit("messages-changed", MessagesChanged::reload(account_id))?,
+            // Offline, say: every member still has its text to show.
+            Err(err) if !must_fetch => {
+                eprintln!("could not refetch conversation bodies: {err}");
+            }
+            Err(err) => return Err(err),
+        }
     }
 
     let policy = storage::settings::remote_image_policy(&state.pool).await?;
@@ -1829,6 +1870,11 @@ pub async fn thread_bodies(
         body.sender_anomaly =
             storage::contacts::sender_anomaly(&state.pool, &header.from, &own).await?;
         bodies.insert(header.id, body);
+    }
+    // Shown now: every member's HTML retention period starts over.
+    let now = now_epoch();
+    for header in &thread {
+        storage::messages::touch_html(&state.pool, header.id, now).await?;
     }
     Ok(bodies)
 }
