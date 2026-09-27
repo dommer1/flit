@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 use crate::error::AppError;
 use crate::mail::{imap, parse};
 use crate::models::Account;
-use crate::storage::messages::{self, FetchedHeader};
+use crate::storage::messages::{self, FetchedHeader, MissingBody};
 use crate::timing;
 
 const INITIAL_FETCH: u32 = 50;
@@ -333,17 +333,22 @@ fn missing_uids(on_server: Vec<i64>, cached: &std::collections::HashSet<i64>) ->
 
 /// Cross the prefetch work-list with the sizes the server reported: fetch
 /// only messages known to be small enough, refuse the rest. No size
-/// reported → refused — never download blind.
-fn prefetch_plan(missing: &[(i64, i64)], sizes: &[(i64, u32)], max_bytes: u32) -> PrefetchPlan {
+/// reported → refused — never download blind. A message another cached
+/// copy already holds the body of is refused too: it would be stored twice.
+fn prefetch_plan(missing: &[MissingBody], sizes: &[(i64, u32)], max_bytes: u32) -> PrefetchPlan {
     let mut plan = PrefetchPlan::default();
-    for &(message_id, uid) in missing {
+    for row in missing {
+        if row.copy_has_body {
+            plan.skip.push(row.id);
+            continue;
+        }
         let small = sizes
             .iter()
-            .any(|&(sized_uid, size)| sized_uid == uid && size <= max_bytes);
+            .any(|&(sized_uid, size)| sized_uid == row.uid && size <= max_bytes);
         if small {
-            plan.fetch.push((message_id, uid));
+            plan.fetch.push((row.id, row.uid));
         } else {
-            plan.skip.push(message_id);
+            plan.skip.push(row.id);
         }
     }
     plan
@@ -376,6 +381,13 @@ pub async fn prefetch_bodies(
         if budget == 0 {
             break;
         }
+        // why: Spam and Trash are mail the user does not want; downloading
+        // their bodies ahead of time only costs bandwidth and disk. Opening
+        // one still fetches it on demand.
+        if matches!(folder.role.as_deref(), Some("junk" | "trash")) {
+            messages::skip_prefetch_in_mailbox(pool, account.id, &folder.name).await?;
+            continue;
+        }
         let missing = messages::uids_missing_body(pool, account.id, &folder.name, budget).await?;
         if missing.is_empty() {
             continue;
@@ -385,7 +397,7 @@ pub async fn prefetch_bodies(
             .await
             .map_err(|e| AppError::Imap(format!("select {}: {e}", folder.name)))?;
 
-        let uids: Vec<i64> = missing.iter().map(|(_, uid)| *uid).collect();
+        let uids: Vec<i64> = missing.iter().map(|m| m.uid).collect();
         let sizes = imap::fetch_sizes(session, &uids).await?;
 
         let plan = prefetch_plan(&missing, &sizes, MAX_PREFETCH_BYTES);
@@ -723,7 +735,11 @@ mod tests {
 
     #[test]
     fn prefetch_plan_keeps_only_small_messages_with_a_known_size() {
-        let missing = [(1, 101), (2, 102), (3, 103)];
+        let missing = [(1, 101), (2, 102), (3, 103)].map(|(id, uid)| MissingBody {
+            id,
+            uid,
+            copy_has_body: false,
+        });
         // 102 is over the cap; 103 never got a size back from the server.
         let sizes = [(101, 10_000), (102, 999_999)];
 
@@ -733,6 +749,28 @@ mod tests {
         // Refused rows are named, so they can leave the queue for good —
         // otherwise they head it again on every pass.
         assert_eq!(plan.skip, vec![2, 3]);
+    }
+
+    #[test]
+    fn prefetch_plan_skips_messages_another_copy_already_holds() {
+        let missing = [
+            MissingBody {
+                id: 1,
+                uid: 101,
+                copy_has_body: true,
+            },
+            MissingBody {
+                id: 2,
+                uid: 102,
+                copy_has_body: false,
+            },
+        ];
+        let sizes = [(101, 10_000), (102, 10_000)];
+
+        let plan = prefetch_plan(&missing, &sizes, 262_144);
+
+        assert_eq!(plan.fetch, vec![(2, 102)]);
+        assert_eq!(plan.skip, vec![1]);
     }
 
     #[test]

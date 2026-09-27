@@ -877,17 +877,36 @@ pub async fn images(pool: &SqlitePool, message_id: i64) -> Result<Vec<InlineImag
 
 /// The body-prefetch work-list: `(id, uid)` of messages with no cached body,
 /// newest first so recent mail becomes searchable soonest.
+/// One cached message still waiting for its body.
+#[derive(Debug, Clone, Copy, PartialEq, sqlx::FromRow)]
+pub struct MissingBody {
+    /// Row id.
+    pub id: i64,
+    pub uid: i64,
+    /// Another cached copy of the same message (same Message-ID, same
+    /// account — Gmail files one message in several folders) already has
+    /// its body, so downloading this one would only store it twice.
+    pub copy_has_body: bool,
+}
+
 pub async fn uids_missing_body(
     pool: &SqlitePool,
     account_id: i64,
     mailbox: &str,
     limit: i64,
-) -> Result<Vec<(i64, i64)>, AppError> {
+) -> Result<Vec<MissingBody>, AppError> {
     let rows = sqlx::query_as(
-        "SELECT id, uid FROM messages
-         WHERE account_id = ? AND mailbox = ?
-           AND body_text IS NULL AND body_html IS NULL AND prefetch_skipped = 0
-         ORDER BY date DESC
+        "SELECT m.id, m.uid,
+                m.message_id_hdr <> '' AND EXISTS (
+                  SELECT 1 FROM messages c
+                  WHERE c.account_id = m.account_id
+                    AND c.message_id_hdr = m.message_id_hdr
+                    AND (c.body_text IS NOT NULL OR c.body_html IS NOT NULL)
+                ) AS copy_has_body
+         FROM messages m
+         WHERE m.account_id = ? AND m.mailbox = ?
+           AND m.body_text IS NULL AND m.body_html IS NULL AND m.prefetch_skipped = 0
+         ORDER BY m.date DESC
          LIMIT ?",
     )
     .bind(account_id)
@@ -907,6 +926,26 @@ pub async fn skip_prefetch(pool: &SqlitePool, message_id: i64) -> Result<(), App
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Take every body-less message of one folder off the prefetch queue —
+/// for folders whose mail is not worth downloading ahead (Spam, Trash).
+/// Returns how many rows were newly skipped.
+pub async fn skip_prefetch_in_mailbox(
+    pool: &SqlitePool,
+    account_id: i64,
+    mailbox: &str,
+) -> Result<u64, AppError> {
+    let done = sqlx::query(
+        "UPDATE messages SET prefetch_skipped = 1
+         WHERE account_id = ? AND mailbox = ?
+           AND body_text IS NULL AND body_html IS NULL AND prefetch_skipped = 0",
+    )
+    .bind(account_id)
+    .bind(mailbox)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
 }
 
 /// Whether any cached message of this account, in any folder, still lacks
@@ -2706,7 +2745,7 @@ mod tests {
         assert!(!has_missing_bodies(&pool, id).await.unwrap());
         assert_eq!(
             uids_missing_body(&pool, id, "INBOX", 10).await.unwrap(),
-            Vec::<(i64, i64)>::new()
+            Vec::<MissingBody>::new()
         );
     }
 
@@ -2761,12 +2800,12 @@ mod tests {
             .unwrap();
 
         let missing = uids_missing_body(&pool, id, "INBOX", 10).await.unwrap();
-        let uids: Vec<i64> = missing.iter().map(|(_, uid)| *uid).collect();
+        let uids: Vec<i64> = missing.iter().map(|m| m.uid).collect();
         assert_eq!(uids, vec![3, 1]);
 
         let limited = uids_missing_body(&pool, id, "INBOX", 1).await.unwrap();
         assert_eq!(limited.len(), 1);
-        assert_eq!(limited[0].1, 3);
+        assert_eq!(limited[0].uid, 3);
     }
 
     #[tokio::test]
@@ -2788,18 +2827,100 @@ mod tests {
         .await
         .unwrap();
         let huge = uids_missing_body(&pool, id, "INBOX", 1).await.unwrap()[0];
-        assert_eq!(huge.1, 2);
+        assert_eq!(huge.uid, 2);
 
-        skip_prefetch(&pool, huge.0).await.unwrap();
+        skip_prefetch(&pool, huge.id).await.unwrap();
 
         let next = uids_missing_body(&pool, id, "INBOX", 1).await.unwrap();
-        assert_eq!(next[0].1, 1);
-        let old_id = next[0].0;
+        assert_eq!(next[0].uid, 1);
+        let old_id = next[0].id;
         set_body(&pool, old_id, Some("text"), None, "text", &[], &[], None)
             .await
             .unwrap();
         // Only the skipped one is left: nothing more to prefetch.
         assert!(!has_missing_bodies(&pool, id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_missing_body_whose_copy_has_one_is_flagged() {
+        // Gmail files one message in INBOX, All Mail and every label; the
+        // body of one copy is the body of all, so prefetching the others
+        // downloaded and stored it again (a third of the cached rows were
+        // such copies on a real account).
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "m1@x", "", &[]), threaded(5, "", "", &[])],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "All Mail",
+            &[
+                threaded(2, "m1@x", "", &[]),
+                threaded(3, "m2@x", "", &[]),
+                threaded(4, "", "", &[]),
+            ],
+        )
+        .await
+        .unwrap();
+        for row in uids_missing_body(&pool, id, "INBOX", 10).await.unwrap() {
+            set_body(&pool, row.id, Some("text"), None, "text", &[], &[], None)
+                .await
+                .unwrap();
+        }
+
+        let missing = uids_missing_body(&pool, id, "All Mail", 10).await.unwrap();
+        let flagged: Vec<(i64, bool)> = missing.iter().map(|m| (m.uid, m.copy_has_body)).collect();
+
+        // uid 2 shares m1's Message-ID with the INBOX copy that has a body.
+        // uid 4 has no Message-ID: it can never be matched, not even to
+        // another id-less row (uid 5) that has a body.
+        assert_eq!(flagged, vec![(4, false), (3, false), (2, true)]);
+    }
+
+    #[tokio::test]
+    async fn a_whole_folder_can_leave_the_prefetch_queue() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "Spam",
+            &[header(1, "Win", "2026-07-01T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(2, "Hi", "2026-07-02T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            skip_prefetch_in_mailbox(&pool, id, "Spam").await.unwrap(),
+            1
+        );
+
+        assert!(uids_missing_body(&pool, id, "Spam", 10)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            uids_missing_body(&pool, id, "INBOX", 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
