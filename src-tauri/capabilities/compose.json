@@ -1,0 +1,30 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "compose",
+  "description": "Compose windows. They hold mail-derived HTML (the sanctioned reply-quote exception), so they get only what writing and sending needs: drafts, the send queue, recipients, signatures and attachment inspection — no saving attachments to disk, no account or settings changes. Closing destroys the window.",
+  "windows": [
+    "compose-*"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-destroy",
+    "allow-attachment-preview",
+    "allow-close-compose",
+    "allow-discard-draft",
+    "allow-get-shortcuts",
+    "allow-inspect-attachments",
+    "allow-list-accounts",
+    "allow-list-aliases",
+    "allow-list-contacts",
+    "allow-list-signatures",
+    "allow-log-timing",
+    "allow-queue-send",
+    "allow-save-draft",
+    "allow-schedule-send",
+    "allow-take-compose-draft",
+    "allow-timing-enabled"
+  ]
+}
