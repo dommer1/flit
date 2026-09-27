@@ -238,6 +238,19 @@ fn inline_style_property_set() -> HashSet<&'static str> {
     set
 }
 
+/// Most bytes of `data:` image URIs one document may inline. Every
+/// reference to an image is its own full copy, so without a ceiling one
+/// inline image referenced thousands of times (a few KB of markup) grows
+/// into gigabytes on its way to the webview. Real mail stays far below it:
+/// servers cap a whole message at 25-50 MB.
+#[cfg(not(test))]
+const MAX_INLINED_BYTES: usize = 64 * 1024 * 1024;
+// why smaller under test: the budget tests inline right up to the ceiling,
+// and 64 MB of attribute text takes seconds through an unoptimised ammonia.
+// Same logic, smaller number.
+#[cfg(test)]
+const MAX_INLINED_BYTES: usize = 64 * 1024;
+
 /// What `build_srcdoc` hands back: the locked-down document plus how many
 /// loadable remote images stayed blocked (drives the "Load images" banner).
 #[derive(Debug)]
@@ -323,6 +336,10 @@ fn sanitize(
     let remote = remote.clone();
     let blocked = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&blocked);
+    // why an atomic, not a plain counter: ammonia's attribute_filter must be
+    // Send + Sync, so the closure can only mutate through one. Owned by the
+    // closure (moved in) — nothing reads it afterwards.
+    let inlined = AtomicUsize::new(0);
     let untrusted_html = rename_foreign_named_tags(untrusted_html);
 
     let html = ammonia::Builder::default()
@@ -410,7 +427,7 @@ fn sanitize(
             let is_background_attr =
                 attribute == "background" && matches!(element, "table" | "tr" | "td" | "th");
             if is_img_src || is_background_attr {
-                return img_src(value, &data_uris, &remote, &counter);
+                return img_src(value, &data_uris, &remote, &counter, &inlined);
             }
             if attribute == "style" {
                 // Decided 2026-09-18: a CSS background/background-image is
@@ -422,7 +439,7 @@ fn sanitize(
                 // url(...) are ever touched, everything else in the
                 // declaration list is untouched.
                 return Some(resolve_style_backgrounds(
-                    value, &data_uris, &remote, &counter,
+                    value, &data_uris, &remote, &counter, &inlined,
                 ));
             }
             // Everywhere else (a href, blockquote cite, …) data: and cid:
@@ -584,17 +601,22 @@ pub fn remote_image_urls(untrusted_html: &str) -> Vec<String> {
 /// Policy for `<img src>`: cid: resolves to the matching inline image (or
 /// nothing), data:image/* passes through (inert, can't track), fetched
 /// https refs resolve to their data: URI, everything else survives for
-/// layout but the CSP prevents it from ever loading.
+/// layout but the CSP prevents it from ever loading. Resolving stops once
+/// the document has inlined `MAX_INLINED_BYTES` (`inlined` keeps count).
 fn img_src<'v>(
     value: &'v str,
     data_uris: &HashMap<String, String>,
     remote: &HashMap<String, String>,
     blocked: &AtomicUsize,
+    inlined: &AtomicUsize,
 ) -> Option<Cow<'v, str>> {
     let effective = effective_url(value);
     if scheme_is(value, "cid") {
         let cid = &effective["cid:".len()..];
-        return data_uris.get(cid).map(|uri| uri.clone().into());
+        return data_uris
+            .get(cid)
+            .filter(|uri| take_budget(uri, inlined))
+            .map(|uri| uri.clone().into());
     }
     if scheme_is(value, "data") {
         // Only images may inline data — data:text/html and friends have no
@@ -605,12 +627,29 @@ fn img_src<'v>(
         return None;
     }
     if scheme_is(value, "https") {
-        if let Some(uri) = remote.get(&effective) {
-            return Some(uri.clone().into());
+        match remote.get(&effective) {
+            Some(uri) if take_budget(uri, inlined) => return Some(uri.clone().into()),
+            // Fetched, but over budget: stays an inert URL. Not counted as
+            // blocked — loading images again would not show it either.
+            Some(_) => {}
+            None => {
+                blocked.fetch_add(1, Ordering::Relaxed);
+            }
         }
-        blocked.fetch_add(1, Ordering::Relaxed);
     }
     Some(value.into())
+}
+
+/// Reserve room for one more inlined copy of `uri`; false once it would
+/// push the document past `MAX_INLINED_BYTES`. A smaller image later on
+/// may still fit.
+fn take_budget(uri: &str, inlined: &AtomicUsize) -> bool {
+    let used = inlined.load(Ordering::Relaxed);
+    if used + uri.len() > MAX_INLINED_BYTES {
+        return false;
+    }
+    inlined.store(used + uri.len(), Ordering::Relaxed);
+    true
 }
 
 /// Byte range (into `style`) of the URL argument — already unquoted and
@@ -698,6 +737,7 @@ fn resolve_style_backgrounds<'a>(
     data_uris: &HashMap<String, String>,
     remote: &HashMap<String, String>,
     blocked: &AtomicUsize,
+    inlined: &AtomicUsize,
 ) -> Cow<'a, str> {
     let ranges = background_url_ranges(style);
     if ranges.is_empty() {
@@ -706,7 +746,7 @@ fn resolve_style_backgrounds<'a>(
     let mut out = String::with_capacity(style.len());
     let mut copied = 0;
     for (range, raw) in ranges {
-        if let Some(resolved) = img_src(raw, data_uris, remote, blocked) {
+        if let Some(resolved) = img_src(raw, data_uris, remote, blocked, inlined) {
             out.push_str(&style[copied..range.start]);
             out.push_str(&resolved);
             copied = range.end;
@@ -939,6 +979,45 @@ mod tests {
         assert!(!doc.contains("src="));
         // The tag itself survives for layout.
         assert!(doc.contains("<img"));
+    }
+
+    #[test]
+    fn stops_inlining_images_past_the_per_document_budget() {
+        // Every reference is a full copy of the image. One inline image
+        // named over and over turned a few KB of markup into gigabytes.
+        let big = InlineImage {
+            content_id: "big".to_string(),
+            content_type: "image/png".to_string(),
+            data: vec![0; MAX_INLINED_BYTES / 8],
+        };
+        let one_copy = data_uri(&big).len();
+        let html = r#"<img src="cid:big">"#.repeat(40);
+
+        let (doc, _) = sanitize(&html, &[big], &HashMap::new());
+
+        let copies = doc.matches("data:image/png;base64,").count();
+        assert_eq!(copies, MAX_INLINED_BYTES / one_copy);
+        assert!(doc.len() <= MAX_INLINED_BYTES + 64 * 1024);
+        // References past the budget lose their src, like an unknown cid.
+        assert_eq!(doc.matches("<img>").count(), 40 - copies);
+    }
+
+    #[test]
+    fn remote_images_past_the_budget_stay_inert() {
+        let mut remote = HashMap::new();
+        // Three copies fit the budget, a fourth would not.
+        let a_third = "A".repeat(MAX_INLINED_BYTES / 3 - 64);
+        let huge = format!("data:image/png;base64,{a_third}");
+        remote.insert("https://a.example/x.png".to_string(), huge);
+        let html = r#"<img src="https://a.example/x.png">"#.repeat(5);
+
+        let (doc, blocked) = sanitize(&html, &[], &remote);
+
+        assert_eq!(doc.matches("data:image/png;base64,").count(), 3);
+        // The rest keep their https URL, which the CSP never loads. They
+        // are not "blocked": loading images again would not show them.
+        assert_eq!(doc.matches("src=\"https://a.example/x.png\"").count(), 2);
+        assert_eq!(blocked, 0);
     }
 
     #[test]
