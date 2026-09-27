@@ -149,12 +149,21 @@ pub async fn load_avatars(pool: &SqlitePool, domains: &[String]) -> HashMap<Stri
             None => to_fetch.push(domain),
         }
     }
-    if to_fetch.is_empty() {
-        return resolved;
+    if !to_fetch.is_empty() {
+        fetch_and_store(pool, to_fetch, &mut resolved).await;
     }
+    resolved
+}
 
+/// Fetch the icons of `to_fetch` from the network, cache every outcome, and
+/// add the found ones to `resolved`.
+async fn fetch_and_store(
+    pool: &SqlitePool,
+    to_fetch: Vec<String>,
+    resolved: &mut HashMap<String, String>,
+) {
     let Ok(client) = client() else {
-        return resolved;
+        return;
     };
     let fetched = futures::stream::iter(to_fetch.into_iter().map(|domain| {
         let client = client.clone();
@@ -179,7 +188,6 @@ pub async fn load_avatars(pool: &SqlitePool, domains: &[String]) -> HashMap<Stri
             None => store_missing(pool, &domain).await,
         }
     }
-    resolved
 }
 
 /// Whether a string is a public hostname safe to splice into a fetch URL.
