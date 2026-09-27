@@ -205,7 +205,9 @@ fn attachment_meta(message: &Message) -> Vec<AttachmentMeta> {
         .filter(|(_, part)| !is_inline_image(part))
         .map(|(index, part)| AttachmentMeta {
             part_index: index as i64,
-            filename: part.attachment_name().unwrap_or("attachment").to_string(),
+            // why sanitized here: the name reaches the save dialog as its
+            // default path, and a path-like default opens that folder.
+            filename: safe_filename(part.attachment_name().unwrap_or("attachment")),
             content_type: part
                 .content_type()
                 .map(|ct| match ct.subtype() {
@@ -825,6 +827,35 @@ mod tests {
 
         assert_eq!(attachment_data(RAW_WITH_ATTACHMENTS, 99), None);
         assert_eq!(attachment_data(b"not mail", 0), None);
+    }
+
+    #[test]
+    fn attachment_names_from_the_sender_arrive_sanitized() {
+        // The name becomes the save dialog's default path, and a path-like
+        // default makes the dialog open in that folder — here the user's
+        // LaunchAgents, one click away from a login item.
+        let raw = b"From: a@example.com\r\n\
+            Subject: Invoice\r\n\
+            MIME-Version: 1.0\r\n\
+            Content-Type: multipart/mixed; boundary=\"b1\"\r\n\
+            \r\n\
+            --b1\r\n\
+            Content-Type: text/plain\r\n\
+            \r\n\
+            see attachment\r\n\
+            --b1\r\n\
+            Content-Type: application/octet-stream\r\n\
+            Content-Disposition: attachment; filename=\"/Users/me/Library/LaunchAgents/x.plist\"\r\n\
+            \r\n\
+            rawbytes\r\n\
+            --b1--\r\n";
+
+        let body = parse_body(raw);
+
+        assert_eq!(
+            body.attachments[0].filename,
+            "_Users_me_Library_LaunchAgents_x.plist"
+        );
     }
 
     #[test]
