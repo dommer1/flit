@@ -162,11 +162,10 @@ const BACKGROUND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3
 /// poller) that have an AppHandle but no `State` extractor.
 pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), AppError> {
     // why the whole pass runs in one spawned task while the caller waits only
-    // for the inbox stage: the sync slot is what stops an account opening two
-    // IMAP sessions at once, and it borrows AppState, so it cannot be handed
-    // across a spawn. Keeping every stage inside one task keeps the slot held
-    // for all of them — and the oneshot still lets "check for new mail" report
-    // done as soon as the inbox has landed, instead of after all 26 folders.
+    // for the inbox stage: the sync and background slots borrow AppState, so
+    // they cannot be handed across a spawn — every stage lives in one task,
+    // and the oneshot still lets "check for new mail" report done as soon as
+    // the inbox has landed, instead of after all 26 folders.
     let (report, inbox_done) = tokio::sync::oneshot::channel();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
