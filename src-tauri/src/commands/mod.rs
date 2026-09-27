@@ -115,6 +115,19 @@ pub async fn delete_account(
 /// headers.
 #[tauri::command]
 pub async fn sync_account(app: AppHandle, account_id: i64) -> Result<(), AppError> {
+    // why: every folder switch asks for this, and a full pass is 0.2-10 s
+    // of network and CPU (measured) — clicking through three folders ran
+    // three. A minute after one started, the account is fresh enough to
+    // browse; push keeps the inbox current, and "Check for new mail"
+    // (refresh_account) always runs.
+    let recent = app.state::<AppState>().full_pass_within(
+        account_id,
+        now_epoch(),
+        FOLDER_SWITCH_SYNC_WINDOW_SECS,
+    );
+    if recent {
+        return Ok(());
+    }
     run_sync(&app, account_id, SyncScope::Everything).await
 }
 
@@ -158,6 +171,9 @@ const SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60)
 /// left off on the next pass, so cutting one short costs nothing but time.
 const BACKGROUND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
+/// How long after a full pass a folder switch skips starting another.
+const FOLDER_SWITCH_SYNC_WINDOW_SECS: i64 = 60;
+
 /// How much of an account one sync pass covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SyncScope {
@@ -184,6 +200,10 @@ pub(crate) async fn run_sync(
     // they cannot be handed across a spawn — every stage lives in one task,
     // and the oneshot still lets "check for new mail" report done as soon as
     // the inbox has landed, instead of after all 26 folders.
+    if scope == SyncScope::Everything {
+        app.state::<AppState>()
+            .note_full_pass(account_id, now_epoch());
+    }
     let (report, inbox_done) = tokio::sync::oneshot::channel();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
