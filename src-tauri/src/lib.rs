@@ -259,6 +259,23 @@ mod tests {
     }
 
     #[test]
+    fn the_app_csp_closes_what_default_src_does_not_cover() {
+        // default-src is no fallback for base-uri or form-action, and
+        // object-src should never depend on it. The message iframe (srcdoc)
+        // inherits this policy too.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid config");
+        let security = &config["app"]["security"];
+        let csp = security["csp"].as_str().expect("a CSP string");
+        for directive in ["object-src 'none'", "base-uri 'none'", "form-action 'none'"] {
+            assert!(csp.contains(directive), "CSP lacks {directive}: {csp}");
+        }
+        // Frozen built-in prototypes: a polluted Object.prototype can't
+        // reach Tauri's IPC glue.
+        assert_eq!(security["freezePrototype"], true);
+    }
+
+    #[test]
     fn keeps_every_other_scheme_inside_the_app() {
         // A message names the URL, so the scheme is untrusted input: handing
         // an arbitrary one to the OS would let a sender pick which app
