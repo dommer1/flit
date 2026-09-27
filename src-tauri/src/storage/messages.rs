@@ -883,6 +883,10 @@ pub struct MissingBody {
     /// Row id.
     pub id: i64,
     pub uid: i64,
+    /// Another cached copy of the same message (same Message-ID, same
+    /// account — Gmail files one message in several folders) already has
+    /// its body, so downloading this one would only store it twice.
+    pub copy_has_body: bool,
 }
 
 pub async fn uids_missing_body(
@@ -892,10 +896,17 @@ pub async fn uids_missing_body(
     limit: i64,
 ) -> Result<Vec<MissingBody>, AppError> {
     let rows = sqlx::query_as(
-        "SELECT id, uid FROM messages
-         WHERE account_id = ? AND mailbox = ?
-           AND body_text IS NULL AND body_html IS NULL AND prefetch_skipped = 0
-         ORDER BY date DESC
+        "SELECT m.id, m.uid,
+                m.message_id_hdr <> '' AND EXISTS (
+                  SELECT 1 FROM messages c
+                  WHERE c.account_id = m.account_id
+                    AND c.message_id_hdr = m.message_id_hdr
+                    AND (c.body_text IS NOT NULL OR c.body_html IS NOT NULL)
+                ) AS copy_has_body
+         FROM messages m
+         WHERE m.account_id = ? AND m.mailbox = ?
+           AND m.body_text IS NULL AND m.body_html IS NULL AND m.prefetch_skipped = 0
+         ORDER BY m.date DESC
          LIMIT ?",
     )
     .bind(account_id)
@@ -2808,6 +2819,49 @@ mod tests {
             .unwrap();
         // Only the skipped one is left: nothing more to prefetch.
         assert!(!has_missing_bodies(&pool, id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_missing_body_whose_copy_has_one_is_flagged() {
+        // Gmail files one message in INBOX, All Mail and every label; the
+        // body of one copy is the body of all, so prefetching the others
+        // downloaded and stored it again (a third of the cached rows were
+        // such copies on a real account).
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[threaded(1, "m1@x", "", &[]), threaded(5, "", "", &[])],
+        )
+        .await
+        .unwrap();
+        upsert_headers(
+            &pool,
+            id,
+            "All Mail",
+            &[
+                threaded(2, "m1@x", "", &[]),
+                threaded(3, "m2@x", "", &[]),
+                threaded(4, "", "", &[]),
+            ],
+        )
+        .await
+        .unwrap();
+        for row in uids_missing_body(&pool, id, "INBOX", 10).await.unwrap() {
+            set_body(&pool, row.id, Some("text"), None, "text", &[], &[], None)
+                .await
+                .unwrap();
+        }
+
+        let missing = uids_missing_body(&pool, id, "All Mail", 10).await.unwrap();
+        let flagged: Vec<(i64, bool)> = missing.iter().map(|m| (m.uid, m.copy_has_body)).collect();
+
+        // uid 2 shares m1's Message-ID with the INBOX copy that has a body.
+        // uid 4 has no Message-ID: it can never be matched, not even to
+        // another id-less row (uid 5) that has a body.
+        assert_eq!(flagged, vec![(4, false), (3, false), (2, true)]);
     }
 
     #[tokio::test]
