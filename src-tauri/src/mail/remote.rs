@@ -33,7 +33,10 @@ pub async fn load_images(pool: &SqlitePool, urls: &[String]) -> HashMap<String, 
 
     let mut resolved = HashMap::new();
     let mut to_fetch = Vec::new();
-    for url in urls.iter().filter(|u| !trackers::is_tracker(u)) {
+    for url in urls
+        .iter()
+        .filter(|u| is_loadable_url(u) && !trackers::is_tracker(u))
+    {
         if resolved.len() + to_fetch.len() >= MAX_IMAGES {
             break;
         }
@@ -70,6 +73,26 @@ pub async fn load_images(pool: &SqlitePool, urls: &[String]) -> HashMap<String, 
         }
     }
     resolved
+}
+
+/// Whether an image URL may be fetched at all: https, to a host that is a
+/// public name — never an IP literal, a single-label name or a reserved
+/// suffix (`localhost`, `.local`, `.internal`, …).
+///
+/// why: the URL is the sender's choice, so without this a "Load images"
+/// click (or the "always" policy) aimed a blind GET wherever the mail
+/// pointed — this Mac, the router, an intranet host whose certificate the
+/// machine trusts. Same guard, and the same limit (a public name resolving
+/// to a private address), as the avatar lookup's.
+fn is_loadable_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    // why `domain()`: it is None for IP-literal hosts, which is the point.
+    parsed.scheme() == "https"
+        && parsed
+            .domain()
+            .is_some_and(super::avatars::is_fetchable_domain)
 }
 
 /// One shared client per load: TLS-only (redirects included), bounded
@@ -185,20 +208,55 @@ mod tests {
     #[tokio::test]
     async fn cache_roundtrips_and_serves_without_network() {
         let pool = test_pool().await;
-        store(&pool, "https://a.example/x.png", "image/png", b"\x89PNG").await;
+        // A public-looking host (.example is reserved and refused as a
+        // fetch target); "zz" is no real TLD, so nothing could leave anyway.
+        store(&pool, "https://img.shop.zz/x.png", "image/png", b"\x89PNG").await;
 
         // Everything already cached (or a tracker) — no fetch, no network.
         let urls = vec![
-            "https://a.example/x.png".to_string(),
+            "https://img.shop.zz/x.png".to_string(),
             "https://u1.ct.sendgrid.net/open.png".to_string(),
         ];
         let resolved = load_images(&pool, &urls).await;
 
         assert_eq!(resolved.len(), 1);
         assert_eq!(
-            resolved["https://a.example/x.png"],
+            resolved["https://img.shop.zz/x.png"],
             "data:image/png;base64,iVBORw=="
         );
+    }
+
+    #[test]
+    fn only_public_https_hosts_are_loadable() {
+        // The URL is the sender's choice. Without a host check a "Load
+        // images" click aimed a blind GET wherever the mail pointed —
+        // this Mac, the router, an intranet host with a trusted certificate.
+        for url in [
+            "https://localhost/x.png",
+            "https://127.0.0.1/x.png",
+            "https://[::1]/x.png",
+            "https://192.168.1.1/x.png",
+            "https://router/x.png",
+            "https://printer.local/x.png",
+            "https://jenkins.corp.internal/x.png",
+            "http://images.example.com/x.png",
+            "not a url",
+        ] {
+            assert!(!is_loadable_url(url), "should refuse {url}");
+        }
+        assert!(is_loadable_url("https://images.shop.com/logo.png"));
+        assert!(is_loadable_url("https://cdn.example.co.uk:8443/a.gif?x=1"));
+    }
+
+    #[tokio::test]
+    async fn refused_hosts_are_not_served_even_from_the_cache() {
+        let pool = test_pool().await;
+        // A row fetched before hosts were checked.
+        store(&pool, "https://localhost/x.png", "image/png", b"\x89PNG").await;
+
+        let resolved = load_images(&pool, &["https://localhost/x.png".to_string()]).await;
+
+        assert!(resolved.is_empty());
     }
 
     #[tokio::test]
