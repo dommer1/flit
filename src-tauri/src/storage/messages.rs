@@ -882,15 +882,19 @@ pub async fn skip_prefetch(pool: &SqlitePool, message_id: i64) -> Result<(), App
 /// Whether any cached message of this account, in any folder, still lacks
 /// a body — lets the prefetcher skip connecting when there is nothing to do.
 pub async fn has_missing_bodies(pool: &SqlitePool, account_id: i64) -> Result<bool, AppError> {
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM messages
-         WHERE account_id = ? AND body_text IS NULL AND body_html IS NULL
-           AND prefetch_skipped = 0",
+    // why EXISTS: the answer is yes/no, and count(*) walked all 80k
+    // body-less rows of a real account (60 ms) to say "yes" every pass.
+    let any: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+           SELECT 1 FROM messages
+           WHERE account_id = ? AND body_text IS NULL AND body_html IS NULL
+             AND prefetch_skipped = 0
+         )",
     )
     .bind(account_id)
     .fetch_one(pool)
     .await?;
-    Ok(count > 0)
+    Ok(any)
 }
 
 /// `(id, uid, read)` of cached rows in one folder from `min_uid` upwards, in
