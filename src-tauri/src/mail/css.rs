@@ -20,6 +20,7 @@
 
 use std::collections::HashSet;
 
+use cssparser::{ParseError, Parser, ParserInput, Token};
 use lightningcss::declaration::DeclarationBlock;
 use lightningcss::properties::Property;
 use lightningcss::rules::CssRule;
@@ -100,6 +101,9 @@ fn style_block_contents(html: &str) -> Vec<&str> {
 /// (the caller then drops the block rather than emitting anything).
 fn sanitize_stylesheet(css: &str, allowed: &HashSet<&str>) -> Option<String> {
     // error_recovery: one malformed rule must not discard the whole sheet.
+    if nests_too_deep(css) {
+        return None;
+    }
     let options = ParserOptions {
         error_recovery: true,
         ..Default::default()
@@ -111,6 +115,51 @@ fn sanitize_stylesheet(css: &str, allowed: &HashSet<&str>) -> Option<String> {
     }
     let printed = sheet.to_css(PrinterOptions::default()).ok()?;
     Some(printed.code)
+}
+
+/// Deepest nesting of blocks — `{}` groups, `()` and functions, `[]` — a
+/// stylesheet may reach before it is dropped unparsed. Real mail CSS stays
+/// around five (`@media` › rule › `calc(` › `(` › `var(`).
+const MAX_NESTING: usize = 16;
+
+/// Whether `css` nests blocks deeper than `MAX_NESTING`.
+///
+/// why: lightningcss parses nested groups, selectors and `calc()`
+/// recursively with no depth limit, so a sheet nested tens of thousands of
+/// levels deep overflowed the thread's stack — which aborts the whole app,
+/// no error to catch. The depth is judged by cssparser, the tokenizer
+/// lightningcss itself uses, so a `}` inside a comment, a string, an escape
+/// or an unquoted `url()` cannot make the count disagree with the parser.
+fn nests_too_deep(css: &str) -> bool {
+    let mut input = ParserInput::new(css);
+    exceeds_nesting(&mut Parser::new(&mut input), 0)
+}
+
+/// why recursion is safe here: it stops at `MAX_NESTING` levels. Whatever
+/// lies deeper is skipped by cssparser itself, which closes an abandoned
+/// block with a loop, not a recursive call.
+fn exceeds_nesting(parser: &mut Parser, depth: usize) -> bool {
+    while let Ok(token) = parser.next_including_whitespace_and_comments() {
+        let opens_block = matches!(
+            token,
+            Token::CurlyBracketBlock
+                | Token::ParenthesisBlock
+                | Token::SquareBracketBlock
+                | Token::Function(_)
+        );
+        if !opens_block {
+            continue;
+        }
+        if depth == MAX_NESTING {
+            return true;
+        }
+        let deeper = parser
+            .parse_nested_block(|block| Ok::<_, ParseError<()>>(exceeds_nesting(block, depth + 1)));
+        if deeper == Ok(true) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Recursively keep only allowlisted declarations inside style rules and
@@ -153,6 +202,47 @@ fn is_empty_block(block: &DeclarationBlock) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deeply_nested_groups_are_dropped_instead_of_overflowing_the_stack() {
+        // lightningcss parses (and drops) nested blocks recursively. A
+        // 550 KB <style> of nested @media groups overflowed the thread's
+        // stack, which aborts the whole app — no error, no recovery.
+        let depth = 50_000;
+        let css = format!(
+            "{}p{{color:red}}{}",
+            "@media all{".repeat(depth),
+            "}".repeat(depth)
+        );
+        let html = format!("<style>{css}</style><p>x</p>");
+
+        assert_eq!(sanitize_style_blocks(&html, &allow()), "");
+    }
+
+    #[test]
+    fn nesting_depth_is_counted_the_way_the_css_parser_sees_it() {
+        // A naive brace count would read each of these "}" as closing a
+        // group and let the real nesting through. Only a tokenizer knows a
+        // comment, a string, an escape or an unquoted url() hides it.
+        for hide in ["/*}*/", "\"}\"", "\\}", "url(})"] {
+            let css = format!("{}p{{color:red}}", format!("@media all{{{hide}").repeat(40));
+            assert_eq!(
+                sanitize_stylesheet(&css, &allow()),
+                None,
+                "hidden brace {hide} fooled the depth check"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_nesting_survives_the_depth_check() {
+        let css = "@supports (display:grid){@media (max-width:600px){\
+                   p:not(.a):is(.b){color:rgb(calc(1 + (2 * 3)),0,0)}}}";
+
+        let clean = sanitize_stylesheet(css, &allow()).expect("kept");
+
+        assert!(clean.contains("color"));
+    }
 
     fn allow() -> HashSet<&'static str> {
         [
