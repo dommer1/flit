@@ -726,12 +726,15 @@ pub struct BodyRow {
     pub auth_results: Option<String>,
     /// The stored From line ("Name <addr>"), for the sender check.
     pub from_addr: String,
+    /// Retention removed the HTML (see drop_stale_html): the text is still
+    /// here, and an open should fetch the HTML again.
+    pub html_dropped: bool,
 }
 
 pub async fn get_body(pool: &SqlitePool, message_id: i64) -> Result<BodyRow, AppError> {
     let row = sqlx::query_as(
         "SELECT account_id, mailbox, uid, body_text, body_html, attachments_scanned, auth_results,
-                from_addr
+                from_addr, html_dropped
          FROM messages WHERE id = ?",
     )
     .bind(message_id)
@@ -768,7 +771,7 @@ pub async fn set_body(
     sqlx::query(
         "UPDATE messages SET body_text = ?, body_html = ?, snippet = ?,
                              has_attachments = ?, attachments_scanned = 1,
-                             auth_results = ? WHERE id = ?",
+                             auth_results = ?, html_dropped = 0 WHERE id = ?",
     )
     .bind(text.unwrap_or(""))
     .bind(html)
@@ -778,6 +781,22 @@ pub async fn set_body(
     .bind(message_id)
     .execute(pool)
     .await?;
+    // A freshly stored HTML body starts its retention period now.
+    if html.is_some() {
+        sqlx::query(
+            "INSERT INTO html_touches (message_id, touched_at)
+             VALUES (?, CAST(strftime('%s', 'now') AS INTEGER))
+             ON CONFLICT (message_id) DO UPDATE SET touched_at = excluded.touched_at",
+        )
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query("DELETE FROM html_touches WHERE message_id = ?")
+            .bind(message_id)
+            .execute(pool)
+            .await?;
+    }
     // why: images live inside set_body, not a separate call — one write path
     // means a cached body can never drift apart from its cid images.
     sqlx::query("DELETE FROM message_images WHERE message_id = ?")
@@ -915,6 +934,49 @@ pub async fn uids_missing_body(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Record that a message's HTML was shown at `now` (Unix seconds): its
+/// retention period starts over. A message without cached HTML is left
+/// alone.
+pub async fn touch_html(pool: &SqlitePool, message_id: i64, now: i64) -> Result<(), AppError> {
+    sqlx::query("UPDATE html_touches SET touched_at = ? WHERE message_id = ?")
+        .bind(now)
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Drop the HTML — and the cid images that only served it — of every
+/// message whose HTML was last stored or shown before `cutoff` (Unix
+/// seconds). The text stays; `html_dropped` tells an open to fetch the HTML
+/// again. Returns how many bodies lost their HTML.
+pub async fn drop_stale_html(pool: &SqlitePool, cutoff: i64) -> Result<u64, AppError> {
+    // why the write lock: this is a bulk write — see storage::WRITE_LOCK.
+    let _write = super::WRITE_LOCK.lock().await;
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "DELETE FROM message_images WHERE message_id IN
+           (SELECT message_id FROM html_touches WHERE touched_at < ?)",
+    )
+    .bind(cutoff)
+    .execute(&mut *tx)
+    .await?;
+    let dropped = sqlx::query(
+        "UPDATE messages SET body_html = NULL, html_dropped = 1 WHERE id IN
+           (SELECT message_id FROM html_touches WHERE touched_at < ?)",
+    )
+    .bind(cutoff)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    sqlx::query("DELETE FROM html_touches WHERE touched_at < ?")
+        .bind(cutoff)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(dropped)
 }
 
 /// Take a message off the prefetch queue for good: the prefetcher decided
@@ -2839,6 +2901,84 @@ mod tests {
             .unwrap();
         // Only the skipped one is left: nothing more to prefetch.
         assert!(!has_missing_bodies(&pool, id).await.unwrap());
+    }
+
+    async fn two_cached_html_bodies(pool: &SqlitePool) -> (i64, i64) {
+        let id = account(pool, "Personal").await;
+        upsert_headers(
+            pool,
+            id,
+            "INBOX",
+            &[
+                header(1, "Old", "2026-07-01T00:00:00Z", true),
+                header(2, "Fresh", "2026-07-02T00:00:00Z", true),
+            ],
+        )
+        .await
+        .unwrap();
+        let rows = uids_missing_body(pool, id, "INBOX", 10).await.unwrap();
+        let logo = InlineImage {
+            content_id: "logo".to_string(),
+            content_type: "image/png".to_string(),
+            data: b"png".to_vec(),
+        };
+        for row in &rows {
+            set_body(
+                pool,
+                row.id,
+                Some("plain text"),
+                Some("<p>html <img src=\"cid:logo\"></p>"),
+                "plain text",
+                std::slice::from_ref(&logo),
+                &[],
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        let row_of = |uid: i64| rows.iter().find(|r| r.uid == uid).unwrap().id;
+        let (old, fresh) = (row_of(1), row_of(2));
+        (old, fresh)
+    }
+
+    #[tokio::test]
+    async fn html_not_touched_within_the_retention_is_dropped_text_kept() {
+        let pool = test_pool().await;
+        let (old, fresh) = two_cached_html_bodies(&pool).await;
+        let now = 10_000_000;
+        touch_html(&pool, old, now - 61 * 86_400).await.unwrap();
+        touch_html(&pool, fresh, now - 59 * 86_400).await.unwrap();
+
+        let dropped = drop_stale_html(&pool, now - 60 * 86_400).await.unwrap();
+
+        assert_eq!(dropped, 1);
+        let body = get_body(&pool, old).await.unwrap();
+        assert_eq!(body.body_html, None);
+        assert_eq!(body.body_text.as_deref(), Some("plain text"));
+        assert!(body.html_dropped);
+        // The cid images only ever served the HTML.
+        assert!(images(&pool, old).await.unwrap().is_empty());
+        let kept = get_body(&pool, fresh).await.unwrap();
+        assert!(kept.body_html.is_some() && !kept.html_dropped);
+        assert_eq!(images(&pool, fresh).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn storing_the_body_again_brings_the_html_back() {
+        let pool = test_pool().await;
+        let (old, _) = two_cached_html_bodies(&pool).await;
+        touch_html(&pool, old, 0).await.unwrap();
+        drop_stale_html(&pool, 1).await.unwrap();
+
+        set_body(&pool, old, Some("t"), Some("<p>h</p>"), "t", &[], &[], None)
+            .await
+            .unwrap();
+
+        let body = get_body(&pool, old).await.unwrap();
+        assert_eq!(body.body_html.as_deref(), Some("<p>h</p>"));
+        assert!(!body.html_dropped);
+        // A fresh download starts a fresh 60 days: nothing to drop yet.
+        assert_eq!(drop_stale_html(&pool, 1).await.unwrap(), 0);
     }
 
     #[tokio::test]
