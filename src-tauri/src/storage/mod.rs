@@ -389,6 +389,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn changing_a_column_the_index_ignores_leaves_it_alone() {
+        // The update trigger used to fire on every column, so marking a mail
+        // read deleted and re-tokenized its whole body in the search index —
+        // about 10x the work of the flag itself, on every read/unread change
+        // made here or synced from the server.
+        let pool = test_pool().await;
+        let account = crate::storage::accounts::insert(&pool, &sample_account())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO messages (account_id, uid, uid_validity, date, subject, body_text)
+             VALUES (?, 1, 1, '2026-07-01T00:00:00Z', 'Hello', 'cenová ponuka')",
+        )
+        .bind(account.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let index_rows = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM messages_fts_data")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        let before = index_rows().await;
+
+        sqlx::query("UPDATE messages SET read = 1, thread_key = 'k', mailbox = 'Archive'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(index_rows().await, before);
+        assert_eq!(fts_hits(&pool, "ponuka").await, 1);
+    }
+
+    #[tokio::test]
     async fn deleting_an_account_keeps_fts_in_sync() {
         let pool = test_pool().await;
         let account = crate::storage::accounts::insert(&pool, &sample_account())
