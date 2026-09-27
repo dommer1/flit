@@ -138,7 +138,12 @@ pub async fn search(
     // favour of an inbox copy the user did not ask for, and return nothing.
     let rows = sqlx::query_as(concat!(
         r#"WITH candidates AS (
-             SELECT * FROM messages
+             -- why named columns, not *: the candidates are sorted by date,
+             -- and * made that sort carry every matching body along.
+             SELECT id, account_id, mailbox, from_addr, to_addr, cc_addr, reply_to_addr,
+                    bcc_addr, subject, snippet, date, read, has_attachments,
+                    message_id_hdr, references_hdr
+             FROM messages
              WHERE (?1 IS NULL OR account_id = ?1)
                AND (?2 IS NULL OR from_addr LIKE '%' || ?2 || '%' ESCAPE '\')
                AND (?3 IS NULL OR to_addr LIKE '%' || ?3 || '%' ESCAPE '\'
