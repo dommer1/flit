@@ -523,13 +523,20 @@ pub async fn list_threaded(
 /// copy outside the all/archive containers.
 pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<MessageHeader>, AppError> {
     let _t = timing::start("storage::thread_of");
-    let rows = sqlx::query_as(concat!(
-        r#"SELECT id, account_id, mailbox, "from", "to", cc, reply_to, bcc, subject, snippet,
+    let rows = sqlx::query_as(THREAD_OF_SQL)
+        .bind(message_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+const THREAD_OF_SQL: &str = concat!(
+    r#"SELECT id, account_id, mailbox, "from", "to", cc, reply_to, bcc, subject, snippet,
                   date, read, has_attachments, message_id, "references", is_draft
            FROM (
              SELECT "#,
-        header_columns!("m"),
-        r#",
+    header_columns!("m"),
+    r#",
                     (COALESCE(b.role, '') = 'drafts') AS is_draft,
                     ROW_NUMBER() OVER (
                       PARTITION BY COALESCE(NULLIF(m.message_id_hdr, ''), 'row:' || m.id)
@@ -544,12 +551,7 @@ pub async fn thread_of(pool: &SqlitePool, message_id: i64) -> Result<Vec<Message
            )
            WHERE copy_rank = 1
            ORDER BY date ASC, id ASC"#
-    ))
-    .bind(message_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
-}
+);
 
 /// `(row id, uid)` of every thread member sharing the anchor's folder,
 /// anchor included — the unit a thread-row action (archive/trash/move)
