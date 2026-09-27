@@ -67,6 +67,12 @@ pub fn split_text_quote(text: &str) -> (String, Option<String>) {
 /// First line index where the quoted history starts, `None` when the text
 /// has none.
 fn quote_boundary(lines: &[&str]) -> Option<usize> {
+    // Non-empty and ">"-quoted line counts over `lines[index..]`, kept up
+    // to date by subtracting each line once the scan has passed it.
+    // why: recounting the rest at every ">" line was quadratic, and a mail
+    // of many ">" lines over enough plain text blocked a worker for minutes.
+    let mut content = lines.iter().filter(|l| !l.trim().is_empty()).count();
+    let mut quoted = lines.iter().filter(|l| l.trim().starts_with('>')).count();
     for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if is_attribution(trimmed) || is_outlook_divider(trimmed) {
@@ -74,8 +80,14 @@ fn quote_boundary(lines: &[&str]) -> Option<usize> {
         }
         // A ">" line counts only when the rest of the text is mostly quoted
         // too — an interleaved (inline) reply keeps its own text visible.
-        if trimmed.starts_with('>') && mostly_quoted(&lines[index..]) {
+        if trimmed.starts_with('>') && mostly_quoted(content, quoted) {
             return Some(index);
+        }
+        if !trimmed.is_empty() {
+            content -= 1;
+        }
+        if trimmed.starts_with('>') {
+            quoted -= 1;
         }
     }
     None
@@ -103,14 +115,10 @@ fn is_outlook_divider(line: &str) -> bool {
         || line.starts_with("-----Pôvodná správa-----")
 }
 
-/// At least three quarters of the non-empty lines start with ">".
-fn mostly_quoted(lines: &[&str]) -> bool {
-    let content: Vec<&&str> = lines.iter().filter(|l| !l.trim().is_empty()).collect();
-    if content.is_empty() {
-        return false;
-    }
-    let quoted = content.iter().filter(|l| l.trim().starts_with('>')).count();
-    quoted * 4 >= content.len() * 3
+/// At least three quarters of the `content` (non-empty) lines are among
+/// the `quoted` ones that start with ">".
+fn mostly_quoted(content: usize, quoted: usize) -> bool {
+    content > 0 && quoted * 4 >= content * 3
 }
 
 /// Fold the trailing quoted history of a *sanitized* HTML fragment into a
@@ -378,6 +386,22 @@ fn visible_text_len(html: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quote_detection_stays_linear_on_hostile_input() {
+        // Many ">" lines, then just enough plain text that no ">" line
+        // ever counts as the start of a mostly-quoted tail. Each one used
+        // to recount everything below it: quadratic, and a mail of this
+        // shape blocked a sync worker for minutes while building a snippet.
+        let text = format!("{}{}", ">\n".repeat(40_000), "x\n".repeat(14_000));
+
+        let started = std::time::Instant::now();
+        let (main, quoted) = split_text_quote(&text);
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(quoted, None);
+        assert_eq!(main, text);
+    }
 
     #[test]
     fn plain_text_without_a_quote_stays_whole() {
