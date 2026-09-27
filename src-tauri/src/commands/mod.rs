@@ -296,7 +296,7 @@ async fn run_pass_inner(
         // same connection, so the two never talk to the server at once. The
         // slot makes a refresh mid-backfill a no-op instead of a second loop.
         let state = app.state::<AppState>();
-        let Some(_slot) = state.try_begin_backfill(account_id) else {
+        let Some(_slot) = state.try_begin_background(account_id) else {
             return Ok(());
         };
         // Each cached batch refreshes the list (and its progress line) live —

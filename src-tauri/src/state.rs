@@ -28,10 +28,10 @@ pub struct AppState {
     pub passwords: PasswordCache,
     /// Which accounts are syncing their inbox — see try_begin_sync.
     syncing: Mutex<SyncSlots>,
-    /// Accounts with a header backfill currently running. Separate from
-    /// `syncing`: a backfill runs for minutes and must never block the
-    /// regular sync (or vice versa).
-    backfilling: Mutex<HashSet<i64>>,
+    /// Accounts with background sync work running (the other folders, body
+    /// prefetch, header backfill). Separate from `syncing`: that work runs
+    /// for minutes and must never block an inbox sync (or vice versa).
+    background: Mutex<HashSet<i64>>,
     /// Per-account queue for background draft pushes (append / delete /
     /// folder sync). tokio's Mutex hands the lock out in FIFO order, so
     /// pushes run in save order — a later save can never reach the server
@@ -94,16 +94,16 @@ impl Drop for SyncSlot<'_> {
     }
 }
 
-/// Proof of holding an account's backfill slot — same RAII contract as
+/// Proof of holding an account's background slot — same RAII contract as
 /// `SyncSlot`.
-pub struct BackfillSlot<'a> {
+pub struct BackgroundSlot<'a> {
     state: &'a AppState,
     account_id: i64,
 }
 
-impl Drop for BackfillSlot<'_> {
+impl Drop for BackgroundSlot<'_> {
     fn drop(&mut self) {
-        self.state.lock_backfilling().remove(&self.account_id);
+        self.state.lock_background().remove(&self.account_id);
     }
 }
 
@@ -115,7 +115,7 @@ impl AppState {
             pending_sends: Mutex::new(HashMap::new()),
             passwords: PasswordCache::default(),
             syncing: Mutex::new(SyncSlots::default()),
-            backfilling: Mutex::new(HashSet::new()),
+            background: Mutex::new(HashSet::new()),
             draft_pushes: Mutex::new(HashMap::new()),
             llm_downloads: llm::download::Downloads::default(),
             llm_engine: llm::engine::Engine::default(),
@@ -144,12 +144,12 @@ impl AppState {
         }
     }
 
-    /// Claim the account's backfill slot; `None` = a backfill of this
-    /// account is already running (every sync pass tries to start one — the
-    /// running loop already covers the work).
-    pub fn try_begin_backfill(&self, account_id: i64) -> Option<BackfillSlot<'_>> {
-        if self.lock_backfilling().insert(account_id) {
-            Some(BackfillSlot {
+    /// Claim the account's background slot; `None` = background work for
+    /// this account is already running (every sync pass tries to start it —
+    /// the running one already covers the work).
+    pub fn try_begin_background(&self, account_id: i64) -> Option<BackgroundSlot<'_>> {
+        if self.lock_background().insert(account_id) {
+            Some(BackgroundSlot {
                 state: self,
                 account_id,
             })
@@ -221,8 +221,8 @@ impl AppState {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn lock_backfilling(&self) -> MutexGuard<'_, HashSet<i64>> {
-        self.backfilling
+    fn lock_background(&self) -> MutexGuard<'_, HashSet<i64>> {
+        self.background
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -320,19 +320,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backfill_slot_is_independent_of_the_sync_slot() {
+    async fn background_slot_is_independent_of_the_sync_slot() {
         let state = AppState::new(test_pool().await);
 
-        let backfill = state.try_begin_backfill(1);
-        assert!(backfill.is_some());
-        // A second backfill of the same account must not start...
-        assert!(state.try_begin_backfill(1).is_none());
+        let background = state.try_begin_background(1);
+        assert!(background.is_some());
+        // Second background work for the same account must not start...
+        assert!(state.try_begin_background(1).is_none());
         // ...but a regular sync of the same account still can.
         assert!(state.try_begin_sync(1).is_some());
-        assert!(state.try_begin_backfill(2).is_some());
+        assert!(state.try_begin_background(2).is_some());
 
-        drop(backfill);
-        assert!(state.try_begin_backfill(1).is_some());
+        drop(background);
+        assert!(state.try_begin_background(1).is_some());
     }
 
     #[tokio::test]
