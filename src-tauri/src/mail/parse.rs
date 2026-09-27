@@ -232,14 +232,32 @@ pub fn attachment_data(raw: &[u8], part_index: i64) -> Option<Vec<u8>> {
 /// A filename from mail headers made safe to create inside a chosen
 /// directory: path separators neutralized, dot-only names replaced. Save All
 /// writes `dir/<this>`, so a crafted name must never escape `dir`.
+///
+/// Control characters go too (the OS rejects a NUL or newline in a name),
+/// and so do bidi formatting characters, which let a sender make
+/// "invoice\u{202E}fdp.exe" display as "invoiceexe.pdf".
 pub fn safe_filename(name: &str) -> String {
-    let cleaned = name.replace(['/', '\\'], "_");
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !c.is_control() && !is_bidi_control(*c))
+        .collect::<String>()
+        .replace(['/', '\\'], "_");
     let trimmed = cleaned.trim();
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
         "attachment".to_string()
     } else {
         trimmed.to_string()
     }
+}
+
+/// Unicode's explicit bidi formatting characters (marks, embeddings,
+/// overrides, isolates). `char::is_control` covers only the Cc category,
+/// and these are Cf.
+fn is_bidi_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+    )
 }
 
 /// One attachment of a reopened draft: filename plus decoded bytes, ready
@@ -819,6 +837,18 @@ mod tests {
         assert_eq!(safe_filename("."), "attachment");
         assert_eq!(safe_filename("  "), "attachment");
         assert_eq!(safe_filename(""), "attachment");
+    }
+
+    #[test]
+    fn safe_filename_drops_control_and_bidi_characters() {
+        // U+202E (right-to-left override) makes "invoice\u{202E}fdp.exe"
+        // display as "invoiceexe.pdf" — an app posing as a document.
+        assert_eq!(safe_filename("invoice\u{202E}fdp.exe"), "invoicefdp.exe");
+        assert_eq!(safe_filename("a\u{2066}b\u{2069}\u{200F}.txt"), "ab.txt");
+        // A NUL or a newline makes the OS reject the name outright.
+        assert_eq!(safe_filename("re\0port\r\n.pdf"), "report.pdf");
+        // Stripping must not resurrect a dot-only name.
+        assert_eq!(safe_filename(".\u{202E}."), "attachment");
     }
 
     #[test]
