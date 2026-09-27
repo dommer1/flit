@@ -205,7 +205,9 @@ fn attachment_meta(message: &Message) -> Vec<AttachmentMeta> {
         .filter(|(_, part)| !is_inline_image(part))
         .map(|(index, part)| AttachmentMeta {
             part_index: index as i64,
-            filename: part.attachment_name().unwrap_or("attachment").to_string(),
+            // why sanitized here: the name reaches the save dialog as its
+            // default path, and a path-like default opens that folder.
+            filename: safe_filename(part.attachment_name().unwrap_or("attachment")),
             content_type: part
                 .content_type()
                 .map(|ct| match ct.subtype() {
@@ -232,14 +234,55 @@ pub fn attachment_data(raw: &[u8], part_index: i64) -> Option<Vec<u8>> {
 /// A filename from mail headers made safe to create inside a chosen
 /// directory: path separators neutralized, dot-only names replaced. Save All
 /// writes `dir/<this>`, so a crafted name must never escape `dir`.
+///
+/// Control characters go too (the OS rejects a NUL or newline in a name),
+/// and so do bidi formatting characters, which let a sender make
+/// "invoice\u{202E}fdp.exe" display as "invoiceexe.pdf".
 pub fn safe_filename(name: &str) -> String {
-    let cleaned = name.replace(['/', '\\'], "_");
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !c.is_control() && !is_bidi_control(*c))
+        .collect::<String>()
+        .replace(['/', '\\'], "_");
     let trimmed = cleaned.trim();
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
         "attachment".to_string()
     } else {
-        trimmed.to_string()
+        cap_length(trimmed)
     }
+}
+
+/// Longest filename `safe_filename` returns, in bytes. APFS allows 255;
+/// the margin leaves room for the " (2)" `unique_path` may append.
+const MAX_FILENAME_BYTES: usize = 200;
+
+/// Shorten an over-long name to `MAX_FILENAME_BYTES`, cutting the stem so
+/// the extension — what decides how the file opens — survives.
+fn cap_length(name: &str) -> String {
+    if name.len() <= MAX_FILENAME_BYTES {
+        return name.to_string();
+    }
+    let (stem, extension) = match name.rfind('.') {
+        Some(dot) if dot > 0 && name.len() - dot <= 16 => name.split_at(dot),
+        _ => (name, ""),
+    };
+    // why the loop: a byte limit can land inside a multi-byte character,
+    // and slicing a str there panics — step back to the character start.
+    let mut end = MAX_FILENAME_BYTES - extension.len();
+    while !stem.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{extension}", &stem[..end])
+}
+
+/// Unicode's explicit bidi formatting characters (marks, embeddings,
+/// overrides, isolates). `char::is_control` covers only the Cc category,
+/// and these are Cf.
+fn is_bidi_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+    )
 }
 
 /// One attachment of a reopened draft: filename plus decoded bytes, ready
@@ -787,6 +830,35 @@ mod tests {
     }
 
     #[test]
+    fn attachment_names_from_the_sender_arrive_sanitized() {
+        // The name becomes the save dialog's default path, and a path-like
+        // default makes the dialog open in that folder — here the user's
+        // LaunchAgents, one click away from a login item.
+        let raw = b"From: a@example.com\r\n\
+            Subject: Invoice\r\n\
+            MIME-Version: 1.0\r\n\
+            Content-Type: multipart/mixed; boundary=\"b1\"\r\n\
+            \r\n\
+            --b1\r\n\
+            Content-Type: text/plain\r\n\
+            \r\n\
+            see attachment\r\n\
+            --b1\r\n\
+            Content-Type: application/octet-stream\r\n\
+            Content-Disposition: attachment; filename=\"/Users/me/Library/LaunchAgents/x.plist\"\r\n\
+            \r\n\
+            rawbytes\r\n\
+            --b1--\r\n";
+
+        let body = parse_body(raw);
+
+        assert_eq!(
+            body.attachments[0].filename,
+            "_Users_me_Library_LaunchAgents_x.plist"
+        );
+    }
+
+    #[test]
     fn attachment_without_headers_gets_fallback_name_and_type() {
         let raw = b"From: a@example.com\r\n\
             Subject: Blob\r\n\
@@ -819,6 +891,39 @@ mod tests {
         assert_eq!(safe_filename("."), "attachment");
         assert_eq!(safe_filename("  "), "attachment");
         assert_eq!(safe_filename(""), "attachment");
+    }
+
+    #[test]
+    fn safe_filename_drops_control_and_bidi_characters() {
+        // U+202E (right-to-left override) makes "invoice\u{202E}fdp.exe"
+        // display as "invoiceexe.pdf" — an app posing as a document.
+        assert_eq!(safe_filename("invoice\u{202E}fdp.exe"), "invoicefdp.exe");
+        assert_eq!(safe_filename("a\u{2066}b\u{2069}\u{200F}.txt"), "ab.txt");
+        // A NUL or a newline makes the OS reject the name outright.
+        assert_eq!(safe_filename("re\0port\r\n.pdf"), "report.pdf");
+        // Stripping must not resurrect a dot-only name.
+        assert_eq!(safe_filename(".\u{202E}."), "attachment");
+    }
+
+    #[test]
+    fn safe_filename_caps_the_length_and_keeps_the_extension() {
+        // APFS refuses names over 255 bytes; one such attachment used to
+        // abort a whole Save All.
+        let long = format!("{}.pdf", "a".repeat(300));
+        let capped = safe_filename(&long);
+        assert_eq!(capped.len(), MAX_FILENAME_BYTES);
+        assert!(capped.ends_with("a.pdf"));
+
+        // Multi-byte text is cut on a character boundary, never inside one.
+        // (The leading "x" puts the 196-byte cut mid-character.)
+        let slovak = format!("x{}.txt", "ž".repeat(150));
+        let capped = safe_filename(&slovak);
+        assert!(capped.len() <= MAX_FILENAME_BYTES);
+        assert!(capped.ends_with("ž.txt"));
+
+        // No dot, or an "extension" too long to be one: plain truncation.
+        let capped = safe_filename(&"b".repeat(300));
+        assert_eq!(capped, "b".repeat(MAX_FILENAME_BYTES));
     }
 
     #[test]
