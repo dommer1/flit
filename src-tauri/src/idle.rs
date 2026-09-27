@@ -203,10 +203,12 @@ async fn watch_inner(app: &AppHandle, account_id: i64) -> Result<Ended, AppError
         if outcome == Idled::Quiet {
             continue;
         }
-        // why a full pass and not a targeted fetch of the new uid: run_sync
-        // already owns the sync slot, deduplication and notifications, so
-        // routing through it keeps push and polling on one code path.
-        if let Err(err) = commands::run_sync(app, account_id).await {
+        // why run_sync and not a targeted fetch of the new uid: it already
+        // owns the sync slot, deduplication and notifications, so push and
+        // polling stay on one code path. Inbox only — the other folders are
+        // the poller's job under push (see SyncScope::InboxOnly).
+        if let Err(err) = commands::run_sync(app, account_id, commands::SyncScope::InboxOnly).await
+        {
             eprintln!("push-triggered sync failed for account {account_id}: {err}");
         }
     }
