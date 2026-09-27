@@ -219,7 +219,7 @@ pub(crate) async fn sync_mailbox(
         None => messages::clear_mailbox(pool, account_id, mailbox).await?,
         Some(range) => {
             let server = imap::fetch_uid_flags(session, &range).await?;
-            if let Some(floor) = reconcile_floor(&server) {
+            if let Some(floor) = reconcile_floor(&server, full) {
                 let cached = messages::uid_flags(pool, account_id, mailbox, floor).await?;
                 let plan = reconcile_plan(&cached, &server);
                 for id in plan.delete {
@@ -283,13 +283,20 @@ struct ReconcilePlan {
     flag: Vec<(i64, bool)>,
 }
 
-/// The lowest uid a sweep returned — the floor of the cached range it may
-/// be reconciled against. `None` when the sweep came back empty, which is
-/// the signal NOT to reconcile at all: the folder was not empty (or
-/// `sweep_range` would have said so), so an empty result is an anomaly, and
-/// diffing the whole cache against nothing would delete every cached row.
-fn reconcile_floor(server: &[(i64, bool)]) -> Option<i64> {
-    server.iter().map(|(uid, _)| *uid).min()
+/// The lowest cached uid a sweep may be reconciled against. A windowed
+/// sweep listed only the newest slice, so it floors at the lowest uid it
+/// returned — rows below were never asked about. A `full` sweep listed the
+/// whole folder, so every cached row is checked: that is how mail the
+/// server purged from the bottom (Spam and Trash emptied by age) leaves the
+/// cache at all.
+///
+/// `None` when the sweep came back empty, which is the signal NOT to
+/// reconcile at all: the folder was not empty (or `sweep_range` would have
+/// said so), so an empty result is an anomaly, and diffing the whole cache
+/// against nothing would delete every cached row.
+fn reconcile_floor(server: &[(i64, bool)], full: bool) -> Option<i64> {
+    let lowest = server.iter().map(|(uid, _)| *uid).min()?;
+    Some(if full { 1 } else { lowest })
 }
 
 fn now_epoch() -> i64 {
@@ -642,9 +649,24 @@ mod tests {
     }
 
     #[test]
-    fn the_reconcile_floor_is_the_lowest_uid_the_sweep_returned() {
-        assert_eq!(reconcile_floor(&[(103, false), (101, true)]), Some(101));
-        assert_eq!(reconcile_floor(&[(7, false)]), Some(7));
+    fn a_windowed_sweep_reconciles_from_its_lowest_uid() {
+        // Only the newest slice was listed: rows below it were never asked
+        // about, so their absence from the sweep means nothing.
+        assert_eq!(
+            reconcile_floor(&[(103, false), (101, true)], false),
+            Some(101)
+        );
+        assert_eq!(reconcile_floor(&[(7, false)], false), Some(7));
+    }
+
+    #[test]
+    fn a_full_sweep_reconciles_every_cached_row() {
+        // The whole folder was listed, so a cached uid below the lowest
+        // one returned is gone from the server — Spam or Trash purged by
+        // age from the bottom. Floored at the lowest uid, such rows stayed
+        // in the cache forever: one Spam folder held 62 rows against 18 on
+        // the server, and every Spam and Trash folder had leftovers.
+        assert_eq!(reconcile_floor(&[(103, false), (101, true)], true), Some(1));
     }
 
     #[test]
@@ -652,7 +674,8 @@ mod tests {
         // The folder was not empty (or sweep_range would have said so), yet
         // nothing came back. Reconciling against that would read every
         // cached row as deleted and wipe the folder — skip instead.
-        assert_eq!(reconcile_floor(&[]), None);
+        assert_eq!(reconcile_floor(&[], false), None);
+        assert_eq!(reconcile_floor(&[], true), None);
     }
 
     #[test]
