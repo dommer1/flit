@@ -800,13 +800,30 @@ mod tests {
         // Each "background" used to search for its ':' through the rest of
         // the attribute. With no colon anywhere that is quadratic: this 2 MB
         // attribute took 5 s, and the time grows with the size squared.
-        let style = "background;".repeat(200_000);
+        //
+        // why a ratio and not a time limit: a fixed limit flaked on a slow CI
+        // runner. Four times the input takes about four times as long when
+        // the scan is linear and about sixteen times when it is quadratic,
+        // on any machine; best of three runs keeps scheduling noise out.
+        let best_time = |repeats: usize| {
+            let style = "background;".repeat(repeats);
+            (0..3)
+                .map(|_| {
+                    let started = std::time::Instant::now();
+                    assert!(background_url_ranges(&style).is_empty());
+                    started.elapsed()
+                })
+                .min()
+                .expect("three runs")
+        };
 
-        let started = std::time::Instant::now();
-        let ranges = background_url_ranges(&style);
+        let small = best_time(25_000);
+        let large = best_time(100_000);
 
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
-        assert!(ranges.is_empty());
+        assert!(
+            large < small * 8,
+            "4x the input took {large:?} vs {small:?} — not linear"
+        );
     }
 
     fn png(content_id: &str) -> InlineImage {
