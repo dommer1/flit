@@ -427,7 +427,13 @@ pub async fn list_threaded(
     let _t = timing::start("storage::list_threaded");
     let rows = sqlx::query_as(
         r#"WITH ranked AS (
-             SELECT m.*, ROW_NUMBER() OVER (
+             -- why named columns, not m.*: the CTE is sorted and carried
+             -- through every step below, and m.* dragged each cached body
+             -- along — twice as slow on a 57k-message folder.
+             SELECT m.id, m.account_id, m.mailbox, m.from_addr, m.to_addr, m.cc_addr,
+                    m.reply_to_addr, m.bcc_addr, m.subject, m.snippet, m.date, m.read,
+                    m.has_attachments, m.message_id_hdr, m.references_hdr, m.thread_key,
+                    ROW_NUMBER() OVER (
                       PARTITION BY m.account_id, COALESCE(m.thread_key, 'row:' || m.id)
                       ORDER BY m.date DESC, m.id DESC
                     ) AS rn
