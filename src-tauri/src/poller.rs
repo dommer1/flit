@@ -7,6 +7,7 @@ use tauri::{AppHandle, Manager};
 use tokio::time::MissedTickBehavior;
 
 use crate::state::AppState;
+use crate::wake::{self, WakeDetector};
 use crate::{commands, storage};
 
 /// One-minute ticks, like the send-later scheduler: the poll interval is
@@ -27,9 +28,11 @@ pub fn spawn(app: AppHandle) {
         interval.tick().await;
 
         let mut elapsed_minutes: i64 = 0;
+        let mut wake = WakeDetector::new(std::time::Instant::now(), wake::wall_now());
         loop {
             interval.tick().await;
             elapsed_minutes += 1;
+            let woke = wake.woke(std::time::Instant::now(), wake::wall_now());
 
             let configured = {
                 let state = app.state::<AppState>();
@@ -47,7 +50,10 @@ pub fn spawn(app: AppHandle) {
                 elapsed_minutes = 0;
                 continue;
             }
-            if elapsed_minutes < configured {
+            // why poll right after a wake: the passes in flight when the Mac
+            // went to sleep died with their connections, and whatever arrived
+            // overnight would otherwise wait out the rest of the interval.
+            if elapsed_minutes < configured && !woke {
                 continue;
             }
             elapsed_minutes = 0;
