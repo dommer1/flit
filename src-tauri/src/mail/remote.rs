@@ -154,11 +154,13 @@ async fn store(pool: &SqlitePool, url: &str, content_type: &str, data: &[u8]) {
 }
 
 async fn prune_expired(pool: &SqlitePool) {
-    let _ = sqlx::query("DELETE FROM remote_images WHERE fetched_at < ?")
+    let _ = sqlx::query(PRUNE_SQL)
         .bind(now_epoch() - CACHE_MAX_AGE_SECS)
         .execute(pool)
         .await;
 }
+
+const PRUNE_SQL: &str = "DELETE FROM remote_images WHERE fetched_at < ?";
 
 fn now_epoch() -> i64 {
     std::time::SystemTime::now()
