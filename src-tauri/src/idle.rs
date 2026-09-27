@@ -15,6 +15,7 @@ use tokio::time::MissedTickBehavior;
 use crate::error::AppError;
 use crate::mail::imap::{self, Idled};
 use crate::state::AppState;
+use crate::wake::{self, WakeDetector};
 use crate::{commands, storage};
 
 /// How often the supervisor compares running listeners against the settings.
@@ -84,9 +85,20 @@ pub fn spawn(app: AppHandle) {
         let mut running: HashMap<i64, tauri::async_runtime::JoinHandle<()>> = HashMap::new();
         let mut interval = tokio::time::interval(RECONCILE_TICK);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut wake = WakeDetector::new(std::time::Instant::now(), wake::wall_now());
 
         loop {
             interval.tick().await;
+
+            // why restart everything after a sleep: the sockets did not
+            // survive it, but a listener only finds out when its IDLE times
+            // out — up to 29 minutes later, all of them without push. The
+            // reconcile below starts them again on fresh connections.
+            if wake.woke(std::time::Instant::now(), wake::wall_now()) {
+                for (_, handle) in running.drain() {
+                    handle.abort();
+                }
+            }
 
             // A listener only ends by panicking — drop it so it restarts.
             running.retain(|_, handle| !handle.inner().is_finished());
@@ -196,6 +208,14 @@ async fn watch_inner(app: &AppHandle, account_id: i64) -> Result<Ended, AppError
         .select(&inbox)
         .await
         .map_err(|e| AppError::Imap(format!("select {inbox}: {e}")))?;
+
+    // why sync before listening: IDLE only announces what happens from now
+    // on. Mail that arrived while this account had no listener — asleep,
+    // offline, or reconnecting after a drop — would otherwise sit unseen
+    // until the next poll.
+    if let Err(err) = commands::run_sync(app, account_id, commands::SyncScope::InboxOnly).await {
+        eprintln!("catch-up sync failed for account {account_id}: {err}");
+    }
 
     loop {
         let (returned, outcome) = imap::idle_once(session, IDLE_LIMIT).await?;
