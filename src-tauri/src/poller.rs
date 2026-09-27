@@ -71,7 +71,9 @@ async fn poll(app: &AppHandle) {
         }
     };
     let ids: Vec<i64> = accounts.iter().map(|account| account.id).collect();
-    let jobs = ids.iter().map(|id| commands::run_sync(app, *id));
+    let jobs = ids
+        .iter()
+        .map(|id| commands::run_sync(app, *id, commands::SyncScope::Everything));
     for (id, outcome) in ids.iter().zip(futures::future::join_all(jobs).await) {
         if let Err(err) = outcome {
             eprintln!("background sync failed for account {id}: {err}");

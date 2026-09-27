@@ -115,7 +115,7 @@ pub async fn delete_account(
 /// headers.
 #[tauri::command]
 pub async fn sync_account(app: AppHandle, account_id: i64) -> Result<(), AppError> {
-    run_sync(&app, account_id).await
+    run_sync(&app, account_id, SyncScope::Everything).await
 }
 
 /// The user's explicit "check for new mail". Same pass as `sync_account`,
@@ -129,7 +129,7 @@ pub async fn sync_account(app: AppHandle, account_id: i64) -> Result<(), AppErro
 pub async fn refresh_account(app: AppHandle, account_id: i64) -> Result<(), AppError> {
     let pool = app.state::<AppState>().pool.clone();
     storage::mailboxes::clear_full_sweeps(&pool, account_id).await?;
-    run_sync(&app, account_id).await
+    run_sync(&app, account_id, SyncScope::Everything).await
 }
 
 /// Open one IMAP session for an account.
@@ -158,9 +158,27 @@ const SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60)
 /// left off on the next pass, so cutting one short costs nothing but time.
 const BACKGROUND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
+/// How much of an account one sync pass covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyncScope {
+    /// The inbox, then the other folders, the body prefetch and the header
+    /// backfill — what the poller, a folder switch and a refresh ask for.
+    Everything,
+    /// Just the inbox: what an IDLE push announces. Under push, the poller's
+    /// interval is the cadence for the folders IDLE can't watch, so a push
+    /// needn't redo them. Measured 2026-09-27: every push — often only the
+    /// echo of the user's own read flag or archive — cost a full pass over
+    /// ~26 folders, 5–10 s of network and CPU for nothing new.
+    InboxOnly,
+}
+
 /// The sync pass behind the command, callable from background tasks (the
 /// poller) that have an AppHandle but no `State` extractor.
-pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), AppError> {
+pub(crate) async fn run_sync(
+    app: &AppHandle,
+    account_id: i64,
+    scope: SyncScope,
+) -> Result<(), AppError> {
     // why the whole pass runs in one spawned task while the caller waits only
     // for the inbox stage: the sync and background slots borrow AppState, so
     // they cannot be handed across a spawn — every stage lives in one task,
@@ -169,7 +187,7 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
     let (report, inbox_done) = tokio::sync::oneshot::channel();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        run_pass(&app, account_id, report).await;
+        run_pass(&app, account_id, scope, report).await;
     });
     // why Ok on a dropped sender: the task only drops it by panicking, and a
     // failed pass has already recorded its own status for settings to show.
@@ -181,9 +199,10 @@ pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), App
 async fn run_pass(
     app: &AppHandle,
     account_id: i64,
+    scope: SyncScope,
     report: tokio::sync::oneshot::Sender<Result<(), AppError>>,
 ) {
-    if let Err(err) = run_pass_inner(app, account_id, report).await {
+    if let Err(err) = run_pass_inner(app, account_id, scope, report).await {
         eprintln!("sync pass failed for account {account_id}: {err}");
     }
 }
@@ -191,6 +210,7 @@ async fn run_pass(
 async fn run_pass_inner(
     app: &AppHandle,
     account_id: i64,
+    scope: SyncScope,
     report: tokio::sync::oneshot::Sender<Result<(), AppError>>,
 ) -> Result<(), AppError> {
     let state = app.state::<AppState>();
@@ -277,6 +297,11 @@ async fn run_pass_inner(
                 }
             }
         }
+    }
+
+    if scope == SyncScope::InboxOnly {
+        let _ = session.logout().await;
+        return Ok(());
     }
 
     // The sync slot is free again, so a push from here on gets its own
