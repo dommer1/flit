@@ -55,6 +55,20 @@ impl PasswordCache {
     }
 }
 
+/// Install keyring's platform store, once, before anything reads a secret.
+///
+/// why: keyring 4's `Entry::new` installs the store lazily on its first call
+/// and flips its "done" flag *before* the store exists, so a second caller in
+/// that window gets `NoDefaultStore`. Flit reads several accounts' passwords
+/// at once on launch (sync passes, IDLE listeners), and a listener or pass
+/// failed with "No default store has been set" — reproduced on two launches
+/// in a row. Making the first call here, on the setup thread before any task
+/// is spawned, closes that window. Creating an entry touches no keychain item.
+pub fn init_keychain() -> Result<(), AppError> {
+    keyring::Entry::new(SERVICE, "flit-startup")?;
+    Ok(())
+}
+
 /// Keychain user name for an account row id.
 ///
 /// why: keyed by id, not email — emails are user-editable and two accounts
@@ -111,6 +125,12 @@ pub async fn delete_password(account_id: i64) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_keychain_store_is_ready_once_initialised() {
+        init_keychain().expect("the platform store installs");
+        assert!(keyring::Entry::new(SERVICE, "flit-test-probe").is_ok());
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[tokio::test]
