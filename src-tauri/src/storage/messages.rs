@@ -542,7 +542,20 @@ const THREAD_OF_SQL: &str = concat!(
                       PARTITION BY COALESCE(NULLIF(m.message_id_hdr, ''), 'row:' || m.id)
                       ORDER BY (COALESCE(b.role, '') IN ('all', 'archive')), m.id
                     ) AS copy_rank
-             FROM messages m
+             -- why the ids subquery: with the anchor and its thread
+             -- OR-ed together in one WHERE, SQLite could use only the
+             -- account_id half of idx_messages_thread and walked the whole
+             -- account (72 ms on a 99k-message DB). Listing the candidate
+             -- ids first — the anchor, UNION its thread's members — gives
+             -- each half its own index lookup (under 1 ms); the WHERE
+             -- below still decides, exactly as before.
+             FROM (SELECT ?1 AS id
+                   UNION
+                   SELECT t.id FROM messages anchor
+                   JOIN messages t
+                     ON t.account_id = anchor.account_id AND t.thread_key = anchor.thread_key
+                   WHERE anchor.id = ?1) ids
+             JOIN messages m ON m.id = ids.id
              JOIN messages a ON a.id = ?1 AND m.account_id = a.account_id
              LEFT JOIN mailboxes b ON b.account_id = m.account_id AND b.name = m.mailbox
              WHERE m.id = a.id
@@ -2113,6 +2126,37 @@ mod tests {
 
         assert_eq!(thread.len(), 1);
         assert_eq!(thread[0].id, anchor);
+    }
+
+    #[tokio::test]
+    async fn thread_of_looks_up_members_by_account_and_thread_key() {
+        // Measured on a real 99k-message DB: the OR-joined lookup walked
+        // the whole account through idx_messages_thread's first column —
+        // 72 ms on every message open — instead of one thread's range.
+        let pool = test_pool().await;
+        // why AssertSqlSafe: the query is a compile-time constant; format!
+        // only prefixes it with EXPLAIN QUERY PLAN.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN {THREAD_OF_SQL}"
+        )))
+        .bind(1_i64)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let plan: Vec<String> = rows
+            .iter()
+            .map(|row| sqlx::Row::get::<String, _>(row, "detail"))
+            .collect();
+
+        assert!(
+            plan.iter()
+                .any(|step| step.contains("(account_id=? AND thread_key=?)")),
+            "{plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.ends_with("(account_id=?)")),
+            "{plan:#?}"
+        );
     }
 
     #[tokio::test]
