@@ -886,7 +886,7 @@ pub async fn uids_missing_body(
     let rows = sqlx::query_as(
         "SELECT id, uid FROM messages
          WHERE account_id = ? AND mailbox = ?
-           AND body_text IS NULL AND body_html IS NULL
+           AND body_text IS NULL AND body_html IS NULL AND prefetch_skipped = 0
          ORDER BY date DESC
          LIMIT ?",
     )
@@ -898,17 +898,33 @@ pub async fn uids_missing_body(
     Ok(rows)
 }
 
+/// Take a message off the prefetch queue for good: the prefetcher decided
+/// against its body (too large, or the server gave no size). Opening the
+/// message still fetches the body on demand.
+pub async fn skip_prefetch(pool: &SqlitePool, message_id: i64) -> Result<(), AppError> {
+    sqlx::query("UPDATE messages SET prefetch_skipped = 1 WHERE id = ?")
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Whether any cached message of this account, in any folder, still lacks
 /// a body — lets the prefetcher skip connecting when there is nothing to do.
 pub async fn has_missing_bodies(pool: &SqlitePool, account_id: i64) -> Result<bool, AppError> {
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM messages
-         WHERE account_id = ? AND body_text IS NULL AND body_html IS NULL",
+    // why EXISTS: the answer is yes/no, and count(*) walked all 80k
+    // body-less rows of a real account (60 ms) to say "yes" every pass.
+    let any: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+           SELECT 1 FROM messages
+           WHERE account_id = ? AND body_text IS NULL AND body_html IS NULL
+             AND prefetch_skipped = 0
+         )",
     )
     .bind(account_id)
     .fetch_one(pool)
     .await?;
-    Ok(count > 0)
+    Ok(any)
 }
 
 /// `(id, uid, read)` of cached rows in one folder from `min_uid` upwards, in
@@ -2751,6 +2767,39 @@ mod tests {
         let limited = uids_missing_body(&pool, id, "INBOX", 1).await.unwrap();
         assert_eq!(limited.len(), 1);
         assert_eq!(limited[0].1, 3);
+    }
+
+    #[tokio::test]
+    async fn prefetch_moves_past_bodies_it_has_decided_to_skip() {
+        // The newest bodies were re-offered to the prefetcher on every pass
+        // even after it had refused them for size, so a folder whose newest
+        // 50 missing bodies were all large never got any further.
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[
+                header(1, "Old", "2026-07-01T00:00:00Z", false),
+                header(2, "Huge", "2026-07-02T00:00:00Z", false),
+            ],
+        )
+        .await
+        .unwrap();
+        let huge = uids_missing_body(&pool, id, "INBOX", 1).await.unwrap()[0];
+        assert_eq!(huge.1, 2);
+
+        skip_prefetch(&pool, huge.0).await.unwrap();
+
+        let next = uids_missing_body(&pool, id, "INBOX", 1).await.unwrap();
+        assert_eq!(next[0].1, 1);
+        let old_id = next[0].0;
+        set_body(&pool, old_id, Some("text"), None, "text", &[], &[], None)
+            .await
+            .unwrap();
+        // Only the skipped one is left: nothing more to prefetch.
+        assert!(!has_missing_bodies(&pool, id).await.unwrap());
     }
 
     #[tokio::test]
