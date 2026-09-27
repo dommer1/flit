@@ -31,6 +31,12 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // why first: before any task below can read a password at the
+            // same time as another (see auth::init_keychain). Not fatal —
+            // without a store every read fails and says so per account.
+            if let Err(err) = auth::init_keychain() {
+                eprintln!("keychain store unavailable: {err}");
+            }
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             // why: .setup() is synchronous, so block_on finishes the async DB
