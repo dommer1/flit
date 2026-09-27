@@ -246,8 +246,31 @@ pub fn safe_filename(name: &str) -> String {
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
         "attachment".to_string()
     } else {
-        trimmed.to_string()
+        cap_length(trimmed)
     }
+}
+
+/// Longest filename `safe_filename` returns, in bytes. APFS allows 255;
+/// the margin leaves room for the " (2)" `unique_path` may append.
+const MAX_FILENAME_BYTES: usize = 200;
+
+/// Shorten an over-long name to `MAX_FILENAME_BYTES`, cutting the stem so
+/// the extension — what decides how the file opens — survives.
+fn cap_length(name: &str) -> String {
+    if name.len() <= MAX_FILENAME_BYTES {
+        return name.to_string();
+    }
+    let (stem, extension) = match name.rfind('.') {
+        Some(dot) if dot > 0 && name.len() - dot <= 16 => name.split_at(dot),
+        _ => (name, ""),
+    };
+    // why the loop: a byte limit can land inside a multi-byte character,
+    // and slicing a str there panics — step back to the character start.
+    let mut end = MAX_FILENAME_BYTES - extension.len();
+    while !stem.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{extension}", &stem[..end])
 }
 
 /// Unicode's explicit bidi formatting characters (marks, embeddings,
@@ -849,6 +872,27 @@ mod tests {
         assert_eq!(safe_filename("re\0port\r\n.pdf"), "report.pdf");
         // Stripping must not resurrect a dot-only name.
         assert_eq!(safe_filename(".\u{202E}."), "attachment");
+    }
+
+    #[test]
+    fn safe_filename_caps_the_length_and_keeps_the_extension() {
+        // APFS refuses names over 255 bytes; one such attachment used to
+        // abort a whole Save All.
+        let long = format!("{}.pdf", "a".repeat(300));
+        let capped = safe_filename(&long);
+        assert_eq!(capped.len(), MAX_FILENAME_BYTES);
+        assert!(capped.ends_with("a.pdf"));
+
+        // Multi-byte text is cut on a character boundary, never inside one.
+        // (The leading "x" puts the 196-byte cut mid-character.)
+        let slovak = format!("x{}.txt", "ž".repeat(150));
+        let capped = safe_filename(&slovak);
+        assert!(capped.len() <= MAX_FILENAME_BYTES);
+        assert!(capped.ends_with("ž.txt"));
+
+        // No dot, or an "extension" too long to be one: plain truncation.
+        let capped = safe_filename(&"b".repeat(300));
+        assert_eq!(capped, "b".repeat(MAX_FILENAME_BYTES));
     }
 
     #[test]
