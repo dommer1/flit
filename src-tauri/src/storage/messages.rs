@@ -877,12 +877,20 @@ pub async fn images(pool: &SqlitePool, message_id: i64) -> Result<Vec<InlineImag
 
 /// The body-prefetch work-list: `(id, uid)` of messages with no cached body,
 /// newest first so recent mail becomes searchable soonest.
+/// One cached message still waiting for its body.
+#[derive(Debug, Clone, Copy, PartialEq, sqlx::FromRow)]
+pub struct MissingBody {
+    /// Row id.
+    pub id: i64,
+    pub uid: i64,
+}
+
 pub async fn uids_missing_body(
     pool: &SqlitePool,
     account_id: i64,
     mailbox: &str,
     limit: i64,
-) -> Result<Vec<(i64, i64)>, AppError> {
+) -> Result<Vec<MissingBody>, AppError> {
     let rows = sqlx::query_as(
         "SELECT id, uid FROM messages
          WHERE account_id = ? AND mailbox = ?
@@ -2706,7 +2714,7 @@ mod tests {
         assert!(!has_missing_bodies(&pool, id).await.unwrap());
         assert_eq!(
             uids_missing_body(&pool, id, "INBOX", 10).await.unwrap(),
-            Vec::<(i64, i64)>::new()
+            Vec::<MissingBody>::new()
         );
     }
 
@@ -2761,12 +2769,12 @@ mod tests {
             .unwrap();
 
         let missing = uids_missing_body(&pool, id, "INBOX", 10).await.unwrap();
-        let uids: Vec<i64> = missing.iter().map(|(_, uid)| *uid).collect();
+        let uids: Vec<i64> = missing.iter().map(|m| m.uid).collect();
         assert_eq!(uids, vec![3, 1]);
 
         let limited = uids_missing_body(&pool, id, "INBOX", 1).await.unwrap();
         assert_eq!(limited.len(), 1);
-        assert_eq!(limited[0].1, 3);
+        assert_eq!(limited[0].uid, 3);
     }
 
     #[tokio::test]
@@ -2788,13 +2796,13 @@ mod tests {
         .await
         .unwrap();
         let huge = uids_missing_body(&pool, id, "INBOX", 1).await.unwrap()[0];
-        assert_eq!(huge.1, 2);
+        assert_eq!(huge.uid, 2);
 
-        skip_prefetch(&pool, huge.0).await.unwrap();
+        skip_prefetch(&pool, huge.id).await.unwrap();
 
         let next = uids_missing_body(&pool, id, "INBOX", 1).await.unwrap();
-        assert_eq!(next[0].1, 1);
-        let old_id = next[0].0;
+        assert_eq!(next[0].uid, 1);
+        let old_id = next[0].id;
         set_body(&pool, old_id, Some("text"), None, "text", &[], &[], None)
             .await
             .unwrap();
