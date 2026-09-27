@@ -11,6 +11,7 @@ mod scheduler;
 pub mod state;
 pub mod storage;
 pub mod timing;
+mod wake;
 
 use tauri::{Manager, Url};
 
