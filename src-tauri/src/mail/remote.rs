@@ -202,6 +202,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prune_finds_expired_rows_through_an_index() {
+        // Prune runs before every HTML body is shown. Without an index it
+        // read every cached image to reach fetched_at, stored after the
+        // blob: 52 ms warm (1.3 s cold) over a real 320 MB cache, once per
+        // message of an opened conversation.
+        let pool = test_pool().await;
+        let plan: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN {PRUNE_SQL}"
+        )))
+        .bind(0_i64)
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| sqlx::Row::get::<String, _>(row, "detail"))
+        .collect();
+
+        assert!(
+            plan.iter().any(|step| step.contains("USING INDEX")),
+            "{plan:#?}"
+        );
+    }
+
+    #[tokio::test]
     async fn store_overwrites_and_prune_drops_expired_rows() {
         let pool = test_pool().await;
         store(&pool, "https://a.example/x.png", "image/png", b"old").await;
