@@ -1,6 +1,7 @@
 //! Sender-domain avatars: favicon lookup, cached per domain.
 //!
-//! Avatars are keyed on the sender's *domain*, never on an address. A domain
+//! Avatars are keyed on the sender's *registrable domain* (Public Suffix
+//! List), never on an address or a sender-chosen subdomain. A domain
 //! is looked up at most once per expiry window and then served from here, so
 //! the icon host cannot learn which message was opened or when — only that
 //! this client has, at some point, seen mail from that domain.
@@ -120,23 +121,34 @@ pub async fn prune_expired(pool: &SqlitePool) {
     .await;
 }
 
-/// Resolve each sender domain to a data: URI for its icon — cache first,
-/// network second. Domains with no icon simply stay absent from the result,
-/// and the caller falls back to the monogram.
+/// Resolve each sender host to a data: URI for its domain's icon — looked up
+/// once per registrable domain (`avatar_key`), cache first, network second.
+/// The result is keyed by the hosts as asked, lowercased; hosts with no icon
+/// simply stay absent, and the caller falls back to the monogram.
 ///
 /// Callers must check the user's setting first: reaching this function at all
 /// means avatar lookups are switched on.
-pub async fn load_avatars(pool: &SqlitePool, domains: &[String]) -> HashMap<String, String> {
+pub async fn load_avatars(pool: &SqlitePool, hosts: &[String]) -> HashMap<String, String> {
     prune_expired(pool).await;
+
+    // The caller asks by sender host; lookups and the cache go by
+    // `avatar_key`. Remember which hosts each key answers for.
+    let mut hosts_by_key: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut domains = Vec::new();
+    for host in hosts {
+        let Some(key) = avatar_key(host) else {
+            continue;
+        };
+        let asked_by = hosts_by_key.entry(key.clone()).or_default();
+        if asked_by.is_empty() {
+            domains.push(key);
+        }
+        asked_by.insert(host.to_ascii_lowercase());
+    }
 
     let mut resolved = HashMap::new();
     let mut to_fetch = Vec::new();
-    let mut seen = HashSet::new();
     for domain in domains {
-        let domain = domain.to_ascii_lowercase();
-        if !seen.insert(domain.clone()) || !is_fetchable_domain(&domain) {
-            continue;
-        }
         if resolved.len() + to_fetch.len() >= MAX_DOMAINS {
             break;
         }
@@ -149,12 +161,28 @@ pub async fn load_avatars(pool: &SqlitePool, domains: &[String]) -> HashMap<Stri
             None => to_fetch.push(domain),
         }
     }
-    if to_fetch.is_empty() {
-        return resolved;
+    if !to_fetch.is_empty() {
+        fetch_and_store(pool, to_fetch, &mut resolved).await;
     }
+    // Hand each icon back under every host that asked for its domain.
+    resolved
+        .into_iter()
+        .flat_map(|(domain, uri)| {
+            let hosts = hosts_by_key.remove(&domain).unwrap_or_default();
+            hosts.into_iter().map(move |host| (host, uri.clone()))
+        })
+        .collect()
+}
 
+/// Fetch the icons of `to_fetch` from the network, cache every outcome, and
+/// add the found ones to `resolved`.
+async fn fetch_and_store(
+    pool: &SqlitePool,
+    to_fetch: Vec<String>,
+    resolved: &mut HashMap<String, String>,
+) {
     let Ok(client) = client() else {
-        return resolved;
+        return;
     };
     let fetched = futures::stream::iter(to_fetch.into_iter().map(|domain| {
         let client = client.clone();
@@ -179,7 +207,24 @@ pub async fn load_avatars(pool: &SqlitePool, domains: &[String]) -> HashMap<Stri
             None => store_missing(pool, &domain).await,
         }
     }
-    resolved
+}
+
+/// The key a sender host is looked up and cached under: its registrable
+/// domain per the Public Suffix List ("example.co.uk" for
+/// "mail.example.co.uk"). `None` when the host is not fetchable, or is
+/// itself a public suffix and so names no one.
+///
+/// why not the host as written: the From domain is sender-chosen, and a
+/// per-recipient subdomain ("u8f3k2.tracker.com") would turn the
+/// once-per-domain lookup into a tracking pixel — one request per recipient.
+/// Reduced to its registrable domain, every such subdomain is one lookup.
+fn avatar_key(host: &str) -> Option<String> {
+    let host = host.to_ascii_lowercase();
+    if !is_fetchable_domain(&host) {
+        return None;
+    }
+    let domain = psl::domain_str(&host)?;
+    is_fetchable_domain(domain).then(|| domain.to_string())
 }
 
 /// Whether a string is a public hostname safe to splice into a fetch URL.
@@ -448,6 +493,47 @@ mod tests {
 
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved["example.com"], "data:image/png;base64,iVBORw==");
+    }
+
+    #[test]
+    fn looks_up_the_registrable_domain_not_the_host() {
+        // A sender picks the From domain. Keyed on the host as written, a
+        // per-recipient subdomain turned the once-per-domain lookup into a
+        // tracking pixel: one request per recipient, telling the sender who
+        // listed the mail and when.
+        assert_eq!(
+            avatar_key("u8f3k2.tracker.com").as_deref(),
+            Some("tracker.com")
+        );
+        assert_eq!(
+            avatar_key("Mail.Example.co.UK").as_deref(),
+            Some("example.co.uk")
+        );
+        assert_eq!(avatar_key("example.com").as_deref(), Some("example.com"));
+        // A bare public suffix names no one, and a local name stays local.
+        assert_eq!(avatar_key("co.uk"), None);
+        assert_eq!(avatar_key("printer.local"), None);
+        assert_eq!(avatar_key("localhost"), None);
+    }
+
+    #[tokio::test]
+    async fn every_subdomain_is_served_from_one_domain_lookup() {
+        let pool = test_pool().await;
+        // "zz" is no real TLD: were a lookup to slip through, it could not
+        // reach anyone.
+        store_icon(&pool, "tracker.zz", "image/png", b"\x89PNG").await;
+
+        let resolved = load_avatars(
+            &pool,
+            &["a1.tracker.zz".to_string(), "B2.Tracker.zz".to_string()],
+        )
+        .await;
+
+        // Both answered from the one cached row, keyed as the caller asked.
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved["a1.tracker.zz"], "data:image/png;base64,iVBORw==");
+        assert_eq!(resolved["b2.tracker.zz"], "data:image/png;base64,iVBORw==");
+        assert_eq!(lookup(&pool, "a1.tracker.zz").await, None);
     }
 
     #[tokio::test]
