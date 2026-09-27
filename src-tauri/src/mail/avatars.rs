@@ -188,7 +188,7 @@ pub async fn load_avatars(pool: &SqlitePool, domains: &[String]) -> HashMap<Stri
 /// header, which any sender controls. Rejecting anything with a path, port,
 /// space or userinfo keeps it from reshaping the URL; rejecting bare labels,
 /// IP literals and reserved suffixes keeps the app off the user's own LAN.
-fn is_fetchable_domain(domain: &str) -> bool {
+pub(crate) fn is_fetchable_domain(domain: &str) -> bool {
     if domain.is_empty() || domain.len() > 253 {
         return false;
     }
