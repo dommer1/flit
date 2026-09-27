@@ -698,16 +698,21 @@ fn background_url_ranges(style: &str) -> Vec<(std::ops::Range<usize>, &str)> {
         if !at_boundary {
             continue;
         }
-        let Some(colon_rel) = lower[name_end..].find(':') else {
-            continue;
-        };
-        if !lower[name_end..name_end + colon_rel].trim().is_empty() {
+        // why look only at the next non-space character: searching for the
+        // ':' through the rest of the string made every "background" cost
+        // the length of the attribute — quadratic on a hostile style.
+        let after_name = &lower[name_end..];
+        let value = after_name.trim_start();
+        if !value.starts_with(':') {
             continue; // not whitespace-only before ':' — a longer property name
         }
-        let value_start = name_end + colon_rel + 1;
+        let value_start = name_end + (after_name.len() - value.len()) + 1;
         let decl_end = lower[value_start..]
             .find(';')
             .map_or(style.len(), |i| value_start + i);
+        // Nothing past here can start a property before `decl_end`, so
+        // every exit below moves the search on to the next declaration.
+        search_from = decl_end;
         let Some(url_rel) = lower[value_start..decl_end].find("url(") else {
             continue; // e.g. a solid `background:#fa9e2a` — nothing to resolve
         };
@@ -718,7 +723,6 @@ fn background_url_ranges(style: &str) -> Vec<(std::ops::Range<usize>, &str)> {
         let url_end = url_start + close_rel;
         let raw = style[url_start..url_end].trim().trim_matches(['\'', '"']);
         out.push((url_start..url_end, raw));
-        search_from = decl_end;
     }
     out
 }
@@ -790,6 +794,20 @@ fn data_uri(image: &InlineImage) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_scan_stays_linear_on_hostile_styles() {
+        // Each "background" used to search for its ':' through the rest of
+        // the attribute. With no colon anywhere that is quadratic: this 2 MB
+        // attribute took 5 s, and the time grows with the size squared.
+        let style = "background;".repeat(200_000);
+
+        let started = std::time::Instant::now();
+        let ranges = background_url_ranges(&style);
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(ranges.is_empty());
+    }
 
     fn png(content_id: &str) -> InlineImage {
         InlineImage {
