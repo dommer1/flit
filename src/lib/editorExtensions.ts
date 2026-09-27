@@ -21,4 +21,10 @@ const InlineImage = Image.extend({
   },
 });
 
-export const EXTENSIONS = [StarterKit, InlineImage];
+// SECURITY: links in the editor are text to edit, never to follow. Tiptap's
+// default openOnClick calls window.open(href, target) with the target from
+// pasted HTML, so target="_top" navigated the compose window itself.
+export const EXTENSIONS = [
+  StarterKit.configure({ link: { openOnClick: false } }),
+  InlineImage,
+];
