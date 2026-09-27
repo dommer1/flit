@@ -1,7 +1,7 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::mail::parse::{snippet_of, AttachmentMeta, InlineImage};
+use crate::mail::parse::{safe_filename, snippet_of, AttachmentMeta, InlineImage};
 use crate::models::{AuthResults, MessageAttachment, MessageHeader};
 use crate::timing;
 
@@ -801,14 +801,14 @@ pub async fn attachments(
     pool: &SqlitePool,
     message_id: i64,
 ) -> Result<Vec<MessageAttachment>, AppError> {
-    let rows = sqlx::query_as(
+    let rows: Vec<MessageAttachment> = sqlx::query_as(
         "SELECT id, message_id, part_index, filename, content_type, size
          FROM message_attachments WHERE message_id = ? ORDER BY part_index",
     )
     .bind(message_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+    Ok(rows.into_iter().map(with_safe_filename).collect())
 }
 
 /// One attachment row by id — what the save commands start from.
@@ -823,7 +823,16 @@ pub async fn attachment(
     .bind(attachment_id)
     .fetch_one(pool)
     .await?;
-    Ok(row)
+    Ok(with_safe_filename(row))
+}
+
+/// why on read as well as at parse time: rows cached before names were
+/// sanitized still hold the raw sender-supplied name, and it must not
+/// reach the save dialog. Sanitizing is idempotent, so clean rows pass
+/// through unchanged.
+fn with_safe_filename(mut attachment: MessageAttachment) -> MessageAttachment {
+    attachment.filename = safe_filename(&attachment.filename);
+    attachment
 }
 
 /// The cid: images cached for one message, for resolving `src="cid:..."`
@@ -2932,6 +2941,37 @@ mod tests {
                 .unwrap()
                 .attachments_scanned
         );
+    }
+
+    #[tokio::test]
+    async fn attachment_names_cached_before_sanitizing_are_served_clean() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        upsert_headers(
+            &pool,
+            id,
+            "INBOX",
+            &[header(1, "Files", "2026-07-08T00:00:00Z", false)],
+        )
+        .await
+        .unwrap();
+        let message_id = list(&pool, Some(id), "INBOX", None).await.unwrap()[0].id;
+        // Rows written before parse-time sanitizing still hold the raw
+        // sender-supplied name — the save dialog must never see it.
+        sqlx::query(
+            "INSERT INTO message_attachments
+               (message_id, part_index, filename, content_type, size)
+             VALUES (?, 0, '/Users/me/Library/LaunchAgents/x.plist', 'text/xml', 1)",
+        )
+        .bind(message_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let listed = attachments(&pool, message_id).await.unwrap();
+        assert_eq!(listed[0].filename, "_Users_me_Library_LaunchAgents_x.plist");
+        let by_id = attachment(&pool, listed[0].id).await.unwrap();
+        assert_eq!(by_id.filename, "_Users_me_Library_LaunchAgents_x.plist");
     }
 
     #[tokio::test]
