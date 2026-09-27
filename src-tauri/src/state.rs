@@ -26,12 +26,12 @@ pub struct AppState {
     pending_sends: Mutex<HashMap<u64, OutgoingMessage>>,
     /// Session cache of account passwords (see auth::PasswordCache).
     pub passwords: PasswordCache,
-    /// Accounts with a sync pass currently running — see try_begin_sync.
-    syncing: Mutex<HashSet<i64>>,
-    /// Accounts with a header backfill currently running. Separate from
-    /// `syncing`: a backfill runs for minutes and must never block the
-    /// regular sync (or vice versa).
-    backfilling: Mutex<HashSet<i64>>,
+    /// Which accounts are syncing their inbox — see try_begin_sync.
+    syncing: Mutex<SyncSlots>,
+    /// Accounts with background sync work running (the other folders, body
+    /// prefetch, header backfill). Separate from `syncing`: that work runs
+    /// for minutes and must never block an inbox sync (or vice versa).
+    background: Mutex<HashSet<i64>>,
     /// Per-account queue for background draft pushes (append / delete /
     /// folder sync). tokio's Mutex hands the lock out in FIFO order, so
     /// pushes run in save order — a later save can never reach the server
@@ -45,30 +45,65 @@ pub struct AppState {
     pub llm_summaries: llm::Summaries,
 }
 
+/// The accounts whose inbox is being synced, and those among them for
+/// which another sync was asked meanwhile.
+///
+/// why one struct behind one Mutex: "was it asked again?" and "let go"
+/// must happen as a single step (see SyncSlot::release_or_rerun). With two
+/// separate locks, a request landing between the check and the release
+/// would be dropped — exactly the lost push this exists to prevent.
+#[derive(Default)]
+struct SyncSlots {
+    running: HashSet<i64>,
+    asked_again: HashSet<i64>,
+}
+
 /// Proof of holding an account's sync slot. Dropping it releases the slot —
 /// RAII, like MutexGuard — so an early return or `?` in the sync path can
 /// never leave an account stuck "already syncing" forever.
 pub struct SyncSlot<'a> {
     state: &'a AppState,
     account_id: i64,
+    /// False once release_or_rerun has let go, so Drop does not release a
+    /// second time — by then the slot may already belong to someone else.
+    held: bool,
+}
+
+impl SyncSlot<'_> {
+    /// Let go of the slot — unless a sync of this account was asked for
+    /// while this one ran. Then the slot is handed back (`Some`) and the
+    /// caller must sync once more: the request came too late to be covered
+    /// by the pass that was already under way.
+    pub fn release_or_rerun(mut self) -> Option<Self> {
+        let mut slots = self.state.lock_syncing();
+        if slots.asked_again.remove(&self.account_id) {
+            drop(slots);
+            return Some(self);
+        }
+        slots.running.remove(&self.account_id);
+        self.held = false;
+        None
+    }
 }
 
 impl Drop for SyncSlot<'_> {
     fn drop(&mut self) {
-        self.state.lock_syncing().remove(&self.account_id);
+        if self.held {
+            self.state.lock_syncing().running.remove(&self.account_id);
+        }
     }
 }
 
-/// Proof of holding an account's backfill slot — same RAII contract as
+/// Proof of holding an account's background slot — same RAII contract as
 /// `SyncSlot`.
-pub struct BackfillSlot<'a> {
+pub struct BackgroundSlot<'a> {
     state: &'a AppState,
     account_id: i64,
 }
 
-impl Drop for BackfillSlot<'_> {
+impl Drop for BackgroundSlot<'_> {
     fn drop(&mut self) {
-        self.state.lock_backfilling().remove(&self.account_id);
+        self.state.lock_background().remove(&self.account_id);
     }
 }
 
@@ -79,8 +114,8 @@ impl AppState {
             pending_drafts: Mutex::new(HashMap::new()),
             pending_sends: Mutex::new(HashMap::new()),
             passwords: PasswordCache::default(),
-            syncing: Mutex::new(HashSet::new()),
-            backfilling: Mutex::new(HashSet::new()),
+            syncing: Mutex::new(SyncSlots::default()),
+            background: Mutex::new(HashSet::new()),
             draft_pushes: Mutex::new(HashMap::new()),
             llm_downloads: llm::download::Downloads::default(),
             llm_engine: llm::engine::Engine::default(),
@@ -89,26 +124,32 @@ impl AppState {
     }
 
     /// Claim the account's sync slot; `None` = a sync of this account is
-    /// already running (a manual refresh racing the background poll). The
-    /// loser simply skips — the running pass already covers the work, and
-    /// two parallel passes would double-fire new-mail notifications.
+    /// already running (a push or refresh racing the background poll). The
+    /// loser does not run — two parallel passes would double-fire new-mail
+    /// notifications — but its request is remembered, and the running pass
+    /// goes round once more before it lets go (release_or_rerun).
     pub fn try_begin_sync(&self, account_id: i64) -> Option<SyncSlot<'_>> {
-        if self.lock_syncing().insert(account_id) {
+        let mut slots = self.lock_syncing();
+        if slots.running.insert(account_id) {
+            // A fresh pass covers any request left over from before.
+            slots.asked_again.remove(&account_id);
             Some(SyncSlot {
                 state: self,
                 account_id,
+                held: true,
             })
         } else {
+            slots.asked_again.insert(account_id);
             None
         }
     }
 
-    /// Claim the account's backfill slot; `None` = a backfill of this
-    /// account is already running (every sync pass tries to start one — the
-    /// running loop already covers the work).
-    pub fn try_begin_backfill(&self, account_id: i64) -> Option<BackfillSlot<'_>> {
-        if self.lock_backfilling().insert(account_id) {
-            Some(BackfillSlot {
+    /// Claim the account's background slot; `None` = background work for
+    /// this account is already running (every sync pass tries to start it —
+    /// the running one already covers the work).
+    pub fn try_begin_background(&self, account_id: i64) -> Option<BackgroundSlot<'_>> {
+        if self.lock_background().insert(account_id) {
+            Some(BackgroundSlot {
                 state: self,
                 account_id,
             })
@@ -174,14 +215,14 @@ impl AppState {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn lock_syncing(&self) -> MutexGuard<'_, HashSet<i64>> {
+    fn lock_syncing(&self) -> MutexGuard<'_, SyncSlots> {
         self.syncing
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn lock_backfilling(&self) -> MutexGuard<'_, HashSet<i64>> {
-        self.backfilling
+    fn lock_background(&self) -> MutexGuard<'_, HashSet<i64>> {
+        self.background
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -250,19 +291,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backfill_slot_is_independent_of_the_sync_slot() {
+    async fn a_sync_asked_for_while_one_runs_is_not_lost() {
+        let state = AppState::new(test_pool().await);
+        let slot = state.try_begin_sync(1).expect("free");
+        // A push lands while the inbox is being synced: it cannot start a
+        // pass of its own, so the running one has to go round again for it.
+        assert!(state.try_begin_sync(1).is_none());
+
+        let slot = slot
+            .release_or_rerun()
+            .expect("asked again — keep the slot and rerun");
+        // Nobody asked during the rerun: now it lets go.
+        assert!(slot.release_or_rerun().is_none());
+        assert!(state.try_begin_sync(1).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_released_slot_does_not_free_the_next_holder() {
+        let state = AppState::new(test_pool().await);
+        let first = state.try_begin_sync(1).expect("free");
+        assert!(first.release_or_rerun().is_none());
+
+        let _second = state.try_begin_sync(1).expect("free again");
+
+        // The first slot is gone; letting go must not have been repeated
+        // when it was dropped, or it would have freed the second holder.
+        assert!(state.try_begin_sync(1).is_none());
+    }
+
+    #[tokio::test]
+    async fn background_slot_is_independent_of_the_sync_slot() {
         let state = AppState::new(test_pool().await);
 
-        let backfill = state.try_begin_backfill(1);
-        assert!(backfill.is_some());
-        // A second backfill of the same account must not start...
-        assert!(state.try_begin_backfill(1).is_none());
+        let background = state.try_begin_background(1);
+        assert!(background.is_some());
+        // Second background work for the same account must not start...
+        assert!(state.try_begin_background(1).is_none());
         // ...but a regular sync of the same account still can.
         assert!(state.try_begin_sync(1).is_some());
-        assert!(state.try_begin_backfill(2).is_some());
+        assert!(state.try_begin_background(2).is_some());
 
-        drop(backfill);
-        assert!(state.try_begin_backfill(1).is_some());
+        drop(background);
+        assert!(state.try_begin_background(1).is_some());
     }
 
     #[tokio::test]

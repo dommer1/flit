@@ -162,11 +162,10 @@ const BACKGROUND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3
 /// poller) that have an AppHandle but no `State` extractor.
 pub(crate) async fn run_sync(app: &AppHandle, account_id: i64) -> Result<(), AppError> {
     // why the whole pass runs in one spawned task while the caller waits only
-    // for the inbox stage: the sync slot is what stops an account opening two
-    // IMAP sessions at once, and it borrows AppState, so it cannot be handed
-    // across a spawn. Keeping every stage inside one task keeps the slot held
-    // for all of them — and the oneshot still lets "check for new mail" report
-    // done as soon as the inbox has landed, instead of after all 26 folders.
+    // for the inbox stage: the sync and background slots borrow AppState, so
+    // they cannot be handed across a spawn — every stage lives in one task,
+    // and the oneshot still lets "check for new mail" report done as soon as
+    // the inbox has landed, instead of after all 26 folders.
     let (report, inbox_done) = tokio::sync::oneshot::channel();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -195,10 +194,11 @@ async fn run_pass_inner(
     report: tokio::sync::oneshot::Sender<Result<(), AppError>>,
 ) -> Result<(), AppError> {
     let state = app.state::<AppState>();
-    // why: held (RAII) for the whole pass — a manual refresh racing the
-    // background poll must not open a second IMAP session for the same
-    // account or double-fire notifications. The loser skips silently.
-    let Some(_slot) = state.try_begin_sync(account_id) else {
+    // why: held (RAII) through the inbox stage — a push or refresh racing
+    // the background poll must not sync the inbox twice at once or
+    // double-fire notifications. The loser does not run; its request is
+    // remembered and this pass reruns the inbox for it (release_or_rerun).
+    let Some(slot) = state.try_begin_sync(account_id) else {
         let _ = report.send(Ok(()));
         return Ok(());
     };
@@ -240,13 +240,57 @@ async fn run_pass_inner(
     crate::notify::show(app, &crate::notify::plan(&account, &defaults, &new_mail));
 
     // The inbox is in and on screen — whoever asked for a check has their
-    // answer. Everything below runs on with the sync slot still held.
+    // answer.
     let _ = report.send(Ok(()));
+
+    // why rerun before letting go: a sync asked for while this one ran (a
+    // push landing mid-stage) was refused a pass of its own, and the mail it
+    // announced may have arrived after this pass looked. Until 2026-09 that
+    // request was simply dropped and the mail waited for the next poll —
+    // half an hour on push setups. Go round again on the same connection
+    // until nobody asked; the check and the release are one locked step.
+    let mut session = session;
+    let mut slot = slot;
+    loop {
+        match slot.release_or_rerun() {
+            None => break,
+            Some(held) => {
+                slot = held;
+                let again = mail::with_timeout(
+                    SYNC_LABEL,
+                    SYNC_TIMEOUT,
+                    mail::sync::sync_inbox(&state.pool, &account, &mut session),
+                )
+                .await;
+                match again {
+                    Ok(new_mail) => {
+                        app.emit("messages-changed", MessagesChanged::reload(account_id))?;
+                        let plan = crate::notify::plan(&account, &defaults, &new_mail);
+                        crate::notify::show(app, &plan);
+                    }
+                    Err(err) => {
+                        // A failed command leaves the session mid-stream;
+                        // stop here. The slot is released on the way out.
+                        eprintln!("inbox resync failed for account {account_id}: {err}");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    // The sync slot is free again, so a push from here on gets its own
+    // inbox pass at once instead of waiting out the minutes below. The rest
+    // of the work runs under the background slot; a concurrent pass finds
+    // it taken and leaves that work to this one.
+    let Some(_background) = state.try_begin_background(account_id) else {
+        let _ = session.logout().await;
+        return Ok(());
+    };
 
     let pool = state.pool.clone();
     let app = app.clone();
     {
-        let mut session = session;
         // The rest of the account's folders. Measured at 30.2 s across 26
         // folders, which is why the user is no longer kept waiting for it.
         let others = mail::with_timeout(
@@ -294,11 +338,8 @@ async fn run_pass_inner(
         // Header backfill: mirror the rest of every folder so the whole
         // mailbox is eventually local. Runs after the body prefetch, on the
         // same connection, so the two never talk to the server at once. The
-        // slot makes a refresh mid-backfill a no-op instead of a second loop.
-        let state = app.state::<AppState>();
-        let Some(_slot) = state.try_begin_backfill(account_id) else {
-            return Ok(());
-        };
+        // background slot makes a refresh mid-backfill a no-op instead of a
+        // second loop.
         // Each cached batch refreshes the list (and its progress line) live —
         // but no faster than Progress allows.
         let progress = Progress::new();
