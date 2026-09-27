@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged by the Tauri CLI into the bundle's generated Info.plist.
+
+  LSFileQuarantineEnabled: every file Flit writes carries the
+  com.apple.quarantine flag, so Gatekeeper checks a saved attachment the
+  first time it is opened — the same protection Mail.app and browsers give.
+  Without it a mailed unsigned app or script runs with no warning.
+-->
+<plist version="1.0">
+<dict>
+	<key>LSFileQuarantineEnabled</key>
+	<true/>
+</dict>
+</plist>

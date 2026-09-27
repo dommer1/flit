@@ -268,4 +268,16 @@ mod tests {
         assert!(!opens_in_browser(&url("mailto:x@example.com")));
         assert!(!opens_in_browser(&url("data:text/html,<b>x")));
     }
+
+    #[test]
+    fn bundle_quarantines_the_files_the_app_writes() {
+        // Saved attachments are sender-controlled files. Gatekeeper only
+        // checks a file carrying the quarantine flag, and a non-sandboxed
+        // app sets none unless its Info.plist opts in — without this key a
+        // mailed unsigned app opens with no warning.
+        let plist = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Info.plist"))
+            .expect("src-tauri/Info.plist exists");
+        let compact: String = plist.split_whitespace().collect();
+        assert!(compact.contains("<key>LSFileQuarantineEnabled</key><true/>"));
+    }
 }
