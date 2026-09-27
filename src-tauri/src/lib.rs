@@ -258,6 +258,92 @@ mod tests {
         assert!(opens_in_browser(&url("http://example.com")));
     }
 
+    /// The app commands lib.rs registers, read from its own source.
+    fn registered_commands() -> std::collections::BTreeSet<String> {
+        let lib = include_str!("lib.rs");
+        let handler = lib
+            .split("generate_handler![")
+            .nth(1)
+            .and_then(|rest| rest.split("])").next())
+            .expect("lib.rs registers its commands");
+        handler
+            .split(',')
+            .filter_map(|entry| entry.trim().strip_prefix("commands::"))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// App-command permissions (`allow-<command>`) granted per capability.
+    fn granted() -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities");
+        std::fs::read_dir(dir)
+            .expect("capabilities dir")
+            .map(|entry| {
+                let path = entry.expect("dir entry").path();
+                let json: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(&path).expect("readable"))
+                        .expect("valid capability JSON");
+                let commands = json["permissions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.as_str()?.strip_prefix("allow-"))
+                    .map(|name| name.replace('-', "_"))
+                    .collect();
+                (
+                    json["identifier"].as_str().unwrap_or("").to_string(),
+                    commands,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_app_manifest_declares_exactly_the_registered_commands() {
+        // A command registered but not declared in build.rs gets no
+        // permission, so no window could call it (deny by default).
+        let build = include_str!("../build.rs");
+        let declared: std::collections::BTreeSet<String> = build
+            .split("APP_COMMANDS: &[&str] = &[")
+            .nth(1)
+            .and_then(|rest| rest.split("];").next())
+            .expect("build.rs declares APP_COMMANDS")
+            .split(',')
+            .map(|entry| entry.trim().trim_matches('"').to_string())
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        assert_eq!(declared, registered_commands());
+    }
+
+    #[test]
+    fn every_command_is_granted_to_some_window() {
+        let granted: std::collections::BTreeSet<String> =
+            granted().into_values().flatten().collect();
+        let orphans: Vec<String> = registered_commands()
+            .into_iter()
+            .filter(|command| !granted.contains(command))
+            .collect();
+
+        assert!(orphans.is_empty(), "granted to no window: {orphans:?}");
+    }
+
+    #[test]
+    fn each_window_gets_only_the_powers_it_needs() {
+        // why these pairs: the compose window holds mail-derived HTML (the
+        // sanctioned quote exception), so it must not be able to write files
+        // where it likes; settings has no business sending mail.
+        let granted = granted();
+        let compose = &granted["compose"];
+        for command in ["save_attachment", "save_all_attachments", "delete_account"] {
+            assert!(!compose.contains(command), "compose may {command}");
+        }
+        let settings = &granted["settings"];
+        for command in ["queue_send", "schedule_send", "save_attachment"] {
+            assert!(!settings.contains(command), "settings may {command}");
+        }
+    }
+
     #[test]
     fn keeps_every_other_scheme_inside_the_app() {
         // A message names the URL, so the scheme is untrusted input: handing
