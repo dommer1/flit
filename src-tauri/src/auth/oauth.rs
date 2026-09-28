@@ -8,14 +8,14 @@
 use std::time::Duration;
 
 use oauth2::basic::{
-    BasicErrorResponse, BasicRevocationErrorResponse, BasicTokenIntrospectionResponse,
-    BasicTokenType,
+    BasicErrorResponse, BasicErrorResponseType, BasicRevocationErrorResponse,
+    BasicTokenIntrospectionResponse, BasicTokenType,
 };
 use oauth2::url::Url;
 use oauth2::{
     AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet,
     EndpointSet, ExtraTokenFields, HttpClientError, HttpRequest, HttpResponse, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, RequestTokenError, Scope, StandardRevocableToken,
+    PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope, StandardRevocableToken,
     StandardTokenResponse, TokenResponse as _, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
@@ -125,7 +125,8 @@ impl Provider {
         self.client_id.is_some()
     }
 
-    fn client(&self, redirect_uri: &str) -> Result<OAuthClient, AppError> {
+    /// `redirect_uri` is needed by the sign-in steps only, not a refresh.
+    fn client(&self, redirect_uri: Option<&str>) -> Result<OAuthClient, AppError> {
         let client_id = self.client_id.ok_or_else(|| {
             AppError::OAuth("this build has no OAuth client for the provider".to_string())
         })?;
@@ -133,12 +134,14 @@ impl Provider {
         let mut client = oauth2::Client::new(ClientId::new(client_id.to_string()))
             .set_auth_uri(AuthUrl::new(self.auth_url.to_string()).map_err(invalid)?)
             .set_token_uri(TokenUrl::new(self.token_url.to_string()).map_err(invalid)?)
-            .set_redirect_uri(RedirectUrl::new(redirect_uri.to_string()).map_err(invalid)?)
             // why: credentials in the form body is how Google documents its
             // desktop flow, and a public client (no secret) needs it anyway.
             .set_auth_type(AuthType::RequestBody);
         if let Some(secret) = self.client_secret {
             client = client.set_client_secret(ClientSecret::new(secret.to_string()));
+        }
+        if let Some(uri) = redirect_uri {
+            client = client.set_redirect_uri(RedirectUrl::new(uri.to_string()).map_err(invalid)?);
         }
         Ok(client)
     }
@@ -151,7 +154,7 @@ impl Provider {
         login_hint: Option<&str>,
     ) -> Result<Authorization, AppError> {
         let (challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-        let client = self.client(redirect_uri)?;
+        let client = self.client(Some(redirect_uri))?;
         let mut request = client
             .authorize_url(CsrfToken::new_random)
             .set_pkce_challenge(challenge)
@@ -180,22 +183,50 @@ impl Provider {
         pkce_verifier: PkceCodeVerifier,
     ) -> Result<Tokens, AppError> {
         let response = self
-            .client(redirect_uri)?
+            .client(Some(redirect_uri))?
             .exchange_code(AuthorizationCode::new(code))
             .set_pkce_verifier(pkce_verifier)
             .request_async(&|request| send(http.clone(), request))
             .await
             .map_err(token_error)?;
-        Ok(Tokens {
-            access_token: response.access_token().secret().clone(),
-            refresh_token: response.refresh_token().map(|t| t.secret().clone()),
-            expires_in: response.expires_in(),
-            email: response
-                .extra_fields()
-                .id_token
-                .as_deref()
-                .and_then(email_from_id_token),
-        })
+        Ok(tokens(response))
+    }
+
+    /// A new access token for a stored refresh token. A grant the provider
+    /// no longer honours is `SignInExpired`: retrying cannot help.
+    pub async fn refresh(
+        &self,
+        http: &reqwest::Client,
+        refresh_token: &str,
+    ) -> Result<Tokens, AppError> {
+        let refresh_token = RefreshToken::new(refresh_token.to_string());
+        let response = self
+            .client(None)?
+            .exchange_refresh_token(&refresh_token)
+            .request_async(&|request| send(http.clone(), request))
+            .await
+            .map_err(|err| match &err {
+                RequestTokenError::ServerResponse(reply)
+                    if *reply.error() == BasicErrorResponseType::InvalidGrant =>
+                {
+                    AppError::SignInExpired
+                }
+                _ => token_error(err),
+            })?;
+        Ok(tokens(response))
+    }
+}
+
+fn tokens(response: TokenResponse) -> Tokens {
+    Tokens {
+        access_token: response.access_token().secret().clone(),
+        refresh_token: response.refresh_token().map(|t| t.secret().clone()),
+        expires_in: response.expires_in(),
+        email: response
+            .extra_fields()
+            .id_token
+            .as_deref()
+            .and_then(email_from_id_token),
     }
 }
 
@@ -497,6 +528,43 @@ mod tests {
             .to_string();
 
         assert!(err.contains("invalid_grant"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_refresh_token_buys_a_new_access_token() {
+        let (url, seen) = serve_once(
+            "200 OK",
+            r#"{"access_token":"ya29.b","expires_in":3599,"token_type":"Bearer"}"#,
+        )
+        .await;
+
+        let tokens = local_google(&url)
+            .refresh(&reqwest::Client::new(), "1//r")
+            .await
+            .unwrap();
+
+        assert_eq!(tokens.access_token, "ya29.b");
+        assert_eq!(tokens.refresh_token, None);
+        let form = seen.await.unwrap();
+        assert!(form.contains("grant_type=refresh_token"), "{form}");
+        assert!(form.contains("refresh_token=1%2F%2Fr"), "{form}");
+    }
+
+    #[tokio::test]
+    async fn a_revoked_grant_means_signing_in_again() {
+        let (url, _seen) = serve_once(
+            "400 Bad Request",
+            r#"{"error":"invalid_grant","error_description":"Token has been expired or revoked."}"#,
+        )
+        .await;
+
+        let err = local_google(&url)
+            .refresh(&reqwest::Client::new(), "1//r")
+            .await
+            .err()
+            .unwrap();
+
+        assert!(matches!(err, AppError::SignInExpired), "{err}");
     }
 
     #[tokio::test]

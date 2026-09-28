@@ -32,6 +32,10 @@ pub enum AppError {
     /// OAuth sign-in or token refresh failed; the message says which step.
     #[error("sign-in error: {0}")]
     OAuth(String),
+    /// The provider no longer honours the stored sign-in (revoked, password
+    /// changed, or unused too long). Only signing in again fixes it.
+    #[error("sign-in expired: sign in to the account again")]
+    SignInExpired,
     // why: user-fixable input problems (e.g. a schedule time in the past)
     // get their own variant so the message reads as guidance, not a fault.
     #[error("{0}")]
