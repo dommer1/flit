@@ -20,6 +20,7 @@ function account(id: number, name: string): Account {
     notifyEnabled: null,
     notifySound: null,
     defaultAliasId: null,
+    auth: "password",
   };
 }
 

@@ -31,6 +31,19 @@ pub struct Account {
     /// The send-as identity new mail from this account starts with;
     /// `None` = the account's own address.
     pub default_alias_id: Option<i64>,
+    /// How the account signs in to its servers.
+    pub auth: AuthKind,
+}
+
+/// How an account signs in, stored as text in `accounts.auth`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+pub enum AuthKind {
+    /// A password from the keychain.
+    Password,
+    /// Google OAuth: the keychain holds a refresh token.
+    Google,
 }
 
 /// One send-as alias: an extra address the account's mail server accepts as

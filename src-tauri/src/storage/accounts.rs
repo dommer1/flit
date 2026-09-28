@@ -1,15 +1,28 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::models::{Account, NewAccount};
+use crate::models::{Account, AuthKind, NewAccount};
 
-/// Insert an account and return it with the assigned id.
+/// Insert a password account and return it with the assigned id.
 pub async fn insert(pool: &SqlitePool, account: &NewAccount) -> Result<Account, AppError> {
+    insert_with_auth(pool, account, AuthKind::Password).await
+}
+
+/// Insert an account that signs in the `auth` way.
+///
+/// why a separate argument, not a NewAccount field: NewAccount arrives from
+/// the frontend, and the frontend must not be able to declare an account
+/// OAuth — only the backend's sign-in flow creates those.
+pub async fn insert_with_auth(
+    pool: &SqlitePool,
+    account: &NewAccount,
+    auth: AuthKind,
+) -> Result<Account, AppError> {
     // why: RETURNING gives back the full row (incl. the generated id) in one
     // round trip, instead of a separate last_insert_rowid + SELECT.
     let inserted = sqlx::query_as(
-        "INSERT INTO accounts (name, email, imap_host, imap_port, smtp_host, smtp_port, username)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO accounts (name, email, imap_host, imap_port, smtp_host, smtp_port, username, auth)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING *",
     )
     .bind(&account.name)
@@ -19,6 +32,7 @@ pub async fn insert(pool: &SqlitePool, account: &NewAccount) -> Result<Account, 
     .bind(&account.smtp_host)
     .bind(account.smtp_port)
     .bind(&account.username)
+    .bind(auth)
     .fetch_one(pool)
     .await?;
     Ok(inserted)
@@ -117,6 +131,35 @@ mod tests {
             smtp_port: 587,
             username: format!("{}@example.com", name.to_lowercase()),
         }
+    }
+
+    #[tokio::test]
+    async fn accounts_sign_in_with_a_password_unless_told_otherwise() {
+        let pool = test_pool().await;
+
+        let password = insert(&pool, &sample("Personal")).await.unwrap();
+        let google = insert_with_auth(&pool, &sample("Gmail"), AuthKind::Google)
+            .await
+            .unwrap();
+
+        assert_eq!(password.auth, AuthKind::Password);
+        assert_eq!(get(&pool, google.id).await.unwrap().auth, AuthKind::Google);
+    }
+
+    #[tokio::test]
+    async fn accounts_stored_before_oauth_read_as_password_accounts() {
+        let pool = test_pool().await;
+        // A row written the way every account was before the auth column.
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO accounts (name, email, imap_host, imap_port, smtp_host, smtp_port, username)
+             VALUES ('Old', 'old@example.com', 'imap.example.com', 993, 'smtp.example.com', 587, 'old')
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(get(&pool, id).await.unwrap().auth, AuthKind::Password);
     }
 
     #[tokio::test]

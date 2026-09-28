@@ -36,6 +36,7 @@ const accounts: Account[] = [
     notifyEnabled: null,
     notifySound: null,
     defaultAliasId: null,
+    auth: "password",
   },
   {
     id: 2,
@@ -53,6 +54,7 @@ const accounts: Account[] = [
     notifyEnabled: null,
     notifySound: null,
     defaultAliasId: null,
+    auth: "password",
   },
 ];
 

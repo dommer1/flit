@@ -168,6 +168,7 @@ mod tests {
             notify_enabled,
             notify_sound: notify_sound.map(str::to_string),
             default_alias_id: None,
+            auth: crate::models::AuthKind::Password,
         }
     }
 

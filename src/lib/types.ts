@@ -23,7 +23,12 @@ export interface Account {
   notifySound: string | null;
   /** Send-as identity new mail starts with; null = the account's address. */
   defaultAliasId: number | null;
+  /** How the account signs in to its servers. */
+  auth: AuthKind;
 }
+
+/** "password" = keychain password; "google" = Google OAuth sign-in. */
+export type AuthKind = "password" | "google";
 
 /** One send-as alias: an extra address the account's mail server accepts
  * as sender. Only stored aliases may appear as From. */
