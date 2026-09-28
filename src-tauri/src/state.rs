@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use sqlx::SqlitePool;
 
-use crate::auth::{self, PasswordCache};
+use crate::auth::{self, Credential, PasswordCache};
 use crate::error::AppError;
 use crate::llm;
-use crate::models::OutgoingMessage;
+use crate::models::{Account, OutgoingMessage};
 
 /// Shared app state managed by Tauri; commands receive it via `tauri::State`.
 ///
@@ -167,13 +167,16 @@ impl AppState {
         }
     }
 
-    /// Account password via the session cache: the keychain — and with it a
-    /// possible macOS ACL prompt — is consulted at most once per account
-    /// per app run.
-    pub async fn password(&self, account_id: i64) -> Result<String, AppError> {
-        self.passwords
+    /// The account's credential. A password comes via the session cache: the
+    /// keychain — and with it a possible macOS ACL prompt — is consulted at
+    /// most once per account per app run.
+    pub async fn credential(&self, account: &Account) -> Result<Credential, AppError> {
+        let account_id = account.id;
+        let password = self
+            .passwords
             .get_or_fetch(account_id, || auth::get_password(account_id))
-            .await
+            .await?;
+        Ok(Credential::Password(password))
     }
 
     /// Record that a full pass of the account starts at `now` (Unix secs).

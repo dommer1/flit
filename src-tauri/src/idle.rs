@@ -182,23 +182,23 @@ async fn watch(app: &AppHandle, account_id: i64) -> Ended {
 }
 
 async fn watch_inner(app: &AppHandle, account_id: i64) -> Result<Ended, AppError> {
-    let (account, password, inbox) = {
+    let (account, credential, inbox) = {
         let state = app.state::<AppState>();
         let account = storage::accounts::get(&state.pool, account_id).await?;
-        let password = state.password(account_id).await?;
+        let credential = state.credential(&account).await?;
         // The inbox is whatever discovery labelled with the inbox role;
         // "INBOX" is the RFC-guaranteed fallback before a first sync.
         let inbox = storage::mailboxes::name_for_role(&state.pool, account_id, "inbox")
             .await?
             .unwrap_or_else(|| "INBOX".to_string());
-        (account, password, inbox)
+        (account, credential, inbox)
     };
 
     let mut session = imap::connect(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        &password,
+        &credential,
     )
     .await?;
     if !imap::supports_idle(&mut session).await {

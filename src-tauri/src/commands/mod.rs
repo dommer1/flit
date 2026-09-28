@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::auth::Credential;
 use crate::error::AppError;
 use crate::models::{
     Account, Alias, Appearance, AuthResults, DateTimeFormat, LlmStatus, Mailbox, MessageBody,
@@ -148,13 +149,13 @@ pub async fn refresh_account(app: AppHandle, account_id: i64) -> Result<(), AppE
 /// Open one IMAP session for an account.
 async fn connect_account(
     account: &Account,
-    password: &str,
+    credential: &Credential,
 ) -> Result<mail::imap::ImapSession, AppError> {
     mail::imap::connect(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        password,
+        credential,
     )
     .await
 }
@@ -243,13 +244,13 @@ async fn run_pass_inner(
         return Ok(());
     };
     let account = storage::accounts::get(&state.pool, account_id).await?;
-    // why: the password comes from the session cache (one keychain read per
+    // why: the credential comes from the session cache (one keychain read per
     // account per run) and never leaves this block — never written to state
     // beyond the cache, events, or logs. The open session outlives it: the
     // background work below continues on the very same connection.
     let result = mail::with_timeout(SYNC_LABEL, SYNC_TIMEOUT, async {
-        let password = state.password(account_id).await?;
-        let mut session = connect_account(&account, &password).await?;
+        let credential = state.credential(&account).await?;
+        let mut session = connect_account(&account, &credential).await?;
         let new_mail = mail::sync::sync_inbox(&state.pool, &account, &mut session).await?;
         Ok::<(mail::imap::ImapSession, Vec<mail::sync::NewMail>), AppError>((session, new_mail))
     })
@@ -431,14 +432,14 @@ pub async fn set_message_read(
         MessagesChanged::read(loc.account_id, vec![message_id], read),
     )?;
 
-    // why: fetch account + password on the command path (cheap, from the
+    // why: fetch account + credential on the command path (cheap, from the
     // session cache) so the spawned task owns everything it needs.
     let account = storage::accounts::get(&state.pool, loc.account_id).await?;
-    let password = state.password(loc.account_id).await?;
+    let credential = state.credential(&account).await?;
     tauri::async_runtime::spawn(async move {
         // why: best effort — if the server STORE fails, the next sync's
         // reconcile adopts the server's flag, so nothing drifts permanently.
-        if let Err(err) = push_seen_flag(&account, &password, &loc.mailbox, loc.uid, read).await {
+        if let Err(err) = push_seen_flag(&account, &credential, &loc.mailbox, loc.uid, read).await {
             eprintln!("failed to push read={read} for message {message_id}: {err}");
         }
     });
@@ -470,13 +471,13 @@ pub async fn set_messages_read(
 
     for batch in batches {
         let account = storage::accounts::get(&state.pool, batch.account_id).await?;
-        let password = state.password(batch.account_id).await?;
+        let credential = state.credential(&account).await?;
         let uids: Vec<i64> = batch.rows.iter().map(|(_, uid)| *uid).collect();
         tauri::async_runtime::spawn(async move {
             // why: best effort, like the single-message path — a failed STORE
             // is adopted back from the server by the next sync's reconcile.
             if let Err(err) =
-                push_seen_flags(&account, &password, &batch.mailbox, &uids, read).await
+                push_seen_flags(&account, &credential, &batch.mailbox, &uids, read).await
             {
                 eprintln!("failed to push read={read} for {} rows: {err}", uids.len());
             }
@@ -843,12 +844,12 @@ async fn move_rows_to_mailbox(
     }
 
     let account = storage::accounts::get(&state.pool, account_id).await?;
-    let password = state.password(account_id).await?;
+    let credential = state.credential(&account).await?;
     let mut session = mail::imap::connect(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        &password,
+        &credential,
     )
     .await?;
     session
@@ -883,18 +884,18 @@ async fn move_rows_to_mailbox(
 /// Connect, select the folder, flip the `\Seen` flag, log out.
 async fn push_seen_flag(
     account: &Account,
-    password: &str,
+    credential: &Credential,
     mailbox: &str,
     uid: i64,
     seen: bool,
 ) -> Result<(), AppError> {
-    push_seen_flags(account, password, mailbox, &[uid], seen).await
+    push_seen_flags(account, credential, mailbox, &[uid], seen).await
 }
 
 /// One connection, one SELECT, one STORE over the whole set.
 async fn push_seen_flags(
     account: &Account,
-    password: &str,
+    credential: &Credential,
     mailbox: &str,
     uids: &[i64],
     seen: bool,
@@ -904,7 +905,7 @@ async fn push_seen_flags(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        password,
+        credential,
     )
     .await?;
     session
@@ -1264,8 +1265,8 @@ async fn deliver(app: &AppHandle, message: &OutgoingMessage) -> Result<(), AppEr
     let (from_name, from_email) = storage::aliases::sender(&state.pool, message).await?;
     let mime = mail::smtp::build_message(&from_name, &from_email, message).await?;
     // why: the session cache reads the keychain at most once per account per
-    // run; the password never reaches events or logs.
-    let password = state.password(message.account_id).await?;
+    // run; the credential never reaches events or logs.
+    let credential = state.credential(&account).await?;
     // why: formatted() consumes nothing but we need the raw bytes twice —
     // once for SMTP, once for the Sent-folder copy below.
     let raw = mime.formatted();
@@ -1273,19 +1274,19 @@ async fn deliver(app: &AppHandle, message: &OutgoingMessage) -> Result<(), AppEr
         &account.smtp_host,
         account.smtp_port,
         &account.username,
-        &password,
+        &credential,
         mime,
     )
     .await?;
     // why: best effort — the mail already left the machine, so a failed
     // Sent copy must never surface as a failed send (or reopen the draft).
-    if let Err(err) = save_sent_copy(state, &account, &password, &raw).await {
+    if let Err(err) = save_sent_copy(state, &account, &credential, &raw).await {
         eprintln!("sent copy for account {} failed: {err}", account.id);
     }
     // Same rule for the draft cleanup: a leftover draft is cosmetic, the
     // next save/sync can deal with it.
     if let Some(draft_id) = &message.draft_message_id {
-        if let Err(err) = delete_sent_draft(app, state, &account, &password, draft_id).await {
+        if let Err(err) = delete_sent_draft(app, state, &account, &credential, draft_id).await {
             eprintln!("could not delete draft {draft_id} after send: {err}");
         }
     }
@@ -1300,7 +1301,7 @@ async fn delete_sent_draft(
     app: &AppHandle,
     state: &AppState,
     account: &Account,
-    password: &str,
+    credential: &Credential,
     draft_id: &str,
 ) -> Result<(), AppError> {
     let Some(drafts) = storage::mailboxes::name_for_role(&state.pool, account.id, "drafts").await?
@@ -1311,7 +1312,7 @@ async fn delete_sent_draft(
     let _ = app.emit("messages-changed", MessagesChanged::reload(account.id));
     let lock = state.draft_push_lock(account.id);
     let _guard = lock.lock().await;
-    delete_draft_on_server(app, &state.pool, account, password, &drafts, draft_id).await
+    delete_draft_on_server(app, &state.pool, account, credential, &drafts, draft_id).await
 }
 
 /// Mirror a delivered message into the account's IMAP Sent folder so other
@@ -1320,7 +1321,7 @@ async fn delete_sent_draft(
 async fn save_sent_copy(
     state: &AppState,
     account: &Account,
-    password: &str,
+    credential: &Credential,
     raw: &[u8],
 ) -> Result<(), AppError> {
     if mail::smtp::server_saves_sent_copy(&account.smtp_host) {
@@ -1333,7 +1334,7 @@ async fn save_sent_copy(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        password,
+        credential,
     )
     .await?;
     let result = mail::imap::append(&mut session, &sent, "(\\Seen)", raw).await;
@@ -1409,7 +1410,7 @@ pub async fn save_draft(
 
     // Server push in the background, serialized per account (FIFO lock) so
     // an autosave burst appends and deletes in save order.
-    let password = state.password(message.account_id).await?;
+    let credential = state.credential(&account).await?;
     let lock = state.draft_push_lock(account.id);
     let pool = state.pool.clone();
     let app = app.clone();
@@ -1420,7 +1421,7 @@ pub async fn save_draft(
             &app,
             &pool,
             &account,
-            &password,
+            &credential,
             &drafts,
             &raw,
             &pushed_id,
@@ -1453,7 +1454,7 @@ async fn push_draft(
     app: &AppHandle,
     pool: &sqlx::SqlitePool,
     account: &Account,
-    password: &str,
+    credential: &Credential,
     drafts: &str,
     raw: &[u8],
     message_id: &str,
@@ -1463,7 +1464,7 @@ async fn push_draft(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        password,
+        credential,
     )
     .await?;
     // why \Seen: the user wrote this text — it must not light up unread
@@ -1519,15 +1520,21 @@ pub async fn discard_draft(
 
     // Behind the same FIFO lock as saves — a discard must never overtake
     // the push that is still appending the version it deletes.
-    let password = state.password(account_id).await?;
+    let credential = state.credential(&account).await?;
     let lock = state.draft_push_lock(account_id);
     let pool = state.pool.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let _guard = lock.lock().await;
-        if let Err(err) =
-            delete_draft_on_server(&app, &pool, &account, &password, &drafts, &draft_message_id)
-                .await
+        if let Err(err) = delete_draft_on_server(
+            &app,
+            &pool,
+            &account,
+            &credential,
+            &drafts,
+            &draft_message_id,
+        )
+        .await
         {
             eprintln!("draft delete for account {} failed: {err}", account.id);
         }
@@ -1541,7 +1548,7 @@ async fn delete_draft_on_server(
     app: &AppHandle,
     pool: &sqlx::SqlitePool,
     account: &Account,
-    password: &str,
+    credential: &Credential,
     drafts: &str,
     draft_id: &str,
 ) -> Result<(), AppError> {
@@ -1549,7 +1556,7 @@ async fn delete_draft_on_server(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        password,
+        credential,
     )
     .await?;
     let result = delete_draft_version(&mut session, drafts, draft_id).await;
@@ -1586,18 +1593,19 @@ async fn delete_draft_version(
 /// already name the failing leg ("imap error: …" / "smtp error: …").
 #[tauri::command]
 pub async fn test_connection(account: NewAccount, password: String) -> Result<(), AppError> {
+    let credential = Credential::Password(password);
     let (imap, smtp) = tokio::join!(
         mail::imap::verify(
             &account.imap_host,
             account.imap_port,
             &account.username,
-            &password,
+            &credential,
         ),
         mail::smtp::verify(
             &account.smtp_host,
             account.smtp_port,
             &account.username,
-            &password,
+            &credential,
         ),
     );
     imap?;
@@ -1736,11 +1744,11 @@ async fn load_body(
     }
     let fetched = async {
         let account = storage::accounts::get(&state.pool, row.account_id).await?;
-        let password = state.password(account.id).await?;
+        let credential = state.credential(&account).await?;
         mail::sync::fetch_body_into_cache(
             &state.pool,
             &account,
-            &password,
+            &credential,
             message_id,
             &row.mailbox,
             row.uid,
@@ -1813,12 +1821,12 @@ pub async fn thread_bodies(
     if let Some(account_id) = fetch_account {
         let downloaded = async {
             let account = storage::accounts::get(&state.pool, account_id).await?;
-            let password = state.password(account_id).await?;
+            let credential = state.credential(&account).await?;
             let mut session = mail::imap::connect(
                 &account.imap_host,
                 account.imap_port,
                 &account.username,
-                &password,
+                &credential,
             )
             .await?;
             let fetched = download_thread_bodies(&state.pool, &mut session, &missing).await;
@@ -1920,12 +1928,12 @@ async fn fetch_raw_message(
     loc: &storage::messages::MessageLocation,
 ) -> Result<Vec<u8>, AppError> {
     let account = storage::accounts::get(&state.pool, loc.account_id).await?;
-    let password = state.password(loc.account_id).await?;
+    let credential = state.credential(&account).await?;
     let mut session = mail::imap::connect(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        &password,
+        &credential,
     )
     .await?;
     session
@@ -2183,13 +2191,13 @@ pub async fn open_draft(
     }
 
     let account = storage::accounts::get(&state.pool, loc.account_id).await?;
-    let password = state.password(loc.account_id).await?;
+    let credential = state.credential(&account).await?;
 
     let mut session = mail::imap::connect(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        &password,
+        &credential,
     )
     .await?;
     let fetched = async {

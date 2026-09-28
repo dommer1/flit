@@ -12,6 +12,7 @@ use async_native_tls::TlsStream;
 use futures::TryStreamExt;
 use tokio::net::TcpStream;
 
+use crate::auth::Credential;
 use crate::error::AppError;
 use crate::storage::mailboxes::DiscoveredMailbox;
 use crate::timing;
@@ -39,7 +40,7 @@ pub async fn connect(
     host: &str,
     port: u16,
     username: &str,
-    password: &str,
+    credential: &Credential,
 ) -> Result<ImapSession, AppError> {
     let _t = timing::start("imap::connect");
     tokio::time::timeout(CONNECT_TIMEOUT, async {
@@ -50,18 +51,24 @@ pub async fn connect(
             .connect(host, tcp)
             .await
             .map_err(|e| AppError::Imap(format!("tls handshake: {e}")))?;
-        async_imap::Client::new(tls)
-            .login(username, password)
-            .await
-            .map_err(|(e, _)| AppError::Imap(format!("login: {e}")))
+        let client = async_imap::Client::new(tls);
+        match credential {
+            Credential::Password(password) => client.login(username, password).await,
+        }
+        .map_err(|(e, _)| AppError::Imap(format!("login: {e}")))
     })
     .await
     .map_err(|_| AppError::Imap(format!("connection to {host}:{port} timed out")))?
 }
 
 /// Connection check for the add-account flow: connect, LOGIN, LOGOUT.
-pub async fn verify(host: &str, port: u16, username: &str, password: &str) -> Result<(), AppError> {
-    let mut session = connect(host, port, username, password).await?;
+pub async fn verify(
+    host: &str,
+    port: u16,
+    username: &str,
+    credential: &Credential,
+) -> Result<(), AppError> {
+    let mut session = connect(host, port, username, credential).await?;
     // why: best effort — the credentials were already proven by LOGIN.
     let _ = session.logout().await;
     Ok(())

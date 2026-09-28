@@ -4,6 +4,16 @@ use std::sync::{Mutex, MutexGuard};
 
 use crate::error::AppError;
 
+/// What an account proves its identity with, handed down to the IMAP and
+/// SMTP layers.
+///
+/// SECURITY: deliberately not `Debug` — the secret must never end up in a
+/// log line or an error message.
+pub enum Credential {
+    /// An account password, sent with IMAP LOGIN / SMTP AUTH.
+    Password(String),
+}
+
 // why: the Keychain "service" is the bundle identifier, so Flit's entries
 // group predictably under one name in Keychain Access.app.
 const SERVICE: &str = "sk.vocalio.flit";

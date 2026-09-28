@@ -8,6 +8,7 @@ use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
+use crate::auth::Credential;
 use crate::error::AppError;
 use crate::models::{AttachmentRef, OutgoingMessage};
 
@@ -28,7 +29,7 @@ fn transport(
     host: &str,
     port: u16,
     username: &str,
-    password: &str,
+    credential: &Credential,
 ) -> Result<AsyncSmtpTransport<Tokio1Executor>, AppError> {
     let builder = if uses_implicit_tls(port) {
         AsyncSmtpTransport::<Tokio1Executor>::relay(host)
@@ -37,10 +38,12 @@ fn transport(
     }
     .map_err(|e| AppError::Smtp(e.to_string()))?;
 
-    Ok(builder
-        .port(port)
-        .credentials(Credentials::new(username.to_string(), password.to_string()))
-        .build())
+    let credentials = match credential {
+        Credential::Password(password) => {
+            Credentials::new(username.to_string(), password.to_string())
+        }
+    };
+    Ok(builder.port(port).credentials(credentials).build())
 }
 
 /// Whether this SMTP server stores its own copy of every sent message.
@@ -225,10 +228,10 @@ pub async fn send(
     host: &str,
     port: u16,
     username: &str,
-    password: &str,
+    credential: &Credential,
     message: Message,
 ) -> Result<(), AppError> {
-    let transport = transport(host, port, username, password)?;
+    let transport = transport(host, port, username, credential)?;
     tokio::time::timeout(SEND_TIMEOUT, transport.send(message))
         .await
         .map_err(|_| AppError::Smtp(format!("sending via {host}:{port} timed out")))?
@@ -237,8 +240,13 @@ pub async fn send(
 }
 
 /// Connection check for the add-account flow: connect, TLS, EHLO, AUTH, NOOP.
-pub async fn verify(host: &str, port: u16, username: &str, password: &str) -> Result<(), AppError> {
-    let transport = transport(host, port, username, password)?;
+pub async fn verify(
+    host: &str,
+    port: u16,
+    username: &str,
+    credential: &Credential,
+) -> Result<(), AppError> {
+    let transport = transport(host, port, username, credential)?;
 
     // why: test_connection authenticates while establishing the pooled
     // connection, so bad credentials fail here — exactly what Verify & Save

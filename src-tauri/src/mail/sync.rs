@@ -1,5 +1,6 @@
 use sqlx::SqlitePool;
 
+use crate::auth::Credential;
 use crate::error::AppError;
 use crate::mail::{imap, parse};
 use crate::models::Account;
@@ -533,7 +534,7 @@ async fn backfill_mailbox(
 pub async fn fetch_body_into_cache(
     pool: &SqlitePool,
     account: &Account,
-    password: &str,
+    credential: &Credential,
     message_id: i64,
     mailbox: &str,
     uid: i64,
@@ -542,7 +543,7 @@ pub async fn fetch_body_into_cache(
         &account.imap_host,
         account.imap_port,
         &account.username,
-        password,
+        credential,
     )
     .await?;
     session
