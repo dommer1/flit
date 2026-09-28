@@ -37,6 +37,9 @@
       "icons/icon.icns",
       "icons/icon.ico",
       "icons/AppIcon.car"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
   }
 }

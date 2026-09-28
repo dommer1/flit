@@ -369,6 +369,26 @@ mod tests {
     }
 
     #[test]
+    fn release_builds_target_a_macos_llama_cpp_compiles_for() {
+        // The Tauri CLI hands minimumSystemVersion to the compiler as
+        // MACOSX_DEPLOYMENT_TARGET, defaulting to 10.13 — and llama.cpp uses
+        // std::filesystem, which macOS only has from 10.15. Every release
+        // build failed on it (the 0.1.2 run, both architectures); dev builds
+        // never set the variable, so nothing showed locally.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid config");
+        let minimum = config["bundle"]["macOS"]["minimumSystemVersion"]
+            .as_str()
+            .expect("an explicit minimum macOS version");
+        let major: u32 = minimum
+            .split('.')
+            .next()
+            .and_then(|m| m.parse().ok())
+            .expect("a numeric version");
+        assert!(major >= 11, "{minimum} is below what llama.cpp builds for");
+    }
+
+    #[test]
     fn keeps_every_other_scheme_inside_the_app() {
         // A message names the URL, so the scheme is untrusted input: handing
         // an arbitrary one to the OS would let a sender pick which app
