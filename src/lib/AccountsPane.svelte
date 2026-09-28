@@ -10,6 +10,7 @@
     onAdd,
     onAddOAuth,
     onCancelSignIn,
+    onReconnect,
     onDelete,
     onSetColor,
     onAddAlias,
@@ -29,6 +30,8 @@
     // why: same success contract as onAdd — null keeps the form open.
     onAddOAuth?: (provider: AuthKind, name: string) => Promise<Account | null>;
     onCancelSignIn?: () => void;
+    /** Sign an OAuth account in again; resolves when the attempt ended. */
+    onReconnect?: (account: Account) => Promise<void>;
     // why: hands over the whole account — the parent's confirmation dialog
     // needs the name and email, not just the id.
     onDelete: (account: Account) => void;
@@ -49,6 +52,7 @@
   let selectedId = $state<number | null>(null);
   let adding = $state(false);
   let addingAlias = $state(false);
+  let reconnecting = $state(false);
   let aliasName = $state("");
   let aliasEmail = $state("");
 
@@ -74,6 +78,15 @@
     if (created) {
       selectedId = created.id;
       adding = false;
+    }
+  }
+
+  async function reconnect(account: Account) {
+    reconnecting = true;
+    try {
+      await onReconnect?.(account);
+    } finally {
+      reconnecting = false;
     }
   }
 
@@ -142,6 +155,23 @@
         <dd>
           {#if selected.lastError}
             <span class="status broken">{selected.lastError}</span>
+            <!-- why any error, not just an expired sign-in: signing in
+                 again is harmless, and it is the one fix an OAuth account
+                 has — there is no password to correct. -->
+            {#if selected.auth !== "password" && onReconnect}
+              <button
+                class="reconnect"
+                disabled={reconnecting}
+                onclick={() => reconnect(selected)}
+              >
+                {reconnecting ? "Waiting for the browser…" : "Sign in again"}
+              </button>
+              {#if reconnecting}
+                <button class="link" onclick={() => onCancelSignIn?.()}>
+                  Cancel
+                </button>
+              {/if}
+            {/if}
           {:else if selected.checkedAt !== null}
             <span class="status ok">Connected</span>
             <span class="checked-at">
@@ -391,6 +421,21 @@
 
   .status.unknown::before {
     color: var(--text-tertiary);
+  }
+
+  .reconnect,
+  .link {
+    margin-left: 8px;
+    font: inherit;
+    font-size: 12px;
+  }
+
+  .link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    cursor: pointer;
   }
 
   .checked-at {

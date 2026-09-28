@@ -282,3 +282,26 @@ it("returns the default identity to the account's own address", async () => {
 
   expect(onSetDefaultAlias).toHaveBeenCalledWith(2, null);
 });
+
+it("offers signing in again when a Google account's sign-in broke", async () => {
+  const broken: Account = {
+    ...accounts[0],
+    auth: "google",
+    lastError: "sign-in expired: sign in to the account again",
+  };
+  const onReconnect = vi.fn(async () => {});
+  renderPane({ accounts: [broken], onReconnect });
+
+  await fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+
+  expect(onReconnect).toHaveBeenCalledWith(broken);
+});
+
+it("offers no browser sign-in to a password account", () => {
+  const broken: Account = { ...accounts[0], lastError: "imap error: login" };
+  renderPane({ accounts: [broken], onReconnect: vi.fn() });
+
+  expect(
+    screen.queryByRole("button", { name: "Sign in again" }),
+  ).not.toBeInTheDocument();
+});

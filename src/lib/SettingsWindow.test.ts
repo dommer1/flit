@@ -211,6 +211,21 @@ it("says nothing when the user cancels a Google sign-in", async () => {
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+it("signs a Google account in again and reloads the list", async () => {
+  vi.mocked(api.listAccounts).mockResolvedValueOnce([
+    { ...accounts[0], auth: "google", lastError: "sign-in expired" },
+  ]);
+  vi.mocked(api.listAccounts).mockClear();
+  render(SettingsWindow);
+
+  await fireEvent.click(
+    await screen.findByRole("button", { name: "Sign in again" }),
+  );
+
+  expect(api.reconnectAccount).toHaveBeenCalledWith(1);
+  await vi.waitFor(() => expect(api.listAccounts).toHaveBeenCalledTimes(2));
+});
+
 it("does not save the account when verification fails", async () => {
   vi.mocked(api.testConnection).mockRejectedValueOnce("imap error: login: no");
   vi.mocked(api.addAccount).mockClear();

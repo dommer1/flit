@@ -6,6 +6,7 @@
     addOAuthAccount,
     cancelOAuthSignIn,
     oauthProviders as loadOAuthProviders,
+    reconnectAccount,
     closeSettings,
     deleteAlias,
     listAliases,
@@ -149,6 +150,16 @@
       // why: a cancel is the user's own choice, not a problem to report.
       if (!String(err).endsWith("sign-in cancelled")) lastError = String(err);
       return null;
+    }
+  }
+
+  async function handleReconnect(account: Account) {
+    lastError = null;
+    try {
+      await reconnectAccount(account.id);
+      await refresh();
+    } catch (err) {
+      if (!String(err).endsWith("sign-in cancelled")) lastError = String(err);
     }
   }
 
@@ -503,6 +514,7 @@
       onAdd={handleAdd}
       onAddOAuth={handleAddOAuth}
       onCancelSignIn={() => void cancelOAuthSignIn()}
+      onReconnect={handleReconnect}
       onDelete={handleDelete}
       onSetColor={handleSetColor}
       onAddAlias={handleAddAlias}
