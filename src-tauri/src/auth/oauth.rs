@@ -290,6 +290,21 @@ pub async fn sign_in(
         .await
 }
 
+/// The address a sign-in was made with. With `expected` (a reconnect), it
+/// must be that account's — signing in as someone else in the browser would
+/// otherwise swap the mailbox behind an existing account.
+pub fn signed_in_address(tokens: &Tokens, expected: Option<&str>) -> Result<String, AppError> {
+    let email = tokens.email.clone().ok_or_else(|| {
+        AppError::OAuth("the provider did not say which account signed in".to_string())
+    })?;
+    match expected {
+        Some(expected) if !email.eq_ignore_ascii_case(expected) => Err(AppError::OAuth(format!(
+            "signed in as {email}, but this account is {expected}"
+        ))),
+        _ => Ok(email),
+    }
+}
+
 /// The sign-in waiting in the browser, so a Cancel button can end it.
 ///
 /// why no "finished" bookkeeping: one sign-in at a time — `begin` replaces
@@ -747,6 +762,37 @@ mod tests {
         .unwrap();
 
         assert!(err.to_string().contains("cancelled"), "{err}");
+    }
+
+    fn signed_in_as(email: Option<&str>) -> Tokens {
+        Tokens {
+            access_token: "ya29".to_string(),
+            refresh_token: Some("1//r".to_string()),
+            expires_in: None,
+            email: email.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_reconnect_must_sign_in_as_the_same_mailbox() {
+        let same = signed_in_as(Some("Jan@Gmail.com"));
+        let other = signed_in_as(Some("eva@gmail.com"));
+
+        assert_eq!(
+            signed_in_address(&same, Some("jan@gmail.com")).unwrap(),
+            "Jan@Gmail.com"
+        );
+        let err = signed_in_address(&other, Some("jan@gmail.com")).unwrap_err();
+        assert!(err.to_string().contains("eva@gmail.com"), "{err}");
+    }
+
+    #[test]
+    fn a_sign_in_without_an_address_is_refused() {
+        assert!(signed_in_address(&signed_in_as(None), None).is_err());
+        assert_eq!(
+            signed_in_address(&signed_in_as(Some("jan@gmail.com")), None).unwrap(),
+            "jan@gmail.com"
+        );
     }
 
     #[tokio::test]

@@ -37,6 +37,7 @@
     "allow-log-timing",
     "allow-oauth-providers",
     "allow-preview-notification-sound",
+    "allow-reconnect-account",
     "allow-remove-llm-model",
     "allow-reset-shortcuts",
     "allow-set-account-color",

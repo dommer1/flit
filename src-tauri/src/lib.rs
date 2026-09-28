@@ -151,6 +151,7 @@ pub fn run() {
             commands::oauth_providers,
             commands::add_oauth_account,
             commands::cancel_oauth_sign_in,
+            commands::reconnect_account,
             commands::delete_account,
             commands::set_account_color,
             commands::list_contacts,

@@ -111,9 +111,7 @@ pub async fn add_oauth_account(
     )
     .await?;
     let lifetime = tokens.lifetime();
-    let email = tokens.email.ok_or_else(|| {
-        AppError::OAuth("the provider did not say which account signed in".to_string())
-    })?;
+    let email = auth::oauth::signed_in_address(&tokens, None)?;
     let refresh_token = tokens
         .refresh_token
         .ok_or_else(|| AppError::OAuth("the provider issued no refresh token".to_string()))?;
@@ -145,6 +143,51 @@ pub async fn add_oauth_account(
         .insert(inserted.id, access_token, lifetime);
     app.emit("accounts-changed", ())?;
     Ok(inserted)
+}
+
+/// Sign an OAuth account in again — after its sign-in expired or was
+/// revoked. It must be the same mailbox; the new tokens replace the old
+/// ones once both servers accept them, and the account's error clears.
+#[tauri::command]
+pub async fn reconnect_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), AppError> {
+    let account = storage::accounts::get(&state.pool, id).await?;
+    let provider = auth::oauth::provider_for(account.auth)
+        .ok_or_else(|| AppError::Invalid("this account signs in with a password".to_string()))?;
+    let tokens = auth::oauth::sign_in(
+        provider,
+        &auth::oauth::http_client()?,
+        Some(&account.email),
+        open_in_browser,
+        state.sign_in.begin(),
+    )
+    .await?;
+    auth::oauth::signed_in_address(&tokens, Some(&account.email))?;
+    let lifetime = tokens.lifetime();
+    let refresh_token = tokens
+        .refresh_token
+        .ok_or_else(|| AppError::OAuth("the provider issued no refresh token".to_string()))?;
+    let access_token = tokens.access_token;
+    let credential = Credential::AccessToken(access_token.clone());
+    // why IMAP only: the servers were proven when the account was added; the
+    // login here proves the new token, which SMTP accepts all the same.
+    mail::imap::verify(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        &credential,
+    )
+    .await?;
+
+    auth::set_password(id, refresh_token.clone()).await?;
+    state.passwords.insert(id, refresh_token);
+    state.access_tokens.insert(id, access_token, lifetime);
+    storage::accounts::set_status(&state.pool, id, None, now_epoch()).await?;
+    app.emit("accounts-changed", ())?;
+    Ok(())
 }
 
 /// End the browser sign-in still waiting, if any (the dialog's Cancel).

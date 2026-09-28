@@ -25,6 +25,7 @@ const APP_COMMANDS: &[&str] = &[
     "oauth_providers",
     "add_oauth_account",
     "cancel_oauth_sign_in",
+    "reconnect_account",
     "delete_account",
     "set_account_color",
     "list_contacts",
