@@ -13,9 +13,10 @@ use oauth2::basic::{
 };
 use oauth2::url::Url;
 use oauth2::{
-    AuthUrl, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet, ExtraTokenFields,
-    HttpClientError, HttpRequest, HttpResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
-    Scope, StandardRevocableToken, StandardTokenResponse, TokenUrl,
+    AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet,
+    EndpointSet, ExtraTokenFields, HttpClientError, HttpRequest, HttpResponse, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, RequestTokenError, Scope, StandardRevocableToken,
+    StandardTokenResponse, TokenResponse as _, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
 
@@ -98,6 +99,18 @@ type OAuthClient = oauth2::Client<
     EndpointSet,
 >;
 
+/// What the token endpoint hands back. Deliberately not `Debug`: it holds
+/// the tokens.
+pub struct Tokens {
+    pub access_token: String,
+    /// Absent when the provider keeps the current one (a refresh at Google).
+    pub refresh_token: Option<String>,
+    /// How long the access token lives, as the provider states it.
+    pub expires_in: Option<Duration>,
+    /// The signed-in address, from the id_token.
+    pub email: Option<String>,
+}
+
 /// A sign-in in progress: the URL to open in the browser, and the two
 /// secrets the redirect back must be checked and exchanged with.
 pub struct Authorization {
@@ -120,7 +133,10 @@ impl Provider {
         let mut client = oauth2::Client::new(ClientId::new(client_id.to_string()))
             .set_auth_uri(AuthUrl::new(self.auth_url.to_string()).map_err(invalid)?)
             .set_token_uri(TokenUrl::new(self.token_url.to_string()).map_err(invalid)?)
-            .set_redirect_uri(RedirectUrl::new(redirect_uri.to_string()).map_err(invalid)?);
+            .set_redirect_uri(RedirectUrl::new(redirect_uri.to_string()).map_err(invalid)?)
+            // why: credentials in the form body is how Google documents its
+            // desktop flow, and a public client (no secret) needs it anyway.
+            .set_auth_type(AuthType::RequestBody);
         if let Some(secret) = self.client_secret {
             client = client.set_client_secret(ClientSecret::new(secret.to_string()));
         }
@@ -153,6 +169,70 @@ impl Provider {
             pkce_verifier,
         })
     }
+
+    /// Trade the code from the redirect (plus the PKCE verifier that proves
+    /// this app started the sign-in) for tokens.
+    pub async fn exchange_code(
+        &self,
+        http: &reqwest::Client,
+        redirect_uri: &str,
+        code: String,
+        pkce_verifier: PkceCodeVerifier,
+    ) -> Result<Tokens, AppError> {
+        let response = self
+            .client(redirect_uri)?
+            .exchange_code(AuthorizationCode::new(code))
+            .set_pkce_verifier(pkce_verifier)
+            .request_async(&|request| send(http.clone(), request))
+            .await
+            .map_err(token_error)?;
+        Ok(Tokens {
+            access_token: response.access_token().secret().clone(),
+            refresh_token: response.refresh_token().map(|t| t.secret().clone()),
+            expires_in: response.expires_in(),
+            email: response
+                .extra_fields()
+                .id_token
+                .as_deref()
+                .and_then(email_from_id_token),
+        })
+    }
+}
+
+/// A readable reason for a failed token request. Never the reply body: a
+/// reply that failed to parse may still have carried a token.
+fn token_error(
+    err: RequestTokenError<HttpClientError<reqwest::Error>, BasicErrorResponse>,
+) -> AppError {
+    AppError::OAuth(match err {
+        RequestTokenError::ServerResponse(reply) => match reply.error_description() {
+            Some(description) => format!("{} ({description})", reply.error()),
+            None => reply.error().to_string(),
+        },
+        RequestTokenError::Request(e) => format!("token request failed: {e}"),
+        RequestTokenError::Parse(..) => "unreadable token response".to_string(),
+        RequestTokenError::Other(e) => e,
+    })
+}
+
+/// The `email` claim of an OpenID id_token.
+///
+/// why the signature is not checked: the token came straight from the
+/// provider's token endpoint over TLS, which OpenID Connect accepts in place
+/// of signature validation (Core 1.0, §3.1.3.7). The address is then proven
+/// again by the IMAP login it is used for.
+fn email_from_id_token(id_token: &str) -> Option<String> {
+    use base64::Engine;
+
+    #[derive(Deserialize)]
+    struct Claims {
+        email: Option<String>,
+    }
+    let payload = id_token.split('.').nth(1)?;
+    let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    serde_json::from_slice::<Claims>(&json).ok()?.email
 }
 
 /// Client for the provider's token endpoint: TLS-only, no Referer, no
@@ -201,6 +281,33 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
+    /// The whole request — head and, per Content-Length, body — however
+    /// many reads it takes to arrive.
+    async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            let n = socket.read(&mut chunk).await.unwrap();
+            request.extend_from_slice(&chunk[..n]);
+            let text = String::from_utf8_lossy(&request).into_owned();
+            if let Some(head_end) = text.find("\r\n\r\n") {
+                let body_len = text[..head_end]
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                if n == 0 || request.len() >= head_end + 4 + body_len {
+                    return text;
+                }
+            } else if n == 0 {
+                return text;
+            }
+        }
+    }
+
     /// A one-shot HTTP server on localhost: hands the raw request it got to
     /// the returned receiver and answers with `status` and `body`.
     async fn serve_once(
@@ -212,9 +319,8 @@ mod tests {
         let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0u8; 4096];
-            let n = socket.read(&mut request).await.unwrap();
-            let _ = seen_tx.send(String::from_utf8_lossy(&request[..n]).into_owned());
+            let request = read_request(&mut socket).await;
+            let _ = seen_tx.send(request);
             let reply = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
                  Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -288,6 +394,109 @@ mod tests {
 
         assert!(!unconfigured.is_configured());
         assert!(unconfigured.authorize("http://127.0.0.1:1", None).is_err());
+    }
+
+    /// An unsigned JWT with `claims` as its payload — enough for the
+    /// decoder, which reads but does not verify (see email_from_id_token).
+    fn id_token(claims: &str) -> String {
+        use base64::Engine;
+        let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s);
+        format!("{}.{}.sig", b64(r#"{"alg":"RS256"}"#), b64(claims))
+    }
+
+    #[test]
+    fn the_signed_in_address_comes_from_the_id_token() {
+        let token = id_token(r#"{"iss":"https://accounts.google.com","email":"jan@gmail.com"}"#);
+
+        assert_eq!(
+            email_from_id_token(&token).as_deref(),
+            Some("jan@gmail.com")
+        );
+    }
+
+    #[test]
+    fn a_malformed_id_token_yields_no_address() {
+        assert_eq!(email_from_id_token("not-a-jwt"), None);
+        assert_eq!(email_from_id_token("a.%%%.c"), None);
+        assert_eq!(email_from_id_token(&id_token(r#"{"sub":"1"}"#)), None);
+    }
+
+    /// TEST_GOOGLE pointed at a local plain-http token endpoint.
+    fn local_google(token_url: &str) -> Provider {
+        Provider {
+            token_url: Box::leak(token_url.to_string().into_boxed_str()),
+            ..TEST_GOOGLE
+        }
+    }
+
+    #[tokio::test]
+    async fn a_code_is_exchanged_with_its_pkce_verifier_for_tokens() {
+        let body: &'static str = Box::leak(
+            format!(
+                r#"{{"access_token":"ya29.a","expires_in":3599,"refresh_token":"1//r",
+                    "scope":"https://mail.google.com/ openid email","token_type":"Bearer",
+                    "id_token":"{}"}}"#,
+                id_token(r#"{"email":"jan@gmail.com"}"#)
+            )
+            .into_boxed_str(),
+        );
+        let (url, seen) = serve_once("200 OK", body).await;
+        let auth = TEST_GOOGLE
+            .authorize("http://127.0.0.1:5555", None)
+            .unwrap();
+        let verifier = auth.pkce_verifier.secret().clone();
+
+        let tokens = local_google(&url)
+            .exchange_code(
+                &reqwest::Client::new(),
+                "http://127.0.0.1:5555",
+                "4/code".to_string(),
+                auth.pkce_verifier,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(tokens.access_token, "ya29.a");
+        assert_eq!(tokens.refresh_token.as_deref(), Some("1//r"));
+        assert_eq!(tokens.expires_in, Some(Duration::from_secs(3599)));
+        assert_eq!(tokens.email.as_deref(), Some("jan@gmail.com"));
+        let form = seen.await.unwrap();
+        for field in [
+            "grant_type=authorization_code".to_string(),
+            "code=4%2Fcode".to_string(),
+            format!("code_verifier={verifier}"),
+            "redirect_uri=http%3A%2F%2F127.0.0.1%3A5555".to_string(),
+            "client_id=test-client.apps.googleusercontent.com".to_string(),
+            "client_secret=test-secret".to_string(),
+        ] {
+            assert!(form.contains(&field), "missing {field} in {form}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_exchange_names_the_error_but_not_the_reply() {
+        let (url, _seen) = serve_once(
+            "400 Bad Request",
+            r#"{"error":"invalid_grant","error_description":"Bad Request"}"#,
+        )
+        .await;
+        let auth = TEST_GOOGLE
+            .authorize("http://127.0.0.1:5555", None)
+            .unwrap();
+
+        let err = local_google(&url)
+            .exchange_code(
+                &reqwest::Client::new(),
+                "http://127.0.0.1:5555",
+                "4/code".to_string(),
+                auth.pkce_verifier,
+            )
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+
+        assert!(err.contains("invalid_grant"), "{err}");
     }
 
     #[tokio::test]
