@@ -1,12 +1,15 @@
 <script lang="ts">
   import { ACCOUNT_COLORS } from "./accountColors";
-  import type { Account, Alias, NewAccount } from "./types";
+  import type { Account, Alias, AuthKind, NewAccount } from "./types";
   import AddAccountForm from "./AddAccountForm.svelte";
 
   let {
     accounts,
     aliases,
+    oauthProviders = [],
     onAdd,
+    onAddOAuth,
+    onCancelSignIn,
     onDelete,
     onSetColor,
     onAddAlias,
@@ -21,6 +24,11 @@
     // parent owns the api call and error display; the pane only needs to know
     // whether to leave the add form.
     onAdd: (account: NewAccount, password: string) => Promise<Account | null>;
+    /** The OAuth providers this build offers; none hides their buttons. */
+    oauthProviders?: AuthKind[];
+    // why: same success contract as onAdd — null keeps the form open.
+    onAddOAuth?: (provider: AuthKind, name: string) => Promise<Account | null>;
+    onCancelSignIn?: () => void;
     // why: hands over the whole account — the parent's confirmation dialog
     // needs the name and email, not just the id.
     onDelete: (account: Account) => void;
@@ -55,6 +63,14 @@
 
   async function handleSubmit(account: NewAccount, password: string) {
     const created = await onAdd(account, password);
+    if (created) {
+      selectedId = created.id;
+      adding = false;
+    }
+  }
+
+  async function signInWithGoogle(name: string) {
+    const created = await onAddOAuth?.("google", name);
     if (created) {
       selectedId = created.id;
       adding = false;
@@ -115,6 +131,10 @@
       <AddAccountForm
         onSubmit={handleSubmit}
         onCancel={() => (adding = false)}
+        onSignInWithGoogle={oauthProviders.includes("google")
+          ? signInWithGoogle
+          : undefined}
+        {onCancelSignIn}
       />
     {:else if selected}
       <dl>

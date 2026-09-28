@@ -40,3 +40,50 @@ it("calls onCancel when cancel is clicked", async () => {
 
   expect(onCancel).toHaveBeenCalled();
 });
+
+it("offers Google sign-in only when this build supports it", () => {
+  render(AddAccountForm, { props: { onSubmit: vi.fn(), onCancel: vi.fn() } });
+
+  expect(
+    screen.queryByRole("button", { name: "Sign in with Google" }),
+  ).not.toBeInTheDocument();
+});
+
+it("signs in with Google under the typed name, cancellable while waiting", async () => {
+  let finish = () => {};
+  const onSignInWithGoogle = vi.fn(
+    () => new Promise<void>((resolve) => (finish = resolve)),
+  );
+  const onCancelSignIn = vi.fn();
+  render(AddAccountForm, {
+    props: {
+      onSubmit: vi.fn(),
+      onCancel: vi.fn(),
+      onSignInWithGoogle,
+      onCancelSignIn,
+    },
+  });
+
+  await fill("Name", "Gmail");
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Sign in with Google" }),
+  );
+
+  expect(onSignInWithGoogle).toHaveBeenCalledWith("Gmail");
+  expect(
+    screen.getByText(/finish signing in in your browser/i),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Verify & Save" }),
+  ).toBeDisabled();
+
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Cancel sign-in" }),
+  );
+  expect(onCancelSignIn).toHaveBeenCalled();
+
+  finish();
+  expect(
+    await screen.findByRole("button", { name: "Sign in with Google" }),
+  ).toBeEnabled();
+});

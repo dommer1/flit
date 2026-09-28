@@ -55,6 +55,16 @@ vi.mock("./api", () => ({
   deleteAccount: vi.fn(async () => undefined),
   setAccountColor: vi.fn(async () => undefined),
   testConnection: vi.fn(async () => undefined),
+  oauthProviders: vi.fn(async () => ["google"]),
+  addOAuthAccount: vi.fn(async (_provider: string, _name: string) => ({
+    ...accounts[0],
+    id: 100,
+    name: "jan@gmail.com",
+    email: "jan@gmail.com",
+    auth: "google",
+  })),
+  cancelOAuthSignIn: vi.fn(async () => undefined),
+  reconnectAccount: vi.fn(async () => undefined),
   confirmAccountDeletion: vi.fn(async () => true),
   closeSettings: vi.fn(async () => undefined),
   onAccountsChanged: vi.fn(async () => () => {}),
@@ -162,6 +172,43 @@ it("adds an account through the form", async () => {
   expect(
     screen.queryByRole("button", { name: "Verify & Save" }),
   ).not.toBeInTheDocument();
+});
+
+it("adds a Google account through the browser sign-in", async () => {
+  render(SettingsWindow);
+  await screen.findByText("imap.example.com:993");
+
+  await fireEvent.click(screen.getByLabelText("Add account"));
+  await fireEvent.click(
+    await screen.findByRole("button", { name: "Sign in with Google" }),
+  );
+
+  expect(api.addOAuthAccount).toHaveBeenCalledWith("google", "");
+  // the pane refreshed and left the add form
+  expect(
+    await screen.findByText("imap.example.com:993"),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Sign in with Google" }),
+  ).not.toBeInTheDocument();
+});
+
+it("says nothing when the user cancels a Google sign-in", async () => {
+  vi.mocked(api.addOAuthAccount).mockRejectedValueOnce(
+    "sign-in error: sign-in cancelled",
+  );
+  render(SettingsWindow);
+  await screen.findByText("imap.example.com:993");
+
+  await fireEvent.click(screen.getByLabelText("Add account"));
+  await fireEvent.click(
+    await screen.findByRole("button", { name: "Sign in with Google" }),
+  );
+
+  expect(
+    await screen.findByRole("button", { name: "Sign in with Google" }),
+  ).toBeEnabled();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 it("does not save the account when verification fails", async () => {

@@ -3,6 +3,9 @@
   import {
     addAccount,
     addAlias,
+    addOAuthAccount,
+    cancelOAuthSignIn,
+    oauthProviders as loadOAuthProviders,
     closeSettings,
     deleteAlias,
     listAliases,
@@ -34,6 +37,7 @@
     type Account,
     type Alias,
     type Appearance,
+    type AuthKind,
     type DateFormat,
     type DateTimeFormat,
     type NewAccount,
@@ -83,6 +87,7 @@
   ];
 
   let accounts = $state<Account[]>([]);
+  let oauthProviders = $state<AuthKind[]>([]);
   let aliases = $state<Alias[]>([]);
   let lastError = $state<string | null>(null);
   let tab = $state<
@@ -127,6 +132,22 @@
       return created;
     } catch (err) {
       lastError = String(err);
+      return null;
+    }
+  }
+
+  async function handleAddOAuth(
+    provider: AuthKind,
+    name: string,
+  ): Promise<Account | null> {
+    lastError = null;
+    try {
+      const created = await addOAuthAccount(provider, name);
+      await refresh();
+      return created;
+    } catch (err) {
+      // why: a cancel is the user's own choice, not a problem to report.
+      if (!String(err).endsWith("sign-in cancelled")) lastError = String(err);
       return null;
     }
   }
@@ -306,6 +327,7 @@
 
   onMount(() => {
     void refresh();
+    void loadOAuthProviders().then((stored) => (oauthProviders = stored));
     void getRemoteImagePolicy().then((stored) => (policy = stored));
     void getAvatarLookupEnabled().then((stored) => (avatarLookup = stored));
     void getSwipeActions().then((stored) => (swipes = stored));
@@ -477,7 +499,10 @@
     <AccountsPane
       {accounts}
       {aliases}
+      {oauthProviders}
       onAdd={handleAdd}
+      onAddOAuth={handleAddOAuth}
+      onCancelSignIn={() => void cancelOAuthSignIn()}
       onDelete={handleDelete}
       onSetColor={handleSetColor}
       onAddAlias={handleAddAlias}

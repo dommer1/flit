@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import type {
   Account,
+  AuthKind,
   Alias,
   AttachmentInfo,
   Contact,
@@ -41,6 +42,30 @@ export function addAccount(
   password: string,
 ): Promise<Account> {
   return invoke<Account>("add_account", { account, password });
+}
+
+/** The OAuth providers this build can sign in with (none without client ids). */
+export function oauthProviders(): Promise<AuthKind[]> {
+  return invoke<AuthKind[]>("oauth_providers");
+}
+
+/** Add an account by signing in with `provider` in the browser. Resolves
+ * once the user finished there and both servers accepted the sign-in. */
+export function addOAuthAccount(
+  provider: AuthKind,
+  name: string,
+): Promise<Account> {
+  return invoke<Account>("add_oauth_account", { provider, name });
+}
+
+/** End a browser sign-in still waiting for the user. */
+export function cancelOAuthSignIn(): Promise<void> {
+  return invoke<void>("cancel_oauth_sign_in");
+}
+
+/** Sign an OAuth account in again after its sign-in expired. */
+export function reconnectAccount(id: number): Promise<void> {
+  return invoke<void>("reconnect_account", { id });
 }
 
 export function deleteAccount(id: number): Promise<void> {
