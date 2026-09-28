@@ -5,6 +5,7 @@
 //! never reach the frontend, a log line or the database — refresh tokens go
 //! to the keychain (see auth), access tokens only live in memory.
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use oauth2::basic::{
@@ -19,9 +20,14 @@ use oauth2::{
     StandardTokenResponse, TokenResponse as _, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 
+use crate::auth::redirect::RedirectListener;
 use crate::error::AppError;
 use crate::models::AuthKind;
+
+/// How long the user has to finish signing in in the browser.
+const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Everything that differs between OAuth mail providers. Plain data: the
 /// sign-in flow itself is shared, and a provider is one more constant.
@@ -235,6 +241,67 @@ fn tokens(response: TokenResponse) -> Tokens {
             .id_token
             .as_deref()
             .and_then(email_from_id_token),
+    }
+}
+
+/// A browser sign-in end to end: listen for the redirect, open the
+/// provider's page, wait for the user, trade the code for tokens.
+///
+/// Ends early when `cancel` fires — or when its sender is dropped, which is
+/// how a newer sign-in replaces this one (see PendingSignIn).
+pub async fn sign_in(
+    provider: Provider,
+    http: &reqwest::Client,
+    login_hint: Option<&str>,
+    open_browser: impl FnOnce(&str) -> Result<(), AppError>,
+    cancel: oneshot::Receiver<()>,
+) -> Result<Tokens, AppError> {
+    let listener = RedirectListener::bind().await?;
+    let redirect_uri = listener.redirect_uri();
+    let auth = provider.authorize(&redirect_uri, login_hint)?;
+    open_browser(auth.url.as_str())?;
+    let code = tokio::select! {
+        code = listener.wait_for_code(auth.state.secret()) => code?,
+        _ = cancel => return Err(AppError::OAuth("sign-in cancelled".to_string())),
+        _ = tokio::time::sleep(SIGN_IN_TIMEOUT) => {
+            return Err(AppError::OAuth("sign-in timed out".to_string()));
+        }
+    };
+    provider
+        .exchange_code(http, &redirect_uri, code, auth.pkce_verifier)
+        .await
+}
+
+/// The sign-in waiting in the browser, so a Cancel button can end it.
+///
+/// why no "finished" bookkeeping: one sign-in at a time — `begin` replaces
+/// the stored sender, and dropping the old one ends a sign-in still waiting.
+/// A finished sign-in leaves a sender nobody listens to; cancelling it is a
+/// harmless no-op.
+#[derive(Default)]
+pub struct PendingSignIn(Mutex<Option<oneshot::Sender<()>>>);
+
+impl PendingSignIn {
+    /// Register a new sign-in; returns the signal that cancels it.
+    pub fn begin(&self) -> oneshot::Receiver<()> {
+        let (cancel, cancelled) = oneshot::channel();
+        *self.lock() = Some(cancel);
+        cancelled
+    }
+
+    /// End the sign-in still waiting, if any.
+    pub fn cancel(&self) {
+        if let Some(cancel) = self.lock().take() {
+            let _ = cancel.send(());
+        }
+    }
+
+    // why unwrap_or_else(into_inner): a poisoned lock only means a panic
+    // elsewhere; the slot itself is still usable.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<oneshot::Sender<()>>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -573,6 +640,95 @@ mod tests {
             .unwrap();
 
         assert!(matches!(err, AppError::SignInExpired), "{err}");
+    }
+
+    /// Play the user's browser: follow the provider's page straight back to
+    /// the redirect URI with `code`, as if the user had clicked Allow.
+    fn approving_browser(code: &'static str) -> impl FnOnce(&str) -> Result<(), AppError> {
+        move |url: &str| {
+            let url = Url::parse(url).unwrap();
+            let param = |name: &str| {
+                url.query_pairs()
+                    .find(|(k, _)| k == name)
+                    .map(|(_, v)| v.into_owned())
+                    .unwrap()
+            };
+            let back = format!(
+                "{}/?code={code}&state={}",
+                param("redirect_uri"),
+                param("state")
+            );
+            tokio::spawn(async move { reqwest::get(back).await.unwrap() });
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_runs_from_browser_to_tokens() {
+        let (token_url, seen) = serve_once(
+            "200 OK",
+            r#"{"access_token":"ya29.new","refresh_token":"1//new","expires_in":3599,"token_type":"Bearer"}"#,
+        )
+        .await;
+        let pending = PendingSignIn::default();
+
+        let tokens = sign_in(
+            local_google(&token_url),
+            &reqwest::Client::new(),
+            None,
+            approving_browser("c0de"),
+            pending.begin(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(tokens.access_token, "ya29.new");
+        assert_eq!(tokens.refresh_token.as_deref(), Some("1//new"));
+        assert!(seen.await.unwrap().contains("code=c0de"));
+    }
+
+    #[tokio::test]
+    async fn cancel_ends_a_sign_in_waiting_for_the_browser() {
+        let pending = std::sync::Arc::new(PendingSignIn::default());
+        let cancel = pending.begin();
+        let canceller = pending.clone();
+        let idle_browser = move |_: &str| {
+            canceller.cancel();
+            Ok(())
+        };
+
+        let err = sign_in(
+            TEST_GOOGLE,
+            &reqwest::Client::new(),
+            None,
+            idle_browser,
+            cancel,
+        )
+        .await
+        .err()
+        .unwrap();
+
+        assert!(err.to_string().contains("cancelled"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_new_sign_in_ends_the_one_still_waiting() {
+        let pending = PendingSignIn::default();
+        let first = pending.begin();
+        let _second = pending.begin();
+
+        let err = sign_in(
+            TEST_GOOGLE,
+            &reqwest::Client::new(),
+            None,
+            |_| Ok(()),
+            first,
+        )
+        .await
+        .err()
+        .unwrap();
+
+        assert!(err.to_string().contains("cancelled"), "{err}");
     }
 
     #[tokio::test]
