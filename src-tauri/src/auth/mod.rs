@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use crate::error::AppError;
 
@@ -65,6 +66,83 @@ impl PasswordCache {
     // panicked while holding it — the map itself is still coherent.
     fn lock(&self) -> MutexGuard<'_, HashMap<i64, String>> {
         self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Refresh an access token once less than this is left of its life.
+/// why so little: the token only has to outlive the IMAP/SMTP login it is
+/// fetched for — a session, once authenticated, stays so after it expires.
+const EXPIRY_MARGIN: Duration = Duration::from_secs(120);
+
+/// Session-only cache of OAuth access tokens and when each expires.
+///
+/// SECURITY: like PasswordCache, memory only — an access token is never
+/// written to disk, a log or the database.
+#[derive(Default)]
+pub struct AccessTokens {
+    tokens: Mutex<HashMap<i64, (String, Instant)>>,
+    refreshing: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+impl AccessTokens {
+    /// A token with life left in it, or run `refresh` (a call to the token
+    /// endpoint, returning the token and its lifetime) and remember it.
+    pub async fn get_or_refresh<F, Fut>(
+        &self,
+        account_id: i64,
+        refresh: F,
+    ) -> Result<String, AppError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<(String, Duration), AppError>>,
+    {
+        if let Some(token) = self.fresh(account_id) {
+            return Ok(token);
+        }
+        // why a per-account lock: a sync pass, the IDLE listener and a body
+        // fetch can all need a token at the same moment, and one refresh
+        // should serve them all — a provider that rotates refresh tokens
+        // must not see the same one spent twice. A tokio Mutex, because it
+        // is held across the refresh's await.
+        let lock = self
+            .lock_refreshing()
+            .entry(account_id)
+            .or_default()
+            .clone();
+        let _guard = lock.lock().await;
+        if let Some(token) = self.fresh(account_id) {
+            return Ok(token);
+        }
+        let (token, lifetime) = refresh().await?;
+        self.lock_tokens()
+            .insert(account_id, (token.clone(), Instant::now() + lifetime));
+        Ok(token)
+    }
+
+    /// Drop an account's token (account deleted, or signed in anew).
+    pub fn forget(&self, account_id: i64) {
+        self.lock_tokens().remove(&account_id);
+    }
+
+    fn fresh(&self, account_id: i64) -> Option<String> {
+        let tokens = self.lock_tokens();
+        let (token, expires_at) = tokens.get(&account_id)?;
+        let left = expires_at.saturating_duration_since(Instant::now());
+        (left > EXPIRY_MARGIN).then(|| token.clone())
+    }
+
+    // why unwrap_or_else(into_inner): as in PasswordCache — a poisoned lock
+    // only means a panic elsewhere; the maps themselves stay coherent.
+    fn lock_tokens(&self) -> MutexGuard<'_, HashMap<i64, (String, Instant)>> {
+        self.tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_refreshing(&self) -> MutexGuard<'_, HashMap<i64, Arc<tokio::sync::Mutex<()>>>> {
+        self.refreshing
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -175,6 +253,68 @@ mod tests {
         cache.remove(1);
         let refetched = || async { Ok("nové".to_string()) };
         assert_eq!(cache.get_or_fetch(1, refetched).await.unwrap(), "nové");
+    }
+
+    const HOUR: Duration = Duration::from_secs(3600);
+
+    #[tokio::test]
+    async fn an_access_token_is_reused_until_it_nears_expiry() {
+        let tokens = AccessTokens::default();
+        let refreshes = AtomicUsize::new(0);
+        let refresh = || async {
+            let n = refreshes.fetch_add(1, Ordering::SeqCst);
+            Ok((format!("token-{n}"), HOUR))
+        };
+
+        assert_eq!(tokens.get_or_refresh(1, refresh).await.unwrap(), "token-0");
+        assert_eq!(tokens.get_or_refresh(1, refresh).await.unwrap(), "token-0");
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_token_about_to_expire_is_refreshed_first() {
+        let tokens = AccessTokens::default();
+        let short = || async { Ok(("old".to_string(), Duration::from_secs(30))) };
+        tokens.get_or_refresh(1, short).await.unwrap();
+
+        let fresh = || async { Ok(("new".to_string(), HOUR)) };
+        assert_eq!(tokens.get_or_refresh(1, fresh).await.unwrap(), "new");
+    }
+
+    #[tokio::test]
+    async fn concurrent_callers_share_one_refresh() {
+        let tokens = std::sync::Arc::new(AccessTokens::default());
+        let refreshes = std::sync::Arc::new(AtomicUsize::new(0));
+        let call = || {
+            let (tokens, refreshes) = (tokens.clone(), refreshes.clone());
+            tokio::spawn(async move {
+                tokens
+                    .get_or_refresh(1, || async move {
+                        refreshes.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        Ok(("t".to_string(), HOUR))
+                    })
+                    .await
+            })
+        };
+
+        let (a, b) = (call(), call());
+        assert_eq!(a.await.unwrap().unwrap(), "t");
+        assert_eq!(b.await.unwrap().unwrap(), "t");
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_refresh_caches_nothing_and_forget_drops_a_token() {
+        let tokens = AccessTokens::default();
+        let failing = || async { Err(AppError::SignInExpired) };
+        assert!(tokens.get_or_refresh(1, failing).await.is_err());
+
+        let first = || async { Ok(("a".to_string(), HOUR)) };
+        assert_eq!(tokens.get_or_refresh(1, first).await.unwrap(), "a");
+        tokens.forget(1);
+        let second = || async { Ok(("b".to_string(), HOUR)) };
+        assert_eq!(tokens.get_or_refresh(1, second).await.unwrap(), "b");
     }
 
     #[test]
