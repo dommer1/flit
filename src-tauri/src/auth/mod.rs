@@ -4,6 +4,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use crate::error::AppError;
 
+pub mod oauth;
+
 /// What an account proves its identity with, handed down to the IMAP and
 /// SMTP layers.
 ///
