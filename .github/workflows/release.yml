@@ -23,6 +23,13 @@ name: Release
 #   APPLE_ID                     Apple ID e-mail
 #   APPLE_PASSWORD               an app-specific password, not the account one
 #   APPLE_TEAM_ID                10-character team id
+#
+# Google sign-in: the Gmail OAuth client is compiled into the app from two
+# more secrets. Without them the build works but offers no "Sign in with
+# Google" (Gmail then needs an app password, like any IMAP account).
+#   FLIT_GOOGLE_CLIENT_ID        the Desktop client's id (…apps.googleusercontent.com)
+#   FLIT_GOOGLE_CLIENT_SECRET    its secret — not confidential for a desktop
+#                                app, kept out of the repo so forks use their own
 
 on:
   push:
@@ -105,6 +112,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FLIT_GOOGLE_CLIENT_ID: ${{ secrets.FLIT_GOOGLE_CLIENT_ID }}
+          FLIT_GOOGLE_CLIENT_SECRET: ${{ secrets.FLIT_GOOGLE_CLIENT_SECRET }}
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Flit ${{ inputs.tag || github.ref_name }}
