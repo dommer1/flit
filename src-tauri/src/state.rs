@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use sqlx::SqlitePool;
 
-use crate::auth::oauth::{self, Provider};
+use crate::auth::oauth::{self, PendingSignIn, Provider};
 use crate::auth::{self, AccessTokens, Credential, PasswordCache};
 use crate::error::AppError;
 use crate::llm;
@@ -32,6 +32,8 @@ pub struct AppState {
     pub passwords: PasswordCache,
     /// Session cache of OAuth access tokens (see auth::AccessTokens).
     pub access_tokens: AccessTokens,
+    /// The browser sign-in waiting for its redirect, so Cancel can end it.
+    pub sign_in: PendingSignIn,
     /// Which accounts are syncing their inbox — see try_begin_sync.
     syncing: Mutex<SyncSlots>,
     /// Accounts with background sync work running (the other folders, body
@@ -129,6 +131,7 @@ impl AppState {
             pending_sends: Mutex::new(HashMap::new()),
             passwords: PasswordCache::default(),
             access_tokens: AccessTokens::default(),
+            sign_in: PendingSignIn::default(),
             syncing: Mutex::new(SyncSlots::default()),
             background: Mutex::new(HashSet::new()),
             last_full_pass: Mutex::new(HashMap::new()),
@@ -212,13 +215,11 @@ impl AppState {
         let tokens = provider
             .refresh(&oauth::http_client()?, &refresh_token)
             .await?;
+        let lifetime = tokens.lifetime();
         if let Some(rotated) = tokens.refresh_token.filter(|t| *t != refresh_token) {
             auth::set_password(account_id, rotated.clone()).await?;
             self.passwords.insert(account_id, rotated);
         }
-        // why a short default: a provider that doesn't state the lifetime
-        // costs an extra refresh now and then, never a failed login.
-        let lifetime = tokens.expires_in.unwrap_or(Duration::from_secs(600));
         Ok((tokens.access_token, lifetime))
     }
 

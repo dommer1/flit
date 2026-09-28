@@ -116,9 +116,14 @@ impl AccessTokens {
             return Ok(token);
         }
         let (token, lifetime) = refresh().await?;
-        self.lock_tokens()
-            .insert(account_id, (token.clone(), Instant::now() + lifetime));
+        self.insert(account_id, token.clone(), lifetime);
         Ok(token)
+    }
+
+    /// Remember a token obtained elsewhere — a sign-in that just finished.
+    pub fn insert(&self, account_id: i64, token: String, lifetime: Duration) {
+        self.lock_tokens()
+            .insert(account_id, (token, Instant::now() + lifetime));
     }
 
     /// Drop an account's token (account deleted, or signed in anew).
@@ -302,6 +307,18 @@ mod tests {
         assert_eq!(a.await.unwrap().unwrap(), "t");
         assert_eq!(b.await.unwrap().unwrap(), "t");
         assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_token_from_a_sign_in_is_used_without_a_refresh() {
+        let tokens = AccessTokens::default();
+        tokens.insert(1, "signed-in".to_string(), HOUR);
+
+        let untouched = || async { panic!("a fresh token must not refresh") };
+        assert_eq!(
+            tokens.get_or_refresh(1, untouched).await.unwrap(),
+            "signed-in"
+        );
     }
 
     #[tokio::test]

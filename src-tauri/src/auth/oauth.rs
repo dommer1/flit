@@ -71,6 +71,15 @@ pub const GOOGLE: Provider = Provider {
     smtp_port: 465,
 };
 
+/// The OAuth providers this build can sign in with.
+pub fn configured_providers() -> Vec<AuthKind> {
+    [GOOGLE]
+        .iter()
+        .filter(|p| p.is_configured())
+        .map(|p| p.kind)
+        .collect()
+}
+
 /// The OAuth provider an account signs in with; `None` for a password.
 pub fn provider_for(auth: AuthKind) -> Option<Provider> {
     match auth {
@@ -123,6 +132,15 @@ pub struct Tokens {
     pub expires_in: Option<Duration>,
     /// The signed-in address, from the id_token.
     pub email: Option<String>,
+}
+
+impl Tokens {
+    /// How long to trust the access token. why a short default: a provider
+    /// that doesn't state it costs an extra refresh now and then, never a
+    /// failed login.
+    pub fn lifetime(&self) -> Duration {
+        self.expires_in.unwrap_or(Duration::from_secs(600))
+    }
 }
 
 /// A sign-in in progress: the URL to open in the browser, and the two

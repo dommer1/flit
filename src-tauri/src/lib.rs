@@ -148,6 +148,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_accounts,
             commands::add_account,
+            commands::oauth_providers,
+            commands::add_oauth_account,
+            commands::cancel_oauth_sign_in,
             commands::delete_account,
             commands::set_account_color,
             commands::list_contacts,

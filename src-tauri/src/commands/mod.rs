@@ -5,8 +5,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::auth::Credential;
 use crate::error::AppError;
 use crate::models::{
-    Account, Alias, Appearance, AuthResults, DateTimeFormat, LlmStatus, Mailbox, MessageBody,
-    MessageHeader, MessageQuote, MessagesChanged, NewAccount, NotificationSettings,
+    Account, Alias, Appearance, AuthKind, AuthResults, DateTimeFormat, LlmStatus, Mailbox,
+    MessageBody, MessageHeader, MessageQuote, MessagesChanged, NewAccount, NotificationSettings,
     OutgoingMessage, RemoteImagePolicy, ShortcutAction, ShortcutBinding, Signature, SwipeActions,
     ThreadOrder,
 };
@@ -81,6 +81,83 @@ pub async fn add_account(
     // the main window listens and refetches its sidebar list.
     app.emit("accounts-changed", ())?;
     Ok(inserted)
+}
+
+/// The OAuth providers this build offers sign-in with; a build without the
+/// client ids in its environment offers none.
+#[tauri::command]
+pub fn oauth_providers() -> Vec<AuthKind> {
+    auth::oauth::configured_providers()
+}
+
+/// Add an account by signing in with an OAuth provider in the browser. The
+/// address comes from the sign-in itself, the servers from the provider;
+/// both servers must accept the new token before anything is stored.
+#[tauri::command]
+pub async fn add_oauth_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    provider: AuthKind,
+    name: String,
+) -> Result<Account, AppError> {
+    let provider = auth::oauth::provider_for(provider)
+        .ok_or_else(|| AppError::Invalid("not an OAuth provider".to_string()))?;
+    let tokens = auth::oauth::sign_in(
+        provider,
+        &auth::oauth::http_client()?,
+        None,
+        open_in_browser,
+        state.sign_in.begin(),
+    )
+    .await?;
+    let lifetime = tokens.lifetime();
+    let email = tokens.email.ok_or_else(|| {
+        AppError::OAuth("the provider did not say which account signed in".to_string())
+    })?;
+    let refresh_token = tokens
+        .refresh_token
+        .ok_or_else(|| AppError::OAuth("the provider issued no refresh token".to_string()))?;
+    let account = NewAccount {
+        name: match name.trim() {
+            "" => email.clone(),
+            name => name.to_string(),
+        },
+        email: email.clone(),
+        imap_host: provider.imap_host.to_string(),
+        imap_port: provider.imap_port,
+        smtp_host: provider.smtp_host.to_string(),
+        smtp_port: provider.smtp_port,
+        username: email,
+    };
+    let access_token = tokens.access_token;
+    mail::verify_servers(&account, &Credential::AccessToken(access_token.clone())).await?;
+
+    let inserted =
+        storage::accounts::insert_with_auth(&state.pool, &account, provider.kind).await?;
+    // why: as in add_account — no account may exist without its credential.
+    if let Err(err) = auth::set_password(inserted.id, refresh_token.clone()).await {
+        storage::accounts::delete(&state.pool, inserted.id).await?;
+        return Err(err);
+    }
+    state.passwords.insert(inserted.id, refresh_token);
+    state
+        .access_tokens
+        .insert(inserted.id, access_token, lifetime);
+    app.emit("accounts-changed", ())?;
+    Ok(inserted)
+}
+
+/// End the browser sign-in still waiting, if any (the dialog's Cancel).
+#[tauri::command]
+pub fn cancel_oauth_sign_in(state: State<'_, AppState>) {
+    state.sign_in.cancel();
+}
+
+/// The sign-in page opens in the user's default browser — where they are
+/// already signed in to the provider, and where Flit never sees a password.
+fn open_in_browser(url: &str) -> Result<(), AppError> {
+    tauri_plugin_opener::open_url(url, None::<&str>)
+        .map_err(|e| AppError::OAuth(format!("could not open the browser: {e}")))
 }
 
 /// Set (or clear) an account's accent color, then broadcast so the main

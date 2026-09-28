@@ -22,6 +22,9 @@ fn main() {
 const APP_COMMANDS: &[&str] = &[
     "list_accounts",
     "add_account",
+    "oauth_providers",
+    "add_oauth_account",
+    "cancel_oauth_sign_in",
     "delete_account",
     "set_account_color",
     "list_contacts",
