@@ -12,6 +12,8 @@ use crate::error::AppError;
 pub enum Credential {
     /// An account password, sent with IMAP LOGIN / SMTP AUTH.
     Password(String),
+    /// A short-lived OAuth access token (Gmail), sent with SASL XOAUTH2.
+    AccessToken(String),
 }
 
 // why: the Keychain "service" is the bundle identifier, so Flit's entries

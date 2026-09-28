@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use lettre::message::header::ContentType;
 use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
-use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::authentication::{Credentials, Mechanism, DEFAULT_MECHANISMS};
 use lettre::{Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 use crate::auth::Credential;
@@ -38,12 +38,24 @@ fn transport(
     }
     .map_err(|e| AppError::Smtp(e.to_string()))?;
 
-    let credentials = match credential {
-        Credential::Password(password) => {
-            Credentials::new(username.to_string(), password.to_string())
-        }
+    let secret = match credential {
+        Credential::Password(password) => password,
+        Credential::AccessToken(token) => token,
     };
-    Ok(builder.port(port).credentials(credentials).build())
+    Ok(builder
+        .port(port)
+        .credentials(Credentials::new(username.to_string(), secret.clone()))
+        .authentication(mechanisms(credential))
+        .build())
+}
+
+/// SASL mechanisms offered for a credential. An access token is only
+/// meaningful to XOAUTH2 — offering PLAIN too would send it as a password.
+fn mechanisms(credential: &Credential) -> Vec<Mechanism> {
+    match credential {
+        Credential::Password(_) => DEFAULT_MECHANISMS.to_vec(),
+        Credential::AccessToken(_) => vec![Mechanism::Xoauth2],
+    }
 }
 
 /// Whether this SMTP server stores its own copy of every sent message.
@@ -267,6 +279,18 @@ pub async fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passwords_offer_lettres_default_mechanisms() {
+        let password = Credential::Password("heslo".to_string());
+        assert_eq!(mechanisms(&password), DEFAULT_MECHANISMS.to_vec());
+    }
+
+    #[test]
+    fn access_tokens_authenticate_with_xoauth2_only() {
+        let token = Credential::AccessToken("ya29.token".to_string());
+        assert_eq!(mechanisms(&token), vec![Mechanism::Xoauth2]);
+    }
 
     #[test]
     fn port_465_is_implicit_tls() {

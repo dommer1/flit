@@ -54,11 +54,51 @@ pub async fn connect(
         let client = async_imap::Client::new(tls);
         match credential {
             Credential::Password(password) => client.login(username, password).await,
+            Credential::AccessToken(token) => {
+                client
+                    .authenticate("XOAUTH2", XOAuth2::new(username, token))
+                    .await
+            }
         }
         .map_err(|(e, _)| AppError::Imap(format!("login: {e}")))
     })
     .await
     .map_err(|_| AppError::Imap(format!("connection to {host}:{port} timed out")))?
+}
+
+/// SASL XOAUTH2, the OAuth login Gmail and Outlook accept over IMAP: one
+/// response carrying the user and a bearer token.
+struct XOAuth2<'a> {
+    user: &'a str,
+    access_token: &'a str,
+    sent: bool,
+}
+
+impl<'a> XOAuth2<'a> {
+    fn new(user: &'a str, access_token: &'a str) -> Self {
+        Self {
+            user,
+            access_token,
+            sent: false,
+        }
+    }
+}
+
+impl async_imap::Authenticator for XOAuth2<'_> {
+    type Response = String;
+
+    fn process(&mut self, _challenge: &[u8]) -> String {
+        // why: a server that rejects the token answers with one more
+        // challenge (a JSON error) and expects an empty reply before its
+        // final NO — sending the token again would be a protocol error.
+        if std::mem::replace(&mut self.sent, true) {
+            return String::new();
+        }
+        format!(
+            "user={}\x01auth=Bearer {}\x01\x01",
+            self.user, self.access_token
+        )
+    }
 }
 
 /// Connection check for the add-account flow: connect, LOGIN, LOGOUT.
@@ -479,6 +519,19 @@ pub fn new_uids_only(headers: Vec<RawHeader>, last_uid: i64) -> Vec<RawHeader> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xoauth2_sends_user_and_bearer_token_once() {
+        use async_imap::Authenticator;
+        let mut auth = XOAuth2::new("jan@gmail.com", "ya29.token");
+        assert_eq!(
+            auth.process(b""),
+            "user=jan@gmail.com\x01auth=Bearer ya29.token\x01\x01"
+        );
+        // A rejected token comes back as a second challenge (a JSON error);
+        // the protocol wants an empty reply to it, never the token again.
+        assert_eq!(auth.process(br#"{"status":"401"}"#), "");
+    }
 
     #[test]
     fn a_uid_set_is_comma_separated() {
