@@ -1594,23 +1594,7 @@ async fn delete_draft_version(
 /// already name the failing leg ("imap error: …" / "smtp error: …").
 #[tauri::command]
 pub async fn test_connection(account: NewAccount, password: String) -> Result<(), AppError> {
-    let credential = Credential::Password(password);
-    let (imap, smtp) = tokio::join!(
-        mail::imap::verify(
-            &account.imap_host,
-            account.imap_port,
-            &account.username,
-            &credential,
-        ),
-        mail::smtp::verify(
-            &account.smtp_host,
-            account.smtp_port,
-            &account.username,
-            &credential,
-        ),
-    );
-    imap?;
-    smtp
+    mail::verify_servers(&account, &Credential::Password(password)).await
 }
 
 /// Body for the viewer — served from cache, lazily fetched on first open.

@@ -15,7 +15,31 @@ pub mod trackers;
 use std::future::Future;
 use std::time::Duration;
 
+use crate::auth::Credential;
 use crate::error::AppError;
+use crate::models::NewAccount;
+
+/// Prove a credential against both of an account's servers, in parallel,
+/// before the account is stored anywhere. The errors already name the
+/// failing leg ("imap error: …" / "smtp error: …").
+pub async fn verify_servers(account: &NewAccount, credential: &Credential) -> Result<(), AppError> {
+    let (imap, smtp) = tokio::join!(
+        imap::verify(
+            &account.imap_host,
+            account.imap_port,
+            &account.username,
+            credential,
+        ),
+        smtp::verify(
+            &account.smtp_host,
+            account.smtp_port,
+            &account.username,
+            credential,
+        ),
+    );
+    imap?;
+    smtp
+}
 
 /// Run one piece of mail I/O under a hard time limit.
 ///
