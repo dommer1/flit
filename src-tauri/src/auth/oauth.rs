@@ -65,6 +65,14 @@ pub const GOOGLE: Provider = Provider {
     smtp_port: 465,
 };
 
+/// The OAuth provider an account signs in with; `None` for a password.
+pub fn provider_for(auth: AuthKind) -> Option<Provider> {
+    match auth {
+        AuthKind::Password => None,
+        AuthKind::Google => Some(GOOGLE),
+    }
+}
+
 /// The id_token the provider returns next to the access token (OpenID
 /// Connect). Read once for the signed-in address, never stored.
 #[derive(Clone, Deserialize, Serialize)]

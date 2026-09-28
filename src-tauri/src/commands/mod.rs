@@ -107,6 +107,7 @@ pub async fn delete_account(
     // order could strand a secret in the keychain with no owning account row.
     auth::delete_password(id).await?;
     state.passwords.remove(id);
+    state.access_tokens.forget(id);
     storage::accounts::delete(&state.pool, id).await?;
     app.emit("accounts-changed", ())?;
     Ok(())

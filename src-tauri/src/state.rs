@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use sqlx::SqlitePool;
 
-use crate::auth::{self, Credential, PasswordCache};
+use crate::auth::oauth::{self, Provider};
+use crate::auth::{self, AccessTokens, Credential, PasswordCache};
 use crate::error::AppError;
 use crate::llm;
 use crate::models::{Account, OutgoingMessage};
@@ -24,8 +26,12 @@ pub struct AppState {
     /// One-shot by design: whoever takes the entry owns the outcome — the
     /// timer task sends it, or undo hands it back to a compose window.
     pending_sends: Mutex<HashMap<u64, OutgoingMessage>>,
-    /// Session cache of account passwords (see auth::PasswordCache).
+    /// Session cache of account passwords (see auth::PasswordCache). For
+    /// an OAuth account the keychain item — and so this entry — is the
+    /// refresh token.
     pub passwords: PasswordCache,
+    /// Session cache of OAuth access tokens (see auth::AccessTokens).
+    pub access_tokens: AccessTokens,
     /// Which accounts are syncing their inbox — see try_begin_sync.
     syncing: Mutex<SyncSlots>,
     /// Accounts with background sync work running (the other folders, body
@@ -122,6 +128,7 @@ impl AppState {
             pending_drafts: Mutex::new(HashMap::new()),
             pending_sends: Mutex::new(HashMap::new()),
             passwords: PasswordCache::default(),
+            access_tokens: AccessTokens::default(),
             syncing: Mutex::new(SyncSlots::default()),
             background: Mutex::new(HashSet::new()),
             last_full_pass: Mutex::new(HashMap::new()),
@@ -167,16 +174,52 @@ impl AppState {
         }
     }
 
-    /// The account's credential. A password comes via the session cache: the
-    /// keychain — and with it a possible macOS ACL prompt — is consulted at
-    /// most once per account per app run.
+    /// The account's credential: its password, or for an OAuth account an
+    /// access token (refreshed when it runs out).
     pub async fn credential(&self, account: &Account) -> Result<Credential, AppError> {
-        let account_id = account.id;
-        let password = self
-            .passwords
-            .get_or_fetch(account_id, || auth::get_password(account_id))
+        let Some(provider) = oauth::provider_for(account.auth) else {
+            return Ok(Credential::Password(
+                self.keychain_secret(account.id).await?,
+            ));
+        };
+        let token = self
+            .access_tokens
+            .get_or_refresh(account.id, || {
+                self.refresh_access_token(account.id, provider)
+            })
             .await?;
-        Ok(Credential::Password(password))
+        Ok(Credential::AccessToken(token))
+    }
+
+    /// The account's keychain item — a password, or an OAuth refresh token —
+    /// via the session cache: the keychain, and with it a possible macOS ACL
+    /// prompt, is consulted at most once per account per app run.
+    async fn keychain_secret(&self, account_id: i64) -> Result<String, AppError> {
+        self.passwords
+            .get_or_fetch(account_id, || auth::get_password(account_id))
+            .await
+    }
+
+    /// Buy a new access token with the account's refresh token. A provider
+    /// that rotates refresh tokens hands back a new one, which replaces the
+    /// stored one at once — the old one may stop working.
+    async fn refresh_access_token(
+        &self,
+        account_id: i64,
+        provider: Provider,
+    ) -> Result<(String, Duration), AppError> {
+        let refresh_token = self.keychain_secret(account_id).await?;
+        let tokens = provider
+            .refresh(&oauth::http_client()?, &refresh_token)
+            .await?;
+        if let Some(rotated) = tokens.refresh_token.filter(|t| *t != refresh_token) {
+            auth::set_password(account_id, rotated.clone()).await?;
+            self.passwords.insert(account_id, rotated);
+        }
+        // why a short default: a provider that doesn't state the lifetime
+        // costs an extra refresh now and then, never a failed login.
+        let lifetime = tokens.expires_in.unwrap_or(Duration::from_secs(600));
+        Ok((tokens.access_token, lifetime))
     }
 
     /// Record that a full pass of the account starts at `now` (Unix secs).
@@ -280,6 +323,50 @@ mod tests {
             references: None,
             quote: None,
         }
+    }
+
+    async fn account(pool: &SqlitePool, auth: crate::models::AuthKind) -> Account {
+        let new = crate::models::NewAccount {
+            name: "Jan".to_string(),
+            email: "jan@gmail.com".to_string(),
+            imap_host: "imap.gmail.com".to_string(),
+            imap_port: 993,
+            smtp_host: "smtp.gmail.com".to_string(),
+            smtp_port: 465,
+            username: "jan@gmail.com".to_string(),
+        };
+        crate::storage::accounts::insert_with_auth(pool, &new, auth)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_password_account_signs_in_with_its_password() {
+        let state = AppState::new(test_pool().await);
+        let account = account(&state.pool, crate::models::AuthKind::Password).await;
+        state.passwords.insert(account.id, "heslo".to_string());
+
+        let credential = state.credential(&account).await.unwrap();
+
+        assert!(matches!(credential, Credential::Password(p) if p == "heslo"));
+    }
+
+    #[tokio::test]
+    async fn a_google_account_signs_in_with_an_access_token() {
+        let state = AppState::new(test_pool().await);
+        let account = account(&state.pool, crate::models::AuthKind::Google).await;
+        state.passwords.insert(account.id, "1//refresh".to_string());
+        // A token still fresh from an earlier refresh — no network needed.
+        let cached = || async { Ok(("ya29.cached".to_string(), Duration::from_secs(3600))) };
+        state
+            .access_tokens
+            .get_or_refresh(account.id, cached)
+            .await
+            .unwrap();
+
+        let credential = state.credential(&account).await.unwrap();
+
+        assert!(matches!(credential, Credential::AccessToken(t) if t == "ya29.cached"));
     }
 
     #[tokio::test]
