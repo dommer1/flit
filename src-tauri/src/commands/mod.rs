@@ -203,6 +203,35 @@ fn open_in_browser(url: &str) -> Result<(), AppError> {
         .map_err(|e| AppError::OAuth(format!("could not open the browser: {e}")))
 }
 
+/// For an OAuth account about to be deleted: revoke its refresh token at
+/// the provider, in the background. Best effort — deleting must work
+/// offline too, and a grant left behind only lingers in the user's
+/// provider account, where they can remove it themselves.
+async fn revoke_sign_in(state: &AppState, id: i64) {
+    let Ok(account) = storage::accounts::get(&state.pool, id).await else {
+        return;
+    };
+    let Some(provider) = auth::oauth::provider_for(account.auth) else {
+        return;
+    };
+    let Ok(refresh_token) = state
+        .passwords
+        .get_or_fetch(id, || auth::get_password(id))
+        .await
+    else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        let revoked = match auth::oauth::http_client() {
+            Ok(http) => provider.revoke(&http, &refresh_token).await,
+            Err(err) => Err(err),
+        };
+        if let Err(err) = revoked {
+            eprintln!("account {id}: {err}");
+        }
+    });
+}
+
 /// Set (or clear) an account's accent color, then broadcast so the main
 /// window re-tints its sidebar and message dots.
 #[tauri::command]
@@ -223,6 +252,7 @@ pub async fn delete_account(
     state: State<'_, AppState>,
     id: i64,
 ) -> Result<(), AppError> {
+    revoke_sign_in(&state, id).await;
     // why: keychain first — if it fails the account stays intact; the reverse
     // order could strand a secret in the keychain with no owning account row.
     auth::delete_password(id).await?;

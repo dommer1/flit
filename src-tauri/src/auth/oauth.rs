@@ -36,6 +36,8 @@ pub struct Provider {
     pub kind: AuthKind,
     auth_url: &'static str,
     token_url: &'static str,
+    /// Where a refresh token is revoked (RFC 7009), if the provider has one.
+    revoke_url: Option<&'static str>,
     scopes: &'static [&'static str],
     /// Extra query parameters for the authorization URL.
     auth_params: &'static [(&'static str, &'static str)],
@@ -53,6 +55,7 @@ pub const GOOGLE: Provider = Provider {
     kind: AuthKind::Google,
     auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
     token_url: "https://oauth2.googleapis.com/token",
+    revoke_url: Some("https://oauth2.googleapis.com/revoke"),
     // why mail.google.com: the only scope Gmail accepts for IMAP and SMTP.
     // openid + email put the signed-in address into the id_token, so the
     // account is created for the mailbox the user actually picked.
@@ -222,6 +225,32 @@ impl Provider {
             .await
             .map_err(token_error)?;
         Ok(tokens(response))
+    }
+
+    /// Tell the provider a refresh token is no longer wanted, so the grant
+    /// disappears from the user's account too (Google: "Third-party apps
+    /// with account access"). A provider without the endpoint is a no-op.
+    pub async fn revoke(
+        &self,
+        http: &reqwest::Client,
+        refresh_token: &str,
+    ) -> Result<(), AppError> {
+        let Some(url) = self.revoke_url else {
+            return Ok(());
+        };
+        // why by hand: reqwest's .form() is an optional feature Flit does
+        // not compile; this is the same urlencoded body.
+        let body = oauth2::url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("token", refresh_token)
+            .finish();
+        http.post(url)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|e| AppError::OAuth(format!("revoking the sign-in failed: {e}")))?;
+        Ok(())
     }
 
     /// A new access token for a stored refresh token. A grant the provider
@@ -793,6 +822,35 @@ mod tests {
             signed_in_address(&signed_in_as(Some("jan@gmail.com")), None).unwrap(),
             "jan@gmail.com"
         );
+    }
+
+    #[tokio::test]
+    async fn revoking_posts_the_refresh_token_to_the_provider() {
+        let (url, seen) = serve_once("200 OK", "").await;
+        let provider = Provider {
+            revoke_url: Some(Box::leak(url.into_boxed_str())),
+            ..TEST_GOOGLE
+        };
+
+        provider
+            .revoke(&reqwest::Client::new(), "1//r+t")
+            .await
+            .unwrap();
+
+        let request = seen.await.unwrap();
+        assert!(request.starts_with("POST /token "), "{request}");
+        assert!(request.ends_with("token=1%2F%2Fr%2Bt"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_revocation_is_an_error() {
+        let (url, _seen) = serve_once("400 Bad Request", r#"{"error":"invalid_token"}"#).await;
+        let provider = Provider {
+            revoke_url: Some(Box::leak(url.into_boxed_str())),
+            ..TEST_GOOGLE
+        };
+
+        assert!(provider.revoke(&reqwest::Client::new(), "x").await.is_err());
     }
 
     #[tokio::test]
