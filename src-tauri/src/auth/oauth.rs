@@ -7,9 +7,153 @@
 
 use std::time::Duration;
 
-use oauth2::{HttpClientError, HttpRequest, HttpResponse};
+use oauth2::basic::{
+    BasicErrorResponse, BasicRevocationErrorResponse, BasicTokenIntrospectionResponse,
+    BasicTokenType,
+};
+use oauth2::url::Url;
+use oauth2::{
+    AuthUrl, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet, ExtraTokenFields,
+    HttpClientError, HttpRequest, HttpResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
+    Scope, StandardRevocableToken, StandardTokenResponse, TokenUrl,
+};
+use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
+use crate::models::AuthKind;
+
+/// Everything that differs between OAuth mail providers. Plain data: the
+/// sign-in flow itself is shared, and a provider is one more constant.
+#[derive(Clone, Copy)]
+pub struct Provider {
+    pub kind: AuthKind,
+    auth_url: &'static str,
+    token_url: &'static str,
+    scopes: &'static [&'static str],
+    /// Extra query parameters for the authorization URL.
+    auth_params: &'static [(&'static str, &'static str)],
+    /// Baked in at build time from `.env`; `None` in a build without it,
+    /// which then offers no sign-in with this provider.
+    client_id: Option<&'static str>,
+    client_secret: Option<&'static str>,
+    pub imap_host: &'static str,
+    pub imap_port: u16,
+    pub smtp_host: &'static str,
+    pub smtp_port: u16,
+}
+
+pub const GOOGLE: Provider = Provider {
+    kind: AuthKind::Google,
+    auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
+    token_url: "https://oauth2.googleapis.com/token",
+    // why mail.google.com: the only scope Gmail accepts for IMAP and SMTP.
+    // openid + email put the signed-in address into the id_token, so the
+    // account is created for the mailbox the user actually picked.
+    scopes: &["https://mail.google.com/", "openid", "email"],
+    // why: without offline access Google issues no refresh token, and
+    // without prompt=consent a repeated sign-in (reconnect) gets none either.
+    auth_params: &[("access_type", "offline"), ("prompt", "consent")],
+    // why in the binary: Google treats a desktop app's client secret as not
+    // confidential (anyone can extract it); it stays out of the repo only so
+    // forks register their own client.
+    client_id: option_env!("FLIT_GOOGLE_CLIENT_ID"),
+    client_secret: option_env!("FLIT_GOOGLE_CLIENT_SECRET"),
+    imap_host: "imap.gmail.com",
+    imap_port: 993,
+    smtp_host: "smtp.gmail.com",
+    smtp_port: 465,
+};
+
+/// The id_token the provider returns next to the access token (OpenID
+/// Connect). Read once for the signed-in address, never stored.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct IdTokenFields {
+    id_token: Option<String>,
+}
+
+impl ExtraTokenFields for IdTokenFields {}
+
+// why by hand: ExtraTokenFields requires Debug, and a derived one would
+// print the token. oauth2's own token types redact theirs the same way.
+impl std::fmt::Debug for IdTokenFields {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("IdTokenFields([redacted])")
+    }
+}
+
+type TokenResponse = StandardTokenResponse<IdTokenFields, BasicTokenType>;
+
+// why a type alias: oauth2 records in the type which endpoints a client has
+// (auth, device, introspection, revocation, token) — ours sets auth + token.
+type OAuthClient = oauth2::Client<
+    BasicErrorResponse,
+    TokenResponse,
+    BasicTokenIntrospectionResponse,
+    StandardRevocableToken,
+    BasicRevocationErrorResponse,
+    EndpointSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointSet,
+>;
+
+/// A sign-in in progress: the URL to open in the browser, and the two
+/// secrets the redirect back must be checked and exchanged with.
+pub struct Authorization {
+    pub url: Url,
+    pub state: CsrfToken,
+    pub pkce_verifier: PkceCodeVerifier,
+}
+
+impl Provider {
+    /// True when this build carries a client id for the provider.
+    pub fn is_configured(&self) -> bool {
+        self.client_id.is_some()
+    }
+
+    fn client(&self, redirect_uri: &str) -> Result<OAuthClient, AppError> {
+        let client_id = self.client_id.ok_or_else(|| {
+            AppError::OAuth("this build has no OAuth client for the provider".to_string())
+        })?;
+        let invalid = |e: oauth2::url::ParseError| AppError::OAuth(e.to_string());
+        let mut client = oauth2::Client::new(ClientId::new(client_id.to_string()))
+            .set_auth_uri(AuthUrl::new(self.auth_url.to_string()).map_err(invalid)?)
+            .set_token_uri(TokenUrl::new(self.token_url.to_string()).map_err(invalid)?)
+            .set_redirect_uri(RedirectUrl::new(redirect_uri.to_string()).map_err(invalid)?);
+        if let Some(secret) = self.client_secret {
+            client = client.set_client_secret(ClientSecret::new(secret.to_string()));
+        }
+        Ok(client)
+    }
+
+    /// Start a sign-in: the browser URL, with a fresh PKCE challenge and
+    /// CSRF state. `login_hint` preselects the account on a reconnect.
+    pub fn authorize(
+        &self,
+        redirect_uri: &str,
+        login_hint: Option<&str>,
+    ) -> Result<Authorization, AppError> {
+        let (challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+        let client = self.client(redirect_uri)?;
+        let mut request = client
+            .authorize_url(CsrfToken::new_random)
+            .set_pkce_challenge(challenge)
+            .add_scopes(self.scopes.iter().map(|s| Scope::new(s.to_string())));
+        for (name, value) in self.auth_params {
+            request = request.add_extra_param(*name, *value);
+        }
+        if let Some(hint) = login_hint {
+            request = request.add_extra_param("login_hint", hint);
+        }
+        let (url, state) = request.url();
+        Ok(Authorization {
+            url,
+            state,
+            pkce_verifier,
+        })
+    }
+}
 
 /// Client for the provider's token endpoint: TLS-only, no Referer, no
 /// cookie jar (feature not compiled), and no redirects — oauth2 asks for
@@ -80,6 +224,70 @@ mod tests {
             socket.shutdown().await.unwrap();
         });
         (format!("http://{addr}/token"), seen_rx)
+    }
+
+    /// Google, as a build with a client id would have it.
+    const TEST_GOOGLE: Provider = Provider {
+        client_id: Some("test-client.apps.googleusercontent.com"),
+        client_secret: Some("test-secret"),
+        ..GOOGLE
+    };
+
+    fn query(url: &Url) -> std::collections::HashMap<String, String> {
+        url.query_pairs().into_owned().collect()
+    }
+
+    #[test]
+    fn the_google_sign_in_url_asks_for_gmail_offline_with_pkce() {
+        let auth = TEST_GOOGLE
+            .authorize("http://127.0.0.1:5555", None)
+            .unwrap();
+
+        assert_eq!(auth.url.host_str(), Some("accounts.google.com"));
+        assert_eq!(auth.url.path(), "/o/oauth2/v2/auth");
+        let q = query(&auth.url);
+        assert_eq!(q["response_type"], "code");
+        assert_eq!(q["client_id"], "test-client.apps.googleusercontent.com");
+        assert_eq!(q["redirect_uri"], "http://127.0.0.1:5555");
+        assert_eq!(q["scope"], "https://mail.google.com/ openid email");
+        assert_eq!(q["access_type"], "offline");
+        assert_eq!(q["prompt"], "consent");
+        assert_eq!(q["code_challenge_method"], "S256");
+        assert!(!q["code_challenge"].is_empty());
+        assert_eq!(&q["state"], auth.state.secret());
+        assert!(!q.contains_key("login_hint"));
+        // The secret half of PKCE and the client secret never go to the browser.
+        assert!(!auth.url.as_str().contains(auth.pkce_verifier.secret()));
+        assert!(!auth.url.as_str().contains("test-secret"));
+    }
+
+    #[test]
+    fn every_sign_in_gets_fresh_state_and_pkce() {
+        let first = TEST_GOOGLE.authorize("http://127.0.0.1:1", None).unwrap();
+        let second = TEST_GOOGLE.authorize("http://127.0.0.1:1", None).unwrap();
+
+        assert_ne!(first.state.secret(), second.state.secret());
+        assert_ne!(first.pkce_verifier.secret(), second.pkce_verifier.secret());
+    }
+
+    #[test]
+    fn a_reconnect_preselects_the_account() {
+        let auth = TEST_GOOGLE
+            .authorize("http://127.0.0.1:1", Some("jan@gmail.com"))
+            .unwrap();
+
+        assert_eq!(query(&auth.url)["login_hint"], "jan@gmail.com");
+    }
+
+    #[test]
+    fn a_build_without_a_client_id_cannot_start_a_sign_in() {
+        let unconfigured = Provider {
+            client_id: None,
+            ..GOOGLE
+        };
+
+        assert!(!unconfigured.is_configured());
+        assert!(unconfigured.authorize("http://127.0.0.1:1", None).is_err());
     }
 
     #[tokio::test]

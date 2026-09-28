@@ -29,6 +29,9 @@ pub enum AppError {
     /// step (load, prompt, context, generation) gave up.
     #[error("summary error: {0}")]
     Llm(String),
+    /// OAuth sign-in or token refresh failed; the message says which step.
+    #[error("sign-in error: {0}")]
+    OAuth(String),
     // why: user-fixable input problems (e.g. a schedule time in the past)
     // get their own variant so the message reads as guidance, not a fault.
     #[error("{0}")]
