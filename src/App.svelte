@@ -63,6 +63,7 @@
     MessageHeader,
     MessageQuote,
     ScheduledMessage,
+    SearchCorrection,
     ShortcutAction,
     ShortcutBinding,
     SwipeActions,
@@ -115,6 +116,8 @@
   // the reading pane must open that message rather than the thread's
   // newest (which is what a folder row stands for).
   let showingSearchHits = $state(false);
+  // Typed words the current search replaced; empty outside a search.
+  let searchCorrections = $state<SearchCorrection[]>([]);
 
   function handleLoadMore() {
     // Fires repeatedly while the user sits near the bottom — bump once and
@@ -830,6 +833,7 @@
         searchMessages(selectedAccountId, query),
       );
       messages = withoutPending(results.messages);
+      searchCorrections = results.corrections;
       // Search results are their own universe — whole-view totals and the
       // load-more trigger don't apply to them.
       listStatus = null;
@@ -846,6 +850,7 @@
     messages = withoutPending(list);
     listStatus = status;
     showingSearchHits = false;
+    searchCorrections = [];
     // why here: the assignment above is what re-renders the rows, so the
     // frame that follows it is the list's render cost.
     markPaint("list.paint");
@@ -1132,6 +1137,7 @@
         onTrash={handleTrash}
         onReply={handleSwipeReply}
         status={listStatus}
+        corrections={searchCorrections}
         onLoadMore={handleLoadMore}
         onRefresh={handlePullRefresh}
         refreshing={pullRefreshing}

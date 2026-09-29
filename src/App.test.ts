@@ -844,6 +844,26 @@ it("opens the search hit that was clicked, not the newest of its thread", async 
   expect(screen.queryByText("newer body")).not.toBeInTheDocument();
 });
 
+it("says when a search swapped a typo for the word it meant", async () => {
+  vi.mocked(api.searchMessages).mockResolvedValueOnce({
+    messages: [allMessages[1]],
+    corrections: [{ typed: "bnny", corrected: "bunny" }],
+  });
+
+  render(App);
+  await screen.findByText("Weekend plans");
+  await typeIntoSearch("bnny");
+
+  expect(await screen.findByText(/Showing results for/)).toHaveTextContent(
+    "bunny instead of bnny",
+  );
+
+  // The line belongs to the results — leaving the search drops it.
+  await typeIntoSearch("");
+  await screen.findByText("Weekend plans");
+  expect(screen.queryByText(/Showing results for/)).not.toBeInTheDocument();
+});
+
 it("scopes the search to the selected account", async () => {
   render(App);
   await screen.findByText("Weekend plans");

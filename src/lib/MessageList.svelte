@@ -19,6 +19,7 @@
   import { offsetsFor, windowFor } from "./virtualList";
   import type {
     MessageHeader,
+    SearchCorrection,
     SwipeAction,
     SwipeActions,
     ViewStatus,
@@ -39,6 +40,7 @@
     onTrash,
     onReply,
     status = null,
+    corrections = [],
     onLoadMore,
     onRefresh,
     refreshing = false,
@@ -69,6 +71,10 @@
     /** Whole-view totals + backfill progress; null (e.g. search results)
      * falls back to counting the rows at hand. */
     status?: ViewStatus | null;
+    /** Typed words a search replaced with the cached word they most likely
+     * meant — said under the count, so a hit for "bunny" when the user
+     * typed "bnny" is never a mystery. */
+    corrections?: SearchCorrection[];
     /** Ask the parent to reveal more rows — fired near the list's bottom
      * while more rows exist than are loaded. */
     onLoadMore?: () => void;
@@ -353,6 +359,17 @@
         ? `, ${unreadCount} unread`
         : ""}
     </p>
+    {#if corrections.length > 0}
+      <p class="correction">
+        Showing results for
+        <!-- why the separator leads, as an expression: Svelte trims the
+             whitespace at an each block's edges, so a trailing ", " in the
+             markup would lose its space. -->
+        {#each corrections as { typed, corrected }, i (typed)}
+          {i > 0 ? ", " : ""}<strong>{corrected}</strong> instead of {typed}
+        {/each}
+      </p>
+    {/if}
   </header>
 
   <!-- Always mounted so the drawer's height can animate open and closed;
@@ -568,6 +585,17 @@
     margin: 1px 0 0;
     font-size: 11px;
     color: var(--text-secondary);
+  }
+
+  .correction {
+    margin: 4px 0 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  .correction strong {
+    font-weight: 600;
+    color: var(--text-primary);
   }
 
   /* why flex-shrink 0: the list is a flex column, and without it the

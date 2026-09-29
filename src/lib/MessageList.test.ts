@@ -355,6 +355,25 @@ it("dots a read representative whose conversation is unread elsewhere", () => {
   expect(row.querySelector(".dot")).not.toBeNull();
 });
 
+it("says which words a search used in place of typos", () => {
+  renderList({
+    corrections: [
+      { typed: "bnny", corrected: "bunny" },
+      { typed: "invoce", corrected: "invoice" },
+    ],
+  });
+
+  expect(screen.getByText(/Showing results for/)).toHaveTextContent(
+    "Showing results for bunny instead of bnny, invoice instead of invoce",
+  );
+});
+
+it("shows no correction line for a search taken as typed", () => {
+  renderList();
+
+  expect(screen.queryByText(/Showing results for/)).not.toBeInTheDocument();
+});
+
 // Pull-to-refresh: upward wheel pulses on the list itself while at the top.
 
 it("starts a refresh once a deep pull at the top settles", async () => {
