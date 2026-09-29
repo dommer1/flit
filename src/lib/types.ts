@@ -356,6 +356,20 @@ export interface Mailbox {
   unreadCount: number;
 }
 
+/** What a search found, plus any typed word it searched as another because
+ * nothing in the cache matched it. */
+export interface SearchResults {
+  messages: MessageHeader[];
+  corrections: SearchCorrection[];
+}
+
+/** A mistyped search word and the cached word searched in its place
+ * ("bnny" → "bunny"). */
+export interface SearchCorrection {
+  typed: string;
+  corrected: string;
+}
+
 /** Counts for one list view — the list header totals plus the backfill
  * progress pair (cached vs. what the server holds). */
 export interface ViewStatus {

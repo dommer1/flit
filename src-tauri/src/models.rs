@@ -879,6 +879,24 @@ impl MessagesChanged {
     }
 }
 
+/// What a search found, plus any typed word it searched as another because
+/// nothing in the cache matched it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResults {
+    pub messages: Vec<MessageHeader>,
+    pub corrections: Vec<SearchCorrection>,
+}
+
+/// A mistyped search word and the cached word searched in its place
+/// ("bnny" → "bunny").
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchCorrection {
+    pub typed: String,
+    pub corrected: String,
+}
+
 /// Counts for one list view (a folder, or a mailbox name across all
 /// accounts) — what the list header and the backfill progress line show.
 #[derive(Debug, PartialEq, Serialize)]

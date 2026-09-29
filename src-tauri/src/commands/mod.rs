@@ -7,8 +7,8 @@ use crate::error::AppError;
 use crate::models::{
     Account, Alias, Appearance, AuthKind, AuthResults, DateTimeFormat, LlmStatus, Mailbox,
     MessageBody, MessageHeader, MessageQuote, MessagesChanged, NewAccount, NotificationSettings,
-    OutgoingMessage, RemoteImagePolicy, ShortcutAction, ShortcutBinding, Signature, SwipeActions,
-    ThreadOrder,
+    OutgoingMessage, RemoteImagePolicy, SearchResults, ShortcutAction, ShortcutBinding, Signature,
+    SwipeActions, ThreadOrder,
 };
 use crate::state::AppState;
 use crate::timing;
@@ -1162,7 +1162,7 @@ pub async fn search_messages(
     state: State<'_, AppState>,
     account_id: Option<i64>,
     query: String,
-) -> Result<Vec<MessageHeader>, AppError> {
+) -> Result<SearchResults, AppError> {
     let parsed = storage::search::parse_query(&query);
     storage::search::search(&state.pool, account_id, &parsed).await
 }

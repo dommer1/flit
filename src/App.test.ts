@@ -233,7 +233,10 @@ vi.mock("./lib/api", () => ({
   }),
   // why: a canned single-hit result — App tests only assert the wiring
   // (what was called with what); real matching is covered by Rust tests.
-  searchMessages: vi.fn(async () => [currentMessages[1]]),
+  searchMessages: vi.fn(async () => ({
+    messages: [currentMessages[1]],
+    corrections: [],
+  })),
   // The view's conversation fetch: empty = fall back to the selected row.
   listThread: vi.fn(async () => []),
   // Bulk bodies for the conversation view, keyed by message id — serve the
@@ -799,9 +802,12 @@ it("clearing the search restores the plain list", async () => {
 it("opens the search hit that was clicked, not the newest of its thread", async () => {
   // The clicked hit's own id (999) is deliberately absent from the thread —
   // the server-side-copy dedup situation — so only its Message-ID finds it.
-  vi.mocked(api.searchMessages).mockResolvedValueOnce([
-    { ...allMessages[1], id: 999, messageId: "old@x", snippet: "older hit" },
-  ]);
+  vi.mocked(api.searchMessages).mockResolvedValueOnce({
+    messages: [
+      { ...allMessages[1], id: 999, messageId: "old@x", snippet: "older hit" },
+    ],
+    corrections: [],
+  });
   vi.mocked(api.listThread).mockResolvedValueOnce([
     { ...allMessages[1], id: 50, messageId: "old@x" },
     { ...allMessages[1], id: 51, messageId: "new@x", date: "2026-07-09T00:00:00Z" },

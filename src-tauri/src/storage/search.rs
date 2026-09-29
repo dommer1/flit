@@ -8,7 +8,7 @@ use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::error::AppError;
-use crate::models::MessageHeader;
+use crate::models::{MessageHeader, SearchCorrection, SearchResults};
 use crate::storage::messages::header_columns;
 
 /// A search query broken into structured filters plus free text.
@@ -114,12 +114,14 @@ const CANDIDATE_LIMIT: i64 = RESULT_LIMIT * 5;
 
 /// Run a parsed query against the cache. `account_id = None` searches all
 /// accounts (unified inbox); operators filter columns, free text goes to the
-/// FTS5 index. Newest first, one row per message.
+/// FTS5 index — a mistyped word as the word it meant. Newest first, one row
+/// per message.
 pub async fn search(
     pool: &SqlitePool,
     account_id: Option<i64>,
     query: &SearchQuery,
-) -> Result<Vec<MessageHeader>, AppError> {
+) -> Result<SearchResults, AppError> {
+    let (text, corrections) = correct_typos(pool, &query.text).await?;
     // why: one static SQL with `(? IS NULL OR …)` per filter instead of
     // building the string at runtime — sqlx 0.9 rejects runtime-built SQL
     // (SqlSafeStr), and a single shape keeps the query plan cached.
@@ -140,7 +142,7 @@ pub async fn search(
     // an `in:` search must still show that folder's copy — if the ranking
     // could reach outside the match set it would drop the archived copy in
     // favour of an inbox copy the user did not ask for, and return nothing.
-    let rows = sqlx::query_as(concat!(
+    let messages: Vec<MessageHeader> = sqlx::query_as(concat!(
         r#"WITH candidates AS (
              -- why named columns, not *: the candidates are sorted by date,
              -- and * made that sort carry every matching body along.
@@ -202,12 +204,90 @@ pub async fn search(
     .bind(query.after.as_deref())
     .bind(query.before.as_deref())
     .bind(query.mailbox.as_deref())
-    .bind(fts_match_expr(&query.text))
+    .bind(fts_match_expr(&text))
     .bind(CANDIDATE_LIMIT)
     .bind(RESULT_LIMIT)
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+    Ok(SearchResults {
+        messages,
+        corrections,
+    })
+}
+
+/// The free text with every word that matches nothing in the index replaced
+/// by the word it most likely meant ("bnny" → "bunny"), plus the list of
+/// replacements for the UI to show.
+///
+/// why per run of letters rather than per word: the index splits
+/// "bunny.net" into "bunny" and "net", so that is the unit a typo lives in —
+/// "bnny.net" fixes its first run and keeps the rest.
+async fn correct_typos(
+    pool: &SqlitePool,
+    text: &str,
+) -> Result<(String, Vec<SearchCorrection>), AppError> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut corrections = Vec::new();
+    let mut corrected_words = Vec::with_capacity(words.len());
+    for (w, word) in words.iter().enumerate() {
+        let pieces: Vec<&str> = word
+            .split_inclusive(|c: char| !c.is_alphanumeric())
+            .collect();
+        let mut corrected = String::with_capacity(word.len());
+        for (p, piece) in pieces.iter().enumerate() {
+            let run = piece.trim_end_matches(|c: char| !c.is_alphanumeric());
+            // fts_match_expr matches the text's very last run as a prefix, so
+            // a word still being typed is known if some indexed word starts
+            // with it.
+            let prefix = w + 1 == words.len() && p + 1 == pieces.len();
+            corrected.push_str(&correct_run(pool, run, prefix, &mut corrections).await?);
+            corrected.push_str(&piece[run.len()..]);
+        }
+        corrected_words.push(corrected);
+    }
+    Ok((corrected_words.join(" "), corrections))
+}
+
+/// One run of letters, as typed or as the indexed word it meant.
+async fn correct_run(
+    pool: &SqlitePool,
+    run: &str,
+    prefix: bool,
+    corrections: &mut Vec<SearchCorrection>,
+) -> Result<String, AppError> {
+    // why letters only: a number or a code ("2025", "FA2025") is an exact
+    // identifier — the nearest indexed one is a different invoice, not the
+    // one the user meant.
+    if run.is_empty()
+        || !run.chars().all(char::is_alphabetic)
+        || is_indexed(pool, run, prefix).await?
+    {
+        return Ok(run.to_string());
+    }
+    let Some(term) = closest_term(pool, run).await? else {
+        return Ok(run.to_string());
+    };
+    let correction = SearchCorrection {
+        typed: run.to_string(),
+        corrected: term.clone(),
+    };
+    if !corrections.contains(&correction) {
+        corrections.push(correction);
+    }
+    Ok(term)
+}
+
+/// Whether some message's indexed text holds `run` as a word — or, with
+/// `prefix`, a word starting with it. `run` must be letters only: it goes
+/// into the MATCH quoted but unescaped.
+async fn is_indexed(pool: &SqlitePool, run: &str, prefix: bool) -> Result<bool, AppError> {
+    let star = if prefix { "*" } else { "" };
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM messages_fts WHERE messages_fts MATCH ?)")
+            .bind(format!("\"{run}\"{star}"))
+            .fetch_one(pool)
+            .await?,
+    )
 }
 
 /// Free text → an FTS5 MATCH expression: every word quoted (so user input
@@ -381,6 +461,7 @@ mod tests {
         search(pool, account_id, &parse_query(input))
             .await
             .unwrap()
+            .messages
             .into_iter()
             .map(|m| m.subject)
             .collect()
@@ -432,6 +513,7 @@ mod tests {
         search(pool, None, &parse_query(input))
             .await
             .unwrap()
+            .messages
             .into_iter()
             .map(|m| m.mailbox)
             .collect()
@@ -1098,5 +1180,89 @@ mod tests {
             closest_term(&pool, "Bünnny").await.unwrap().as_deref(),
             Some("bunny")
         );
+    }
+
+    async fn corrections_for(pool: &SqlitePool, input: &str) -> Vec<(String, String)> {
+        search(pool, None, &parse_query(input))
+            .await
+            .unwrap()
+            .corrections
+            .into_iter()
+            .map(|c| (c.typed, c.corrected))
+            .collect()
+    }
+
+    fn fixed(typed: &str, corrected: &str) -> (String, String) {
+        (typed.to_string(), corrected.to_string())
+    }
+
+    #[tokio::test]
+    async fn a_word_that_matches_nothing_is_searched_as_the_word_it_meant() {
+        let pool = test_pool().await;
+        let id = test_account(&pool, "Work").await;
+        insert_message(
+            &pool,
+            id,
+            1,
+            "bunny.net <hop@bunny.net>",
+            "",
+            "Your invoice",
+            "2026-07-01T00:00:00Z",
+            false,
+            None,
+        )
+        .await;
+
+        for typo in ["bnny", "Bunnny", "bnny.net"] {
+            assert_eq!(
+                subjects_for(&pool, None, typo).await,
+                vec!["Your invoice"],
+                "{typo}"
+            );
+        }
+        // The search says what it replaced, so the UI can show it.
+        assert_eq!(
+            corrections_for(&pool, "bnny.net").await,
+            vec![fixed("bnny", "bunny")]
+        );
+    }
+
+    #[tokio::test]
+    async fn words_the_index_knows_are_searched_as_typed() {
+        let pool = test_pool().await;
+        index_subjects(&pool, &["benny", "bunny", "bunny"]).await;
+
+        // A real word is never swapped for a more common neighbour…
+        assert_eq!(subjects_for(&pool, None, "benny").await, vec!["benny"]);
+        assert!(corrections_for(&pool, "benny").await.is_empty());
+        // …and a word still being typed counts as known while it starts one.
+        assert!(corrections_for(&pool, "bunn").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn only_the_unknown_words_of_a_query_are_corrected() {
+        let pool = test_pool().await;
+        index_subjects(&pool, &["bunny invoice", "bunny newsletter"]).await;
+
+        assert_eq!(
+            subjects_for(&pool, None, "invoce bunny").await,
+            vec!["bunny invoice"]
+        );
+        // One correction per word, however often it was typed.
+        assert_eq!(
+            corrections_for(&pool, "invoce bunny invoce").await,
+            vec![fixed("invoce", "invoice")]
+        );
+    }
+
+    #[tokio::test]
+    async fn numbers_and_codes_are_never_corrected() {
+        let pool = test_pool().await;
+        index_subjects(&pool, &["Invoice 2026", "Order FA2026"]).await;
+
+        // The nearest invoice number is a different invoice, not a typo fix.
+        assert!(subjects_for(&pool, None, "2025").await.is_empty());
+        assert!(corrections_for(&pool, "2025").await.is_empty());
+        assert!(corrections_for(&pool, "FA2025").await.is_empty());
     }
 }

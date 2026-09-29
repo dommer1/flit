@@ -826,11 +826,10 @@
   async function refreshMessages() {
     const query = searchQuery.trim();
     if (query) {
-      messages = withoutPending(
-        await timed("searchMessages", () =>
-          searchMessages(selectedAccountId, query),
-        ),
+      const results = await timed("searchMessages", () =>
+        searchMessages(selectedAccountId, query),
       );
+      messages = withoutPending(results.messages);
       // Search results are their own universe — whole-view totals and the
       // load-more trigger don't apply to them.
       listStatus = null;

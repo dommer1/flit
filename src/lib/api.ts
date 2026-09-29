@@ -23,6 +23,7 @@ import type {
   OutgoingMessage,
   RemoteImagePolicy,
   ScheduledMessage,
+  SearchResults,
   SendEvent,
   ShortcutAction,
   ShortcutBinding,
@@ -153,12 +154,14 @@ export function getMessageQuote(messageId: number): Promise<MessageQuote> {
 /**
  * Search the local cache with a gmail-style query
  * (`from:x is:unread faktúra`). `accountId: null` searches all accounts.
+ * A word that matches nothing is searched as the cached word it most
+ * likely meant; `corrections` lists those swaps.
  */
 export function searchMessages(
   accountId: number | null,
   query: string,
-): Promise<MessageHeader[]> {
-  return invoke<MessageHeader[]>("search_messages", { accountId, query });
+): Promise<SearchResults> {
+  return invoke<SearchResults>("search_messages", { accountId, query });
 }
 
 /**
