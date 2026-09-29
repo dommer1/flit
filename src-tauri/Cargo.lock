@@ -1447,6 +1447,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
+ "strsim",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -1454,6 +1455,7 @@ dependencies = [
  "tauri-plugin-opener",
  "thiserror 2.0.18",
  "tokio",
+ "unicode-normalization",
  "utf7-imap",
  "whatlang",
 ]

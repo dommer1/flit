@@ -1,7 +1,11 @@
 //! Gmail-style search: query parsing (`from:x is:unread faktúra`) and the
 //! SQL that runs it against the message cache + FTS5 index.
 
+use std::cmp::Reverse;
+
 use sqlx::SqlitePool;
+use unicode_normalization::char::is_combining_mark;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::error::AppError;
 use crate::models::MessageHeader;
@@ -226,6 +230,77 @@ fn fts_match_expr(text: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" ");
     Some(expr)
+}
+
+/// The indexed word a typo most likely meant: the fewest edits away, then
+/// the one more messages use (a real word beats a one-off like a tracking
+/// code), then alphabetical, so a tie always resolves the same way. None when
+/// the word is too short to correct or nothing is close enough.
+pub async fn closest_term(pool: &SqlitePool, word: &str) -> Result<Option<String>, AppError> {
+    let word = fold(word);
+    let length = word.chars().count();
+    let budget = typo_budget(length);
+    if budget == 0 {
+        return Ok(None);
+    }
+    // why only words sharing the first letter: fts5vocab can seek to a range
+    // of terms, but anything else walks the whole index. On a copy of a real
+    // cache (99k messages, 231k words) the walk took 67 ms, one letter's
+    // range 1–5 ms. People rarely mistype the first letter, and search
+    // engines make the same trade (Lucene's fuzzy prefix_length).
+    let Some(first) = word.chars().next() else {
+        return Ok(None);
+    };
+    // The index orders terms by their UTF-8 bytes, which is code point
+    // order, so the range [first, first + 1) holds every word starting with
+    // `first`. There is no next code point after char::MAX or before a
+    // surrogate — no Latin letter sits there, so such a word goes uncorrected.
+    let Some(after) = char::from_u32(first as u32 + 1) else {
+        return Ok(None);
+    };
+    // A word longer or shorter by more than the budget can never be close
+    // enough, so the length window drops those in SQLite too.
+    let terms: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT term, doc FROM messages_fts_vocab
+         WHERE term >= ?1 AND term < ?2 AND length(term) BETWEEN ?3 AND ?4",
+    )
+    .bind(first.to_string())
+    .bind(after.to_string())
+    .bind((length - budget) as i64)
+    .bind((length + budget) as i64)
+    .fetch_all(pool)
+    .await?;
+    // why OSA distance rather than plain Levenshtein: it counts two swapped
+    // letters ("bunyn") as one typo, which is how people mistype.
+    Ok(terms
+        .into_iter()
+        .filter_map(|(term, messages)| {
+            let typos = strsim::osa_distance(&word, &term);
+            (typos <= budget).then_some((typos, Reverse(messages), term))
+        })
+        .min()
+        .map(|(_, _, term)| term))
+}
+
+/// How many typos a word of `length` letters may carry and still be
+/// corrected. Below four letters almost every word is one edit from another
+/// ("fax", "fix", "fox"), so a correction there would be a guess.
+fn typo_budget(length: usize) -> usize {
+    match length {
+        0..=3 => 0,
+        4..=7 => 1,
+        _ => 2,
+    }
+}
+
+/// Lowercase with diacritics stripped — the form the index stores words in
+/// (`unicode61 remove_diacritics 2`), so "fáktra" counts as one typo from the
+/// indexed "faktura", not two.
+fn fold(word: &str) -> String {
+    word.nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// Make a LIKE pattern fragment literal: escape the wildcards and the escape
@@ -925,6 +1000,103 @@ mod tests {
         assert_eq!(
             subjects_for(&pool, None, "in:archive zmluva").await,
             vec!["V inboxe"]
+        );
+    }
+
+    /// Index each subject as its own message, so every word in it becomes a
+    /// term of the vocabulary with one message per occurrence.
+    async fn index_subjects(pool: &SqlitePool, subjects: &[&str]) {
+        let id = test_account(pool, "Work").await;
+        for (uid, subject) in subjects.iter().enumerate() {
+            insert_message(
+                pool,
+                id,
+                uid as i64 + 1,
+                "a@example.com",
+                "",
+                subject,
+                "2026-07-01T00:00:00Z",
+                false,
+                None,
+            )
+            .await;
+        }
+    }
+
+    #[test]
+    fn longer_words_allow_more_typos() {
+        assert_eq!(typo_budget(3), 0);
+        assert_eq!(typo_budget(4), 1);
+        assert_eq!(typo_budget(7), 1);
+        assert_eq!(typo_budget(8), 2);
+    }
+
+    #[test]
+    fn fold_matches_the_indexs_lowercase_unaccented_form() {
+        assert_eq!(fold("Faktúra"), "faktura");
+        assert_eq!(fold("ŽLŤOUČKÝ"), "zltoucky");
+    }
+
+    #[tokio::test]
+    async fn closest_term_repairs_a_missing_extra_or_swapped_letter() {
+        let pool = test_pool().await;
+        index_subjects(&pool, &["Your bunny invoice"]).await;
+
+        for typo in ["bnny", "bunnny", "bunyn", "Bünny"] {
+            assert_eq!(
+                closest_term(&pool, typo).await.unwrap().as_deref(),
+                Some("bunny"),
+                "{typo}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn closest_term_prefers_the_word_more_messages_use() {
+        let pool = test_pool().await;
+        // "bnny" is one typo away from both.
+        index_subjects(&pool, &["benny", "bunny", "bunny"]).await;
+
+        assert_eq!(
+            closest_term(&pool, "bnny").await.unwrap().as_deref(),
+            Some("bunny")
+        );
+    }
+
+    #[tokio::test]
+    async fn closest_term_prefers_fewer_typos_over_more_messages() {
+        let pool = test_pool().await;
+        // "objednavak" is one swap from "objednavka", two edits from
+        // "objednavky" — which more messages use.
+        index_subjects(&pool, &["objednavka", "objednavky", "objednavky"]).await;
+
+        assert_eq!(
+            closest_term(&pool, "objednavak").await.unwrap().as_deref(),
+            Some("objednavka")
+        );
+    }
+
+    #[tokio::test]
+    async fn short_or_far_off_words_get_no_correction() {
+        let pool = test_pool().await;
+        index_subjects(&pool, &["fax bunny"]).await;
+
+        // Three letters leave no room for a typo: "fqx" is not "fax".
+        assert_eq!(closest_term(&pool, "fqx").await.unwrap(), None);
+        assert_eq!(closest_term(&pool, "xyzzy").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn closest_term_trusts_the_first_letter() {
+        let pool = test_pool().await;
+        index_subjects(&pool, &["bunny"]).await;
+
+        // One typo away, but in the letter the lookup narrows by.
+        assert_eq!(closest_term(&pool, "vunny").await.unwrap(), None);
+        // A first letter typed with an accent is still the same letter.
+        assert_eq!(
+            closest_term(&pool, "Bünnny").await.unwrap().as_deref(),
+            Some("bunny")
         );
     }
 }

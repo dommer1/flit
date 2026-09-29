@@ -58,6 +58,12 @@ image = { version = "0.25", default-features = false, features = [
     "jpeg",
     "webp",
 ] }
+# why: typo-tolerant search. strsim measures how far a typed word is from
+# the words the index holds; unicode-normalization strips diacritics the way
+# the index does, so both sides are compared in the same form. Both were
+# already in the tree.
+strsim = "0.11"
+unicode-normalization = "0.1"
 utf7-imap = "0.3.2"
 base64 = "0.22.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["native-tls"] }
