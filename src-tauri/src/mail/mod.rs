@@ -10,6 +10,7 @@ pub mod parse;
 pub mod quote;
 pub mod recipients;
 pub mod remote;
+pub mod reply;
 pub mod sanitize;
 pub mod send;
 pub mod smtp;
