@@ -5,12 +5,16 @@
     setMessageRead,
     threadBodies,
   } from "./api";
-  import type { DraftKind } from "./draft";
   import MessageCard from "./MessageCard.svelte";
   import { runSummary, type SummaryRun, type SummaryState } from "./summaries";
   import SummaryPanel from "./SummaryPanel.svelte";
   import { timed } from "./timing";
-  import type { MessageBody, MessageHeader, ThreadOrder } from "./types";
+  import type {
+    DraftKind,
+    MessageBody,
+    MessageHeader,
+    ThreadOrder,
+  } from "./types";
 
   let {
     message,

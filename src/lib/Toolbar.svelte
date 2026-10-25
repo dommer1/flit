@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { DraftKind } from "./draft";
   import { formatCombo } from "./shortcuts";
   import type {
+    DraftKind,
     Mailbox,
     MessageHeader,
     ShortcutAction,

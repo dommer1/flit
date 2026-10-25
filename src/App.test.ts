@@ -6,13 +6,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/svelte";
+import { formatFullDate } from "./lib/format";
 import type { MenuEntry } from "./lib/rowMenu";
 import type {
-  Alias,
   Account,
   DateTimeFormat,
   MessageHeader,
   MessagesChanged,
+  OutgoingMessage,
   ScheduledMessage,
   SendEvent,
   ShortcutBinding,
@@ -134,7 +135,14 @@ const RELOAD: MessagesChanged = { accountId: 1, read: null };
 // why: mutable + captured by the mock factory, so tests can simulate the
 // backend changing state and firing change events.
 let currentAccounts: Account[] = [];
-let currentAliases: Alias[] = [];
+// What the backend's reply_draft hands back — the recipient and threading
+// rules themselves are tested in mail::reply.
+const backendDraft: OutgoingMessage = {
+  accountId: 1,
+  to: "alice@example.com",
+  subject: "Re: Weekend plans",
+  body: "",
+};
 let currentMessages: MessageHeader[] = [];
 let currentScheduled: ScheduledMessage[] = [];
 let accountsChanged: (() => void) | undefined;
@@ -209,7 +217,6 @@ async function defaultListMailboxes(accountId: number) {
 
 vi.mock("./lib/api", () => ({
   listAccounts: vi.fn(async () => currentAccounts),
-  listAliases: vi.fn(async () => currentAliases),
   listMailboxes: vi.fn(defaultListMailboxes),
   listMessages: vi.fn(async (accountId: number | null, mailbox = "INBOX") => {
     const pool = mailbox === "Archive" ? archivedMessages : currentMessages;
@@ -259,10 +266,7 @@ vi.mock("./lib/api", () => ({
     canLoadRemote: false,
     attachments: [],
   })),
-  getMessageQuote: vi.fn(async () => ({
-    html: "<p>body text</p>",
-    text: "body text",
-  })),
+  replyDraft: vi.fn(async () => backendDraft),
   syncAccount: vi.fn(async () => undefined),
   refreshAccount: vi.fn(async () => undefined),
   setMessageRead: vi.fn(async () => undefined),
@@ -339,7 +343,6 @@ import App from "./App.svelte";
 
 beforeEach(() => {
   currentAccounts = [...accounts];
-  currentAliases = [];
   currentMessages = [...allMessages];
   currentScheduled = [];
   accountsChanged = undefined;
@@ -506,12 +509,7 @@ it("opens a compose window for a new message", async () => {
   );
 });
 
-it("a reply leaves from the alias the mail was addressed to", async () => {
-  // Message 1's To line reads "domco@example.com, Bob <bob@example.com>" —
-  // make the second entry an alias of account 1.
-  currentAliases = [
-    { id: 10, accountId: 1, name: "Bob", email: "bob@example.com" },
-  ];
+it("opens the reply draft the backend builds for the message", async () => {
   render(App);
   await fireEvent.click(await screen.findByText("Weekend plans"));
   await screen.findByRole("heading", { name: "Weekend plans" });
@@ -519,33 +517,12 @@ it("a reply leaves from the alias the mail was addressed to", async () => {
 
   await fireEvent.click(screen.getByRole("button", { name: "Reply" }));
 
-  await waitFor(() =>
-    expect(api.openCompose).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: 1, aliasId: 10 }),
-    ),
-  );
-});
-
-it("opens a reply draft from the account the message arrived on", async () => {
-  render(App);
-  await fireEvent.click(await screen.findByText("Weekend plans"));
-  await screen.findByRole("heading", { name: "Weekend plans" });
-  await screen.findByText("body text");
-
-  await fireEvent.click(screen.getByRole("button", { name: "Reply" }));
-
-  await waitFor(() =>
-    expect(api.openCompose).toHaveBeenCalledWith({
-      accountId: 1,
-      to: "alice@example.com",
-      subject: "Re: Weekend plans",
-      body: "",
-      quote: {
-        attribution: expect.stringContaining("wrote:"),
-        html: "<p>body text</p>",
-        text: "body text",
-      },
-    }),
+  await waitFor(() => expect(api.openCompose).toHaveBeenCalledWith(backendDraft));
+  // The date goes in as this window writes dates — the attribution's.
+  expect(api.replyDraft).toHaveBeenCalledWith(
+    1,
+    "reply",
+    formatFullDate(allMessages[0].date),
   );
 });
 
@@ -576,17 +553,15 @@ it("toolbar reply acts on the thread's latest message, not the list row", async 
   await fireEvent.click(screen.getByRole("button", { name: "Reply" }));
 
   await waitFor(() =>
-    expect(api.openCompose).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "Alice <alice@example.com>",
-        inReplyTo: "own-reply@x",
-      }),
+    expect(api.replyDraft).toHaveBeenCalledWith(
+      50,
+      "reply",
+      formatFullDate(ownReply.date),
     ),
   );
-  expect(api.getMessageQuote).toHaveBeenCalledWith(50);
 });
 
-it("opens a reply-all draft without the receiving account's address", async () => {
+it("asks the backend for a reply-all draft", async () => {
   render(App);
   await fireEvent.click(await screen.findByText("Weekend plans"));
   await screen.findByRole("heading", { name: "Weekend plans" });
@@ -594,25 +569,11 @@ it("opens a reply-all draft without the receiving account's address", async () =
 
   await fireEvent.click(screen.getByRole("button", { name: "Reply All" }));
 
-  // Message 1 arrived on account 1 (domco@example.com) — that address
-  // must vanish while Bob and the Cc line survive.
-  await waitFor(() =>
-    expect(api.openCompose).toHaveBeenCalledWith({
-      accountId: 1,
-      to: "Alice <alice@example.com>, Bob <bob@example.com>",
-      cc: "carol@example.com",
-      subject: "Re: Weekend plans",
-      body: "",
-      quote: {
-        attribution: expect.stringContaining("wrote:"),
-        html: "<p>body text</p>",
-        text: "body text",
-      },
-    }),
-  );
+  await waitFor(() => expect(api.openCompose).toHaveBeenCalledWith(backendDraft));
+  expect(api.replyDraft).toHaveBeenCalledWith(1, "reply-all", expect.any(String));
 });
 
-it("opens a forward draft with the original below a header block", async () => {
+it("asks the backend for a forward draft", async () => {
   render(App);
   await fireEvent.click(await screen.findByText("Weekend plans"));
   await screen.findByRole("heading", { name: "Weekend plans" });
@@ -620,14 +581,8 @@ it("opens a forward draft with the original below a header block", async () => {
 
   await fireEvent.click(screen.getByRole("button", { name: "Forward" }));
 
-  await waitFor(() =>
-    expect(api.openCompose).toHaveBeenCalledWith({
-      accountId: 1,
-      to: "",
-      subject: "Fwd: Weekend plans",
-      body: expect.stringContaining("---------- Forwarded message ----------"),
-    }),
-  );
+  await waitFor(() => expect(api.openCompose).toHaveBeenCalledWith(backendDraft));
+  expect(api.replyDraft).toHaveBeenCalledWith(1, "forward", expect.any(String));
 });
 
 it("starts a sync for every account on launch", async () => {
@@ -1385,21 +1340,8 @@ it("opens a quoted reply when the right swipe is configured to reply", async () 
   await vi.advanceTimersByTimeAsync(200);
   vi.useRealTimers();
 
-  // The list has no body loaded — the reply fetches quote material.
-  expect(api.getMessageQuote).toHaveBeenCalledWith(1);
-  await waitFor(() =>
-    expect(api.openCompose).toHaveBeenCalledWith({
-      accountId: 1,
-      to: "alice@example.com",
-      subject: "Re: Weekend plans",
-      body: "",
-      quote: {
-        attribution: expect.stringContaining("wrote:"),
-        html: "<p>body text</p>",
-        text: "body text",
-      },
-    }),
-  );
+  expect(api.replyDraft).toHaveBeenCalledWith(1, "reply", expect.any(String));
+  await waitFor(() => expect(api.openCompose).toHaveBeenCalledWith(backendDraft));
 });
 
 it("writes list dates in the chosen format and follows a change", async () => {
@@ -1872,8 +1814,10 @@ it("opens a quoted reply to the right-clicked row", async () => {
   await rightClick("Weekend plans");
   pickFromMenu("Reply");
 
-  // The reply first resolves the conversation's latest message, then
-  // fetches its quote material.
-  await waitFor(() => expect(api.getMessageQuote).toHaveBeenCalledWith(1));
-  await waitFor(() => expect(api.openCompose).toHaveBeenCalled());
+  // The reply first resolves the conversation's latest message, then has
+  // the backend draft it.
+  await waitFor(() =>
+    expect(api.replyDraft).toHaveBeenCalledWith(1, "reply", expect.any(String)),
+  );
+  await waitFor(() => expect(api.openCompose).toHaveBeenCalledWith(backendDraft));
 });

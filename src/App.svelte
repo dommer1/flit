@@ -7,14 +7,11 @@
     cancelScheduled,
     discardDraft,
     getDateTimeFormat,
-    getMessageBody,
-    getMessageQuote,
     getShortcuts,
     getSwipeActions,
     getThreadOrder,
     llmStatus,
     listAccounts,
-    listAliases,
     listMailboxes,
     listMessages,
     listThread,
@@ -44,6 +41,7 @@
     setMessageRead,
     setMessagesRead,
     refreshAccount,
+    replyDraft,
     syncAccount,
     undoSend,
     viewStatus,
@@ -51,18 +49,12 @@
   import { senderDomain } from "./lib/avatar";
   import { applyDateTimeFormat } from "./lib/datetime.svelte";
   import { debounce } from "./lib/debounce";
-  import {
-    forwardDraft,
-    replyAllDraft,
-    replyDraft,
-    type DraftKind,
-  } from "./lib/draft";
+  import { formatFullDate } from "./lib/format";
   import type {
     Account,
-    Alias,
+    DraftKind,
     Mailbox,
     MessageHeader,
-    MessageQuote,
     ScheduledMessage,
     SearchCorrection,
     ShortcutAction,
@@ -100,7 +92,6 @@
   import MissedSends from "./lib/MissedSends.svelte";
 
   let accounts = $state<Account[]>([]);
-  let aliases = $state<Alias[]>([]);
   let mailboxesByAccount = $state<Record<number, Mailbox[]>>({});
   let messages = $state<MessageHeader[]>([]);
   let selectedAccountId = $state<number | null>(null);
@@ -405,23 +396,14 @@
     applyDateTimeFormat(await getDateTimeFormat());
   }
 
-  // why fetch first: neither the list rows nor the toolbar hold the body —
-  // replies fetch quote material, forwards the plain text. Both are local
-  // cache hits, and a failure still opens the compose window, just without
-  // the quoted content.
-  function openDraftWithBody(kind: DraftKind, message: MessageHeader) {
-    const open =
-      kind === "forward"
-        ? getMessageBody(message.id).then((body) =>
-            openDraft(kind, message, null, body.text),
-          )
-        : getMessageQuote(message.id).then((quote) =>
-            openDraft(kind, message, quote, null),
-          );
-    void open.catch((err: unknown) => {
-      console.error("failed to load content for draft:", err);
-      openDraft(kind, message, null, null);
-    });
+  // why the backend builds the draft: recipients, send-as identity,
+  // threading and the quote all come from mail::reply, which reads them from
+  // the cache (a quote it cannot load just stays out). Only the date is
+  // written here — the attribution uses the reader's own date format.
+  function openReplyDraft(kind: DraftKind, message: MessageHeader) {
+    void replyDraft(message.id, kind, formatFullDate(message.date))
+      .then((draft) => openCompose(draft))
+      .catch((err: unknown) => console.error(`failed to open ${kind}:`, err));
   }
 
   function handleSwipeReply(id: number) {
@@ -441,7 +423,7 @@
     } catch (err) {
       console.error("failed to resolve the thread's latest message:", err);
     }
-    openDraftWithBody(kind, target);
+    openReplyDraft(kind, target);
   }
 
   // The account's archive folder wire name; Gmail has no \Archive, so its
@@ -751,27 +733,6 @@
     }).catch((err: unknown) => console.error("failed to open compose:", err));
   }
 
-  function openDraft(
-    kind: DraftKind,
-    message: MessageHeader,
-    quote: MessageQuote | null,
-    bodyText: string | null,
-  ) {
-    // why: reply-all must not echo mail back to the mailbox it landed in —
-    // the receiving account's address is the one to drop from recipients.
-    const ownEmail =
-      accounts.find((a) => a.id === message.accountId)?.email ?? "";
-    const draft =
-      kind === "reply"
-        ? replyDraft(message, quote, aliases, ownEmail)
-        : kind === "reply-all"
-          ? replyAllDraft(message, quote, ownEmail, aliases)
-          : forwardDraft(message, bodyText, aliases);
-    void openCompose(draft).catch((err: unknown) =>
-      console.error(`failed to open ${kind}:`, err),
-    );
-  }
-
   // The toolbar's reply/forward buttons act on the open conversation.
   function openDraftFromSelection(kind: DraftKind) {
     if (selectedMessage) void openDraftOnLatest(kind, selectedMessage);
@@ -1020,9 +981,6 @@
   async function refreshAccounts() {
     const known = new Set(accounts.map((a) => a.id));
     accounts = await listAccounts();
-    // why here: alias edits broadcast accounts-changed too, so reply
-    // matching always works against the current alias list.
-    aliases = await listAliases();
     // why: an account just added in settings syncs right away, so its
     // messages and connection status appear without waiting for a selection.
     if (accountsLoaded) {
@@ -1231,7 +1189,7 @@
         {accountEmails}
         {accountColors}
         {threadOrder}
-        onDraft={openDraftWithBody}
+        onDraft={openReplyDraft}
         onEditDraft={editDraft}
         onDeleteDraft={deleteDraft}
         canSummarize={llmReady}
