@@ -338,6 +338,103 @@ mod tests {
         stop.cancel();
     }
 
+    /// A handler with one tool, to drive a whole MCP exchange through the
+    /// guard: sessions must survive the token layer, not just initialize.
+    #[derive(Clone)]
+    struct Echo {
+        tool_router: rmcp::handler::server::router::tool::ToolRouter<Self>,
+    }
+
+    #[rmcp::tool_router]
+    impl Echo {
+        #[rmcp::tool(description = "Answer pong.")]
+        async fn ping(&self) -> String {
+            "pong".to_string()
+        }
+    }
+
+    #[rmcp::tool_handler(router = self.tool_router)]
+    impl ServerHandler for Echo {}
+
+    /// The JSON-RPC message in an MCP response, which comes either as JSON
+    /// or as a server-sent event stream (opened by an empty priming event).
+    async fn rpc(response: reqwest::Response) -> serde_json::Value {
+        let body = response.text().await.unwrap();
+        let json = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim)
+            .find(|data| !data.is_empty())
+            .unwrap_or(&body);
+        serde_json::from_str(json).unwrap_or_else(|_| panic!("not JSON-RPC: {body}"))
+    }
+
+    #[tokio::test]
+    async fn a_whole_session_runs_through_the_guard() {
+        let stop = CancellationToken::new();
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}{PATH}", listener.local_addr().unwrap());
+        let echo = Echo {
+            tool_router: Echo::tool_router(),
+        };
+        let router = router(move || Ok(echo.clone()), TOKEN.to_string(), stop.clone());
+        tokio::spawn(serve(listener, router, stop.clone()));
+        let client = reqwest::Client::new();
+        let post = |body: &'static str, session: Option<&str>| {
+            let mut request = client
+                .post(&url)
+                .bearer_auth(TOKEN)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json, text/event-stream")
+                .body(body);
+            if let Some(id) = session {
+                request = request.header("Mcp-Session-Id", id);
+            }
+            request
+        };
+
+        let init = post(INITIALIZE, None).send().await.unwrap();
+        let session = init
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .expect("a session id")
+            .to_string();
+        assert!(rpc(init).await["result"]["serverInfo"].is_object());
+        post(
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            Some(&session),
+        )
+        .send()
+        .await
+        .unwrap();
+
+        let list = rpc(post(
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            Some(&session),
+        )
+        .send()
+        .await
+        .unwrap())
+        .await;
+        assert_eq!(list["result"]["tools"][0]["name"], "ping");
+
+        let call = rpc(
+            post(
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ping","arguments":{}}}"#,
+                Some(&session),
+            )
+            .send()
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(call["result"]["content"][0]["text"], "pong");
+        stop.cancel();
+    }
+
     #[test]
     fn the_setup_texts_carry_the_url_and_the_token() {
         let url = "http://127.0.0.1:4729/mcp";
