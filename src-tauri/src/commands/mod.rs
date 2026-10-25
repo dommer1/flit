@@ -926,54 +926,6 @@ pub async fn thread_bodies(
     mail::body::thread_bodies(&app, &state, message_id).await
 }
 
-/// Download the raw RFC822 bytes of one cached message from its server.
-async fn fetch_raw_message(
-    state: &AppState,
-    loc: &storage::messages::MessageLocation,
-) -> Result<Vec<u8>, AppError> {
-    let account = storage::accounts::get(&state.pool, loc.account_id).await?;
-    let credential = state.credential(&account).await?;
-    let mut session = mail::imap::connect(
-        &account.imap_host,
-        account.imap_port,
-        &account.username,
-        &credential,
-    )
-    .await?;
-    session
-        .select(&loc.mailbox)
-        .await
-        .map_err(|e| AppError::Imap(format!("select {}: {e}", loc.mailbox)))?;
-    let raw = mail::imap::fetch_body(&mut session, loc.uid).await;
-    let _ = session.logout().await;
-    raw?.ok_or_else(|| AppError::Imap("message no longer on the server".to_string()))
-}
-
-/// One attachment's bytes, fetched for saving or previewing: its message is
-/// re-fetched from the server and the part re-extracted by index —
-/// attachment bytes never touch the local DB.
-async fn fetch_attachment(
-    state: &AppState,
-    meta: &crate::models::MessageAttachment,
-) -> Result<Vec<u8>, AppError> {
-    let loc = storage::messages::location(&state.pool, meta.message_id).await?;
-    let raw = fetch_raw_message(state, &loc).await?;
-    attachment_bytes(&raw, meta)
-}
-
-/// Extract one attachment from its raw message.
-fn attachment_bytes(
-    raw: &[u8],
-    meta: &crate::models::MessageAttachment,
-) -> Result<Vec<u8>, AppError> {
-    mail::parse::attachment_data(raw, meta.part_index).ok_or_else(|| {
-        AppError::Imap(format!(
-            "attachment {} not found in the message",
-            meta.filename
-        ))
-    })
-}
-
 /// Save one attachment to `path` (a native save-dialog pick, which already
 /// confirmed any overwrite).
 #[tauri::command]
@@ -983,7 +935,7 @@ pub async fn save_attachment(
     path: String,
 ) -> Result<(), AppError> {
     let meta = storage::messages::attachment(&state.pool, attachment_id).await?;
-    let data = fetch_attachment(&state, &meta).await?;
+    let data = mail::attachments::fetch_attachment(&state, &meta).await?;
     tokio::fs::write(&path, data).await?;
     state.note_saved_attachment(attachment_id, path.into());
     Ok(())
@@ -1002,9 +954,9 @@ pub async fn save_all_attachments(
         return Ok(());
     }
     let loc = storage::messages::location(&state.pool, message_id).await?;
-    let raw = fetch_raw_message(&state, &loc).await?;
+    let raw = mail::attachments::fetch_raw_message(&state, &loc).await?;
     for meta in attachments {
-        let data = attachment_bytes(&raw, &meta)?;
+        let data = mail::attachments::attachment_bytes(&raw, &meta)?;
         let path = unique_path(
             std::path::Path::new(&dir),
             &mail::parse::safe_filename(&meta.filename),
@@ -1068,7 +1020,7 @@ async fn quick_look_file(
         &meta.filename,
     );
     if !tokio::fs::try_exists(&copy).await? {
-        let data = fetch_attachment(state, &meta).await?;
+        let data = mail::attachments::fetch_attachment(state, &meta).await?;
         mail::attachments::write_quick_look_copy(&copy, &data).await?;
     }
     Ok(copy)

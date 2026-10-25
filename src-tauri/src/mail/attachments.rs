@@ -1,12 +1,15 @@
 //! Attachment files on disk: metadata for files dropped on the compose
 //! window (only stat calls — the bytes are read when the MIME message is
 //! built, mail::smtp), and the copies Quick Look shows of received
-//! attachments that were never saved.
+//! attachments that were never saved. Received attachments' bytes are
+//! fetched from the server on demand — they never touch the local DB.
 
 use std::path::{Path, PathBuf};
 
 use crate::error::AppError;
-use crate::models::AttachmentInfo;
+use crate::models::{AttachmentInfo, MessageAttachment};
+use crate::state::AppState;
+use crate::{mail, storage};
 
 /// Where Quick Look's copy of a received attachment lives under the app
 /// cache: a folder per attachment id, so two attachments named alike never
@@ -115,6 +118,51 @@ fn render_thumbnail(path: &str) -> Option<String> {
         "data:image/png;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(buf)
     ))
+}
+
+/// Download the raw RFC822 bytes of one cached message from its server.
+pub async fn fetch_raw_message(
+    state: &AppState,
+    loc: &storage::messages::MessageLocation,
+) -> Result<Vec<u8>, AppError> {
+    let account = storage::accounts::get(&state.pool, loc.account_id).await?;
+    let credential = state.credential(&account).await?;
+    let mut session = mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        &credential,
+    )
+    .await?;
+    session
+        .select(&loc.mailbox)
+        .await
+        .map_err(|e| AppError::Imap(format!("select {}: {e}", loc.mailbox)))?;
+    let raw = mail::imap::fetch_body(&mut session, loc.uid).await;
+    let _ = session.logout().await;
+    raw?.ok_or_else(|| AppError::Imap("message no longer on the server".to_string()))
+}
+
+/// One attachment's bytes, fetched for saving or previewing: its message is
+/// re-fetched from the server and the part re-extracted by index —
+/// attachment bytes never touch the local DB.
+pub async fn fetch_attachment(
+    state: &AppState,
+    meta: &MessageAttachment,
+) -> Result<Vec<u8>, AppError> {
+    let loc = storage::messages::location(&state.pool, meta.message_id).await?;
+    let raw = fetch_raw_message(state, &loc).await?;
+    attachment_bytes(&raw, meta)
+}
+
+/// Extract one attachment from its raw message.
+pub fn attachment_bytes(raw: &[u8], meta: &MessageAttachment) -> Result<Vec<u8>, AppError> {
+    mail::parse::attachment_data(raw, meta.part_index).ok_or_else(|| {
+        AppError::Imap(format!(
+            "attachment {} not found in the message",
+            meta.filename
+        ))
+    })
 }
 
 #[cfg(test)]
