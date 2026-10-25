@@ -5,6 +5,7 @@ pub mod error;
 mod idle;
 pub mod llm;
 pub mod mail;
+mod mcp;
 mod models;
 mod notify;
 mod poller;
@@ -121,6 +122,13 @@ pub fn run() {
             // The poll above keeps running — under push its interval covers
             // the folders IDLE cannot watch.
             idle::spawn(app.handle().clone());
+
+            // The experimental MCP server, when switched on in Settings —
+            // a no-op otherwise.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                mcp::restart(&handle).await;
+            });
 
             // why: macOS convention puts "Settings…" (⌘,) in the app menu; we
             // extend Tauri's default menu instead of rebuilding it from

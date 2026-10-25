@@ -492,6 +492,17 @@ pub struct McpSettings {
     pub port: u16,
 }
 
+/// What Settings shows about the MCP server right now.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStatus {
+    pub running: bool,
+    /// The port it listens on while running.
+    pub port: Option<u16>,
+    /// Why it is not running although switched on (port taken, keychain).
+    pub error: Option<String>,
+}
+
 /// The app's colour scheme. `System` follows macOS; the other two pin it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

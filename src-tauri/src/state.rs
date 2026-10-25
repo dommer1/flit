@@ -68,6 +68,7 @@ pub struct AppState {
     /// attachment, never a path, so it can only ever open a file Flit
     /// itself wrote — not anything else on the disk.
     saved_attachments: Mutex<HashMap<i64, PathBuf>>,
+    pub mcp: crate::mcp::Server,
 }
 
 /// The accounts whose inbox is being synced, and those among them for
@@ -149,6 +150,7 @@ impl AppState {
             llm_engine: llm::engine::Engine::default(),
             llm_summaries: llm::Summaries::default(),
             saved_attachments: Mutex::new(HashMap::new()),
+            mcp: crate::mcp::Server::default(),
         }
     }
 
