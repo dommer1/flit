@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::error::AppError;
-use crate::models::{McpAccess, MessageAttachment, MessageHeader, OutgoingMessage};
+use crate::models::{DraftKind, McpAccess, MessageAttachment, MessageHeader, OutgoingMessage};
 use crate::state::AppState;
 use crate::{mail, storage};
 
@@ -49,6 +49,9 @@ fn tools_for(access: McpAccess) -> ToolRouter<FlitMcp> {
     let mut tools = FlitMcp::read_tools();
     if access >= McpAccess::Organize {
         tools += FlitMcp::organize_tools();
+    }
+    if access >= McpAccess::Full {
+        tools += FlitMcp::send_tools();
     }
     tools
 }
@@ -228,6 +231,57 @@ struct DraftParams {
     body: String,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct SendParams {
+    /// Account id from list_accounts — the mail leaves from its address.
+    account_id: i64,
+    /// Recipients, comma-separated ("Ann <ann@example.com>, bob@example.com").
+    to: String,
+    #[serde(default)]
+    cc: String,
+    #[serde(default)]
+    bcc: String,
+    subject: String,
+    /// Plain text.
+    body: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct ReplyParams {
+    /// Id of the message to answer.
+    message_id: i64,
+    /// The reply's text, plain; the original is quoted below it.
+    body: String,
+    /// Also answer everyone the original went to (To and Cc), not just its
+    /// sender.
+    #[serde(default)]
+    reply_all: bool,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct ForwardParams {
+    /// Id of the message to forward.
+    message_id: i64,
+    /// Recipients, comma-separated.
+    to: String,
+    /// A note above the forwarded message, plain text; may be empty.
+    #[serde(default)]
+    body: String,
+}
+
+/// What a send reports back: queued, not yet gone.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Queued {
+    queued: bool,
+    note: &'static str,
+}
+
+const QUEUED: Queued = Queued {
+    queued: true,
+    note: "Queued in Flit's outbox: it leaves in a few seconds unless the user clicks Undo.",
+};
+
 /// What an action that changed mail reports back.
 #[derive(Serialize)]
 struct Done {
@@ -249,6 +303,26 @@ fn batch(ids: &[i64]) -> Result<&[i64], AppError> {
         )));
     }
     Ok(ids)
+}
+
+/// The original's date for an attribution line when no window is there to
+/// write it in the reader's format: the stored UTC time, plainly.
+fn date_label(date: &str) -> String {
+    let utc = date.len() == 20
+        && date.as_bytes()[10] == b'T'
+        && date.ends_with('Z')
+        && date.is_char_boundary(16);
+    if utc {
+        format!("{} {} UTC", &date[..10], &date[11..16])
+    } else {
+        date.to_string()
+    }
+}
+
+/// A forward's text: the client's note above the forwarded block, which
+/// already starts with the blank lines that set it apart.
+fn forward_body(note: &str, block: &str) -> String {
+    format!("{}{block}", note.trim_end())
 }
 
 /// The number of messages a list call returns.
@@ -484,7 +558,100 @@ impl FlitMcp {
     }
 }
 
+// why the undo queue and never a direct send: it is the path every Flit
+// message takes (mail::send) — the main window shows the outbox badge with
+// Undo, and a failed send reopens as a draft instead of vanishing.
+#[tool_router(router = send_tools)]
 impl FlitMcp {
+    #[tool(
+        description = "Send a new plain-text message. It goes through Flit's outbox: the \
+                          user sees it leave and can Undo it for a few seconds."
+    )]
+    async fn send_message(
+        &self,
+        Parameters(p): Parameters<SendParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let message = OutgoingMessage {
+            account_id: p.account_id,
+            to: p.to,
+            cc: p.cc,
+            bcc: p.bcc,
+            subject: p.subject,
+            body: p.body,
+            ..Default::default()
+        };
+        answer(self.queue(message).await)
+    }
+
+    #[tool(
+        description = "Reply to a message, from the account and address it arrived on, \
+                          with the original quoted below the text and the conversation's \
+                          threading kept. Goes through Flit's outbox like send_message."
+    )]
+    async fn reply(
+        &self,
+        Parameters(p): Parameters<ReplyParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let kind = if p.reply_all {
+            DraftKind::ReplyAll
+        } else {
+            DraftKind::Reply
+        };
+        answer(
+            async {
+                let mut message = self.draft(p.message_id, kind).await?;
+                message.body = mail::draft::compose_plain_body(&p.body, message.quote.as_ref());
+                // why drop the quote once merged: a send that fails reopens
+                // as a draft, which would park the quote a second time.
+                message.quote = None;
+                self.queue(message).await
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Forward a message with a note above it. Plain text; the original's \
+                          attachments are not attached. Goes through Flit's outbox like \
+                          send_message."
+    )]
+    async fn forward(
+        &self,
+        Parameters(p): Parameters<ForwardParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        answer(
+            async {
+                let mut message = self.draft(p.message_id, DraftKind::Forward).await?;
+                message.to = p.to;
+                message.body = forward_body(&p.body, &message.body);
+                self.queue(message).await
+            }
+            .await,
+        )
+    }
+}
+
+impl FlitMcp {
+    /// The reply or forward draft the window's buttons would open.
+    async fn draft(&self, message_id: i64, kind: DraftKind) -> Result<OutgoingMessage, AppError> {
+        let state = self.app.state::<AppState>();
+        let header = storage::messages::header(&state.pool, message_id).await?;
+        mail::reply::draft_for(
+            &self.app,
+            &state,
+            message_id,
+            kind,
+            &date_label(&header.date),
+        )
+        .await
+    }
+
+    async fn queue(&self, message: OutgoingMessage) -> Result<Queued, AppError> {
+        let state = self.app.state::<AppState>();
+        mail::send::queue_send(&self.app, &state, message).await?;
+        Ok(QUEUED)
+    }
+
     async fn full_message(&self, message_id: i64) -> Result<FullMessage, AppError> {
         let state = self.app.state::<AppState>();
         let header = storage::messages::header(&state.pool, message_id).await?;
@@ -712,6 +879,35 @@ mod tests {
         assert!(batch(&[]).is_err());
         assert!(batch(&[1, 2]).is_ok());
         assert!(batch(&vec![1; 101]).is_err());
+    }
+
+    #[test]
+    fn sending_tools_come_only_with_full_access() {
+        let send = ["forward", "reply", "send_message"];
+        let organize = tool_names(&tools_for(McpAccess::Organize));
+        let full = tool_names(&tools_for(McpAccess::Full));
+        for tool in send {
+            assert!(!organize.contains(&tool.to_string()), "organize may {tool}");
+            assert!(full.contains(&tool.to_string()), "full may not {tool}");
+        }
+        assert!(full.contains(&"trash".to_string()));
+    }
+
+    #[test]
+    fn an_attribution_date_is_written_plainly_in_utc() {
+        assert_eq!(date_label("2026-07-07T09:15:00Z"), "2026-07-07 09:15 UTC");
+        // Anything else is passed on as stored rather than guessed at.
+        assert_eq!(date_label("yesterday"), "yesterday");
+    }
+
+    #[test]
+    fn a_forward_puts_the_clients_words_above_the_forwarded_block() {
+        let block = "\n\n---------- Forwarded message ----------\nFrom: a@x\n";
+        assert_eq!(
+            forward_body("FYI, see below.", block),
+            "FYI, see below.\n\n---------- Forwarded message ----------\nFrom: a@x\n"
+        );
+        assert_eq!(forward_body("", block), block);
     }
 
     #[test]
