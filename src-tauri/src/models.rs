@@ -139,6 +139,15 @@ pub struct OutgoingMessage {
     pub quote: Option<DraftQuote>,
 }
 
+/// The three ways a message can spawn a compose draft.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DraftKind {
+    Reply,
+    ReplyAll,
+    Forward,
+}
+
 /// A compose draft's quote of the original message: quote material plus the
 /// attribution line the frontend built for it ("On …, X wrote:").
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -21,6 +21,7 @@ import type {
   TranslationPartial,
   TranslationProgress,
   DateTimeFormat,
+  DraftKind,
   Mailbox,
   MessageAttachment,
   MessageBody,
@@ -159,6 +160,18 @@ export function threadBodies(
  * cache as the viewer; a miss fetches the body first. */
 export function getMessageQuote(messageId: number): Promise<MessageQuote> {
   return invoke<MessageQuote>("get_message_quote", { messageId });
+}
+
+/** The compose draft for replying to, replying all to, or forwarding one
+ * message — recipients, identity, subject, threading and quote, built by
+ * the backend. `dateLabel` is the original's date as this window writes
+ * dates; the attribution line carries it as is. */
+export function replyDraft(
+  messageId: number,
+  kind: DraftKind,
+  dateLabel: string,
+): Promise<OutgoingMessage> {
+  return invoke<OutgoingMessage>("reply_draft", { messageId, kind, dateLabel });
 }
 
 /**

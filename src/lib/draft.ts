@@ -19,8 +19,7 @@ function senderAddress(from: string): string {
   return (match?.[1] ?? from).trim();
 }
 
-/** The three ways a message in the viewer can spawn a compose draft. */
-export type DraftKind = "reply" | "reply-all" | "forward";
+export type { DraftKind } from "./types";
 
 /** Nothing worth keeping: every text field blank, no attachments. An empty
  * compose window is never saved to the server's Drafts folder. */

@@ -91,6 +91,10 @@ export interface OutgoingMessage {
   quote?: DraftQuote | null;
 }
 
+/** The three ways a message can spawn a compose draft. Mirrors DraftKind in
+ * models.rs. */
+export type DraftKind = "reply" | "reply-all" | "forward";
+
 /** get_message_quote result — the original rendered for quoting in a
  * reply. Mirrors MessageQuote in models.rs. */
 export interface MessageQuote {

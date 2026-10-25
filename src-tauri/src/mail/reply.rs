@@ -1,14 +1,70 @@
 //! Reply, reply-all and forward drafts: who a draft goes to, from which
-//! identity, under what subject and threading headers. Pure functions — the
-//! caller fetches the header, the quote and the account's addresses.
+//! identity, under what subject and threading headers. `draft_for` gathers
+//! the inputs from the cache; the rules themselves are pure functions.
 //!
 //! `date_label` is the original's date as the reader writes dates: it goes
 //! into the attribution line and the forwarded header block word for word.
 
 use std::collections::HashSet;
 
+use tauri::AppHandle;
+
+use crate::error::AppError;
 use crate::mail::recipients;
-use crate::models::{Alias, DraftQuote, MessageHeader, MessageQuote, OutgoingMessage};
+use crate::models::{Alias, DraftKind, DraftQuote, MessageHeader, MessageQuote, OutgoingMessage};
+use crate::state::AppState;
+use crate::{mail, storage};
+
+/// The compose draft for answering or forwarding one message.
+///
+/// why a failed body load still yields a draft: the quote is a courtesy —
+/// offline, say, the user can still write the reply, just without it.
+pub async fn draft_for(
+    app: &AppHandle,
+    state: &AppState,
+    message_id: i64,
+    kind: DraftKind,
+    date_label: &str,
+) -> Result<OutgoingMessage, AppError> {
+    let message = storage::messages::header(&state.pool, message_id).await?;
+    // why the receiving account's address: reply-all must not echo mail back
+    // to the mailbox it landed in.
+    let own_email = storage::accounts::get(&state.pool, message.account_id)
+        .await?
+        .email;
+    let aliases = storage::aliases::list(&state.pool).await?;
+    if kind == DraftKind::Forward {
+        // The text the viewer shows: the message's own words, its quoted
+        // history left out.
+        let text = match mail::body::load_body(app, state, message_id).await {
+            Ok(loaded) => loaded
+                .text
+                .map(|text| mail::quote::split_text_quote(&text).0),
+            Err(err) => {
+                eprintln!("forwarding message {message_id} without its text: {err}");
+                None
+            }
+        };
+        return Ok(forward_draft(
+            &message,
+            text.as_deref(),
+            date_label,
+            &aliases,
+        ));
+    }
+    let quote = match mail::body::get_message_quote(app, state, message_id).await {
+        Ok(quote) => Some(quote),
+        Err(err) => {
+            eprintln!("replying to message {message_id} without a quote: {err}");
+            None
+        }
+    };
+    Ok(if kind == DraftKind::ReplyAll {
+        reply_all_draft(&message, quote.as_ref(), date_label, &own_email, &aliases)
+    } else {
+        reply_draft(&message, quote.as_ref(), date_label, &own_email, &aliases)
+    })
+}
 
 /// Reply goes from the account the message arrived on — and from the alias
 /// it was addressed to, when one matches — to its sender. Replying to my own
@@ -284,6 +340,14 @@ mod tests {
             html: html.to_string(),
             text: text.to_string(),
         }
+    }
+
+    #[test]
+    fn draft_kinds_arrive_under_the_names_types_ts_sends() {
+        let kind = |wire: &str| serde_json::from_str::<DraftKind>(wire).unwrap();
+        assert_eq!(kind("\"reply\""), DraftKind::Reply);
+        assert_eq!(kind("\"reply-all\""), DraftKind::ReplyAll);
+        assert_eq!(kind("\"forward\""), DraftKind::Forward);
     }
 
     // --- send-as alias matching ---

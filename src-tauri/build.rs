@@ -49,6 +49,7 @@ const APP_COMMANDS: &[&str] = &[
     "move_thread",
     "get_message_body",
     "get_message_quote",
+    "reply_draft",
     "thread_bodies",
     "inspect_attachments",
     "save_attachment",

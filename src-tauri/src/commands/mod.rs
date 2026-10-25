@@ -911,6 +911,20 @@ pub async fn get_message_quote(
     mail::body::get_message_quote(&app, &state, message_id).await
 }
 
+/// The compose draft for replying to, replying all to, or forwarding one
+/// message. `date_label` is the original's date as the window writes dates
+/// — the attribution and the forwarded header carry it as is.
+#[tauri::command]
+pub async fn reply_draft(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: i64,
+    kind: crate::models::DraftKind,
+    date_label: String,
+) -> Result<OutgoingMessage, AppError> {
+    mail::reply::draft_for(&app, &state, message_id, kind, &date_label).await
+}
+
 /// Bodies for a whole conversation in one call.
 #[tauri::command]
 pub async fn thread_bodies(
