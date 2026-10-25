@@ -149,7 +149,7 @@ pub enum DraftKind {
 }
 
 /// A compose draft's quote of the original message: quote material plus the
-/// attribution line the frontend built for it ("On …, X wrote:").
+/// attribution line mail::reply built for it ("On …, X wrote:").
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DraftQuote {

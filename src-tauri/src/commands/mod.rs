@@ -17,7 +17,8 @@ use crate::windows::open_compose_window;
 use crate::{auth, llm, mail, storage};
 
 // why: commands stay thin — validate/orchestrate, call a module, return
-// Result. Business logic lives in storage/ and auth/, which are unit-tested.
+// Result. Business logic lives in mail/, storage/ and auth/, where anything
+// else that acts for the user (not only the webview) can reach it.
 
 /// Least time between two progress events during a long backfill.
 const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
