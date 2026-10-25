@@ -1214,6 +1214,23 @@ pub async fn location(pool: &SqlitePool, message_id: i64) -> Result<MessageLocat
     Ok(row)
 }
 
+/// One message's own header row by id, whatever folder it sits in.
+///
+/// why not thread_of(...).find(id): the conversation query keeps one copy
+/// of a message cached in several folders (Gmail's All Mail), so the very
+/// row asked for can be the copy it drops.
+pub async fn header(pool: &SqlitePool, message_id: i64) -> Result<MessageHeader, AppError> {
+    let row = sqlx::query_as(concat!(
+        "SELECT ",
+        header_columns!("m"),
+        " FROM messages m WHERE m.id = ?"
+    ))
+    .bind(message_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Adopt the server's read/unread state for one message.
 pub async fn set_read(pool: &SqlitePool, message_id: i64, read: bool) -> Result<(), AppError> {
     sqlx::query("UPDATE messages SET read = ? WHERE id = ?")
@@ -3469,6 +3486,33 @@ mod tests {
         assert_eq!(loc.uid, 42);
 
         assert!(location(&pool, 9999).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn header_returns_the_row_itself_wherever_it_is_filed() {
+        let pool = test_pool().await;
+        let id = account(&pool, "Personal").await;
+        seed_roles(&pool, id).await;
+        // why Trash: a reply can start from any folder, flat views included
+        // — the lookup must not depend on what the conversation view shows.
+        upsert_headers(
+            &pool,
+            id,
+            "Trash",
+            &[header(5, "Binned", "2026-07-01T00:00:00Z", true)],
+        )
+        .await
+        .unwrap();
+        let message_id = list(&pool, Some(id), "Trash", None).await.unwrap()[0].id;
+
+        let found = super::header(&pool, message_id).await.unwrap();
+        assert_eq!(found.id, message_id);
+        assert_eq!(found.mailbox, "Trash");
+        assert_eq!(found.subject, "Binned");
+        assert_eq!(found.from, "Alice <alice@example.com>");
+        assert_eq!(found.cc, "Cara <cara@example.com>");
+
+        assert!(super::header(&pool, 9999).await.is_err());
     }
 
     #[tokio::test]
