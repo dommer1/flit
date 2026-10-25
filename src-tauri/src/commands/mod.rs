@@ -1432,7 +1432,7 @@ async fn message_source(
         .into_iter()
         .find(|h| h.id == message_id)
         .ok_or_else(|| AppError::Invalid("Message not found.".to_string()))?;
-    let text = summarizable_text(app, state, message_id).await?;
+    let text = mail::body::plain_text(app, state, message_id).await?;
     Ok((header, text))
 }
 
@@ -1449,7 +1449,7 @@ async fn thread_sources(
     // through thread_bodies by the time its button is clicked, so these
     // are cache hits — a cold thread would open a session per message.
     for header in thread.into_iter().filter(|h| !h.is_draft) {
-        let text = summarizable_text(app, state, header.id).await?;
+        let text = mail::body::plain_text(app, state, header.id).await?;
         messages.push((header, text));
     }
     Ok(messages)
@@ -1562,25 +1562,6 @@ pub async fn translate_message(
         })
         .await?;
     Ok(render(&translations))
-}
-
-/// The message's stored text, fetching the body if it is not cached yet.
-async fn summarizable_text(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    message_id: i64,
-) -> Result<String, AppError> {
-    let body = mail::body::load_body(app, state, message_id).await?;
-    // why the html fallback: mail-parser fills body_text for html-only mail
-    // at parse time, so this is for the odd cached row that has only html.
-    Ok(body
-        .text
-        .or_else(|| {
-            body.html
-                .as_deref()
-                .map(mail_parser::decoders::html::html_to_text)
-        })
-        .unwrap_or_default())
 }
 
 /// Start downloading a catalog model; returns once the background task is

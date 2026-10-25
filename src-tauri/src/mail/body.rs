@@ -183,6 +183,26 @@ pub(crate) async fn load_body(
     })
 }
 
+/// The message's whole text, plain — quoted history included — fetching
+/// the body if it is not cached yet. What the summaries read.
+pub(crate) async fn plain_text(
+    app: &AppHandle,
+    state: &AppState,
+    message_id: i64,
+) -> Result<String, AppError> {
+    let body = load_body(app, state, message_id).await?;
+    // why the html fallback: mail-parser fills body_text for html-only mail
+    // at parse time, so this is for the odd cached row that has only html.
+    Ok(body
+        .text
+        .or_else(|| {
+            body.html
+                .as_deref()
+                .map(mail_parser::decoders::html::html_to_text)
+        })
+        .unwrap_or_default())
+}
+
 /// Bodies for a whole conversation in one call — the conversation view's
 /// bulk load. Cached bodies come straight from SQLite; everything missing
 /// is fetched over a SINGLE IMAP session, grouped by folder, instead of one
