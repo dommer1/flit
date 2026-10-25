@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::error::AppError;
-use crate::models::{McpAccess, MessageAttachment, MessageHeader};
+use crate::models::{McpAccess, MessageAttachment, MessageHeader, OutgoingMessage};
 use crate::state::AppState;
 use crate::{mail, storage};
 
@@ -45,8 +45,12 @@ impl FlitMcp {
 
 /// The tools a client at `access` may see and call — anything above its
 /// level is not merely refused but never listed.
-fn tools_for(_access: McpAccess) -> ToolRouter<FlitMcp> {
-    FlitMcp::read_tools()
+fn tools_for(access: McpAccess) -> ToolRouter<FlitMcp> {
+    let mut tools = FlitMcp::read_tools();
+    if access >= McpAccess::Organize {
+        tools += FlitMcp::organize_tools();
+    }
+    tools
 }
 
 /// Messages a list returns unless the client asks for another number.
@@ -183,9 +187,68 @@ struct MessageParam {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct MessagesParam {
+    /// Ids of the messages to act on (1 to 100) — exactly these messages,
+    /// not the rest of their conversations.
+    message_ids: Vec<i64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct MarkReadParams {
+    /// Ids of the messages to mark (1 to 100).
+    message_ids: Vec<i64>,
+    /// true marks them read, false unread.
+    read: bool,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct MoveParams {
+    /// Ids of the messages to move (1 to 100).
+    message_ids: Vec<i64>,
+    /// Folder `name` from list_folders — of the messages' own account.
+    folder: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct DraftParams {
+    /// Account id from list_accounts — the draft is saved there and will
+    /// leave from its address.
+    account_id: i64,
+    /// Recipients, comma-separated ("Ann <ann@example.com>, bob@example.com").
+    #[serde(default)]
+    to: String,
+    #[serde(default)]
+    cc: String,
+    #[serde(default)]
+    bcc: String,
+    #[serde(default)]
+    subject: String,
+    /// Plain text.
+    #[serde(default)]
+    body: String,
+}
+
+/// What an action that changed mail reports back.
+#[derive(Serialize)]
+struct Done {
+    done: usize,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct AttachmentParam {
     /// Attachment id from get_message or get_thread.
     attachment_id: i64,
+}
+
+/// The messages one action call may touch: at least one, at most
+/// `MAX_LIMIT` — a misled client should not empty an inbox in one call.
+fn batch(ids: &[i64]) -> Result<&[i64], AppError> {
+    if ids.is_empty() || ids.len() > MAX_LIMIT as usize {
+        return Err(AppError::Invalid(format!(
+            "Name 1 to {MAX_LIMIT} messages."
+        )));
+    }
+    Ok(ids)
 }
 
 /// The number of messages a list call returns.
@@ -321,6 +384,103 @@ impl FlitMcp {
             ])),
             Err(err) => answer::<()>(Err(err)),
         }
+    }
+}
+
+// why `threads: false` everywhere below: a client names messages, so an
+// action touches exactly those — never the rest of their conversation the
+// way a row in the threaded list does.
+#[tool_router(router = organize_tools)]
+impl FlitMcp {
+    #[tool(description = "Mark messages read or unread, here and on the mail server.")]
+    async fn mark_read(
+        &self,
+        Parameters(p): Parameters<MarkReadParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.app.state::<AppState>();
+        answer(
+            async {
+                let ids = batch(&p.message_ids)?;
+                mail::actions::set_messages_read(&self.app, &state, ids, p.read, false).await?;
+                Ok(Done { done: ids.len() })
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Archive messages: each moves to its account's Archive folder (Gmail: \
+                          All Mail)."
+    )]
+    async fn archive(
+        &self,
+        Parameters(p): Parameters<MessagesParam>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.app.state::<AppState>();
+        answer(
+            async {
+                let ids = batch(&p.message_ids)?;
+                mail::actions::archive_messages(&self.app, &state, ids, false).await?;
+                Ok(Done { done: ids.len() })
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Move messages to their accounts' Trash folders. Nothing is deleted \
+                          for good — the user can take them back out."
+    )]
+    async fn trash(
+        &self,
+        Parameters(p): Parameters<MessagesParam>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.app.state::<AppState>();
+        answer(
+            async {
+                let ids = batch(&p.message_ids)?;
+                mail::actions::trash_messages(&self.app, &state, ids, false).await?;
+                Ok(Done { done: ids.len() })
+            }
+            .await,
+        )
+    }
+
+    #[tool(description = "Move messages to a folder of their own account.")]
+    async fn move_to_folder(
+        &self,
+        Parameters(p): Parameters<MoveParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.app.state::<AppState>();
+        answer(
+            async {
+                let ids = batch(&p.message_ids)?;
+                mail::actions::move_messages(&self.app, &state, ids, &p.folder, false).await?;
+                Ok(Done { done: ids.len() })
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Save a new draft in an account's Drafts folder, for the user to \
+                          finish and send. Returns the draft's Message-ID."
+    )]
+    async fn save_draft(
+        &self,
+        Parameters(p): Parameters<DraftParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.app.state::<AppState>();
+        let draft = OutgoingMessage {
+            account_id: p.account_id,
+            to: p.to,
+            cc: p.cc,
+            bcc: p.bcc,
+            subject: p.subject,
+            body: p.body,
+            ..Default::default()
+        };
+        answer(mail::drafts::save_draft(&self.app, &state, draft, None).await)
     }
 }
 
@@ -523,6 +683,35 @@ mod tests {
         // A "text" part that is not UTF-8 is not text a model can read.
         let latin = attachment_content(&attachment("text/plain"), vec![0xe9]);
         assert!(latin.as_resource().is_some(), "{latin:?}");
+    }
+
+    #[test]
+    fn organizing_tools_come_with_organize_access_and_not_before() {
+        let organize = [
+            "archive",
+            "mark_read",
+            "move_to_folder",
+            "save_draft",
+            "trash",
+        ];
+        let read = tool_names(&tools_for(McpAccess::Read));
+        let granted = tool_names(&tools_for(McpAccess::Organize));
+        for tool in organize {
+            assert!(!read.contains(&tool.to_string()), "read-only may {tool}");
+            assert!(
+                granted.contains(&tool.to_string()),
+                "organize may not {tool}"
+            );
+        }
+        // Organizing includes reading.
+        assert!(granted.contains(&"get_message".to_string()));
+    }
+
+    #[test]
+    fn a_batch_must_name_one_to_100_messages() {
+        assert!(batch(&[]).is_err());
+        assert!(batch(&[1, 2]).is_ok());
+        assert!(batch(&vec![1; 101]).is_err());
     }
 
     #[test]
