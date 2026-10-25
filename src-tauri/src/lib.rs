@@ -15,6 +15,7 @@ pub mod state;
 pub mod storage;
 pub mod timing;
 mod wake;
+mod windows;
 
 use tauri::{Manager, Url};
 
