@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::auth::Credential;
+use crate::clock::now_epoch;
 use crate::error::AppError;
 use crate::models::{
     Account, Alias, Appearance, AuthKind, AuthResults, DateTimeFormat, LlmStatus, Mailbox,
@@ -1066,13 +1067,6 @@ async fn push_seen_flags(
     let result = mail::imap::set_seen_many(&mut session, uids, seen).await;
     let _ = session.logout().await;
     result
-}
-
-pub(crate) fn now_epoch() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 /// Message list for one folder view: threaded (one row per conversation)

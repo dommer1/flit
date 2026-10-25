@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::MissedTickBehavior;
 
 use crate::state::AppState;
-use crate::{commands, storage};
+use crate::{clock, commands, storage};
 
 /// How often due messages are looked for. Scheduling is minute-grained
 /// (datetime-local has no seconds), so a finer tick would buy nothing.
@@ -23,7 +23,7 @@ pub fn spawn(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         // Anything already due right now was missed while the app was
         // closed — flag it before the first tick can claim it.
-        sweep_missed(&app, commands::now_epoch()).await;
+        sweep_missed(&app, clock::now_epoch()).await;
 
         let mut interval = tokio::time::interval(TICK);
         // why Delay: after a long system sleep we want ONE tick that claims
@@ -40,7 +40,7 @@ pub fn spawn(app: AppHandle) {
 /// pending and due is claimed and delivered. Errors are logged, never fatal —
 /// the next tick simply tries again.
 async fn tick(app: &AppHandle) {
-    let now = commands::now_epoch();
+    let now = clock::now_epoch();
     sweep_missed(app, now - GRACE_SECS).await;
 
     let due = {

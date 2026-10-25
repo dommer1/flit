@@ -1,4 +1,5 @@
 pub mod auth;
+mod clock;
 mod commands;
 pub mod error;
 mod idle;
