@@ -3,9 +3,13 @@
 //! see whatever a client changes. Answers are JSON text; a failure comes
 //! back as a failed call the model can read, not as a protocol error.
 
+use base64::Engine as _;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::model::{
+    CallToolResult, ContentBlock, Implementation, ResourceContents, ServerCapabilities,
+    ServerConfig,
+};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -52,6 +56,9 @@ const MAX_LIMIT: u32 = 100;
 /// Body text past this many characters is cut, and says so: one newsletter
 /// should not fill a client's whole context.
 const MAX_BODY_CHARS: usize = 100_000;
+/// The largest attachment handed to a client — base64 makes it a third
+/// bigger again on the wire.
+const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Serialize)]
 struct AccountView {
@@ -175,6 +182,12 @@ struct MessageParam {
     message_id: i64,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct AttachmentParam {
+    /// Attachment id from get_message or get_thread.
+    attachment_id: i64,
+}
+
 /// The number of messages a list call returns.
 fn clamp_limit(limit: Option<u32>) -> u32 {
     limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
@@ -290,6 +303,25 @@ impl FlitMcp {
     ) -> Result<CallToolResult, ErrorData> {
         answer(self.thread(p.message_id).await)
     }
+
+    #[tool(
+        description = "Fetch one attachment's content from the mail server: text files as \
+                       text, PNG/JPEG/GIF/WebP as images, anything else (PDF, office files…) \
+                       as a base64 blob with its MIME type. Up to 10 MB."
+    )]
+    async fn get_attachment(
+        &self,
+        Parameters(p): Parameters<AttachmentParam>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.app.state::<AppState>();
+        match fetch_attachment(&state, p.attachment_id).await {
+            Ok((meta, data)) => Ok(CallToolResult::success(vec![
+                ContentBlock::json(AttachmentView::from(meta.clone()))?,
+                attachment_content(&meta, data),
+            ])),
+            Err(err) => answer::<()>(Err(err)),
+        }
+    }
 }
 
 impl FlitMcp {
@@ -321,6 +353,68 @@ impl FlitMcp {
             attachments: attachments.into_iter().map(Into::into).collect(),
         })
     }
+}
+
+/// An attachment as content a model can take in: text as text, the image
+/// formats every client renders as images, anything else as a blob typed
+/// with its MIME type.
+fn attachment_content(meta: &MessageAttachment, data: Vec<u8>) -> ContentBlock {
+    let mime = meta
+        .content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let base64 = || base64::engine::general_purpose::STANDARD.encode(&data);
+    if matches!(
+        mime.as_str(),
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    ) {
+        return ContentBlock::image(base64(), mime);
+    }
+    let textual = mime.starts_with("text/")
+        || mime.ends_with("+json")
+        || mime.ends_with("+xml")
+        || matches!(mime.as_str(), "application/json" | "application/xml");
+    if textual {
+        if let Ok(text) = String::from_utf8(data.clone()) {
+            return ContentBlock::text(text);
+        }
+    }
+    ContentBlock::resource(
+        ResourceContents::blob(base64(), format!("flit://attachment/{}", meta.id)).with_mime_type(
+            if mime.is_empty() {
+                "application/octet-stream".to_string()
+            } else {
+                mime
+            },
+        ),
+    )
+}
+
+/// The attachment's metadata and bytes, refused past `MAX_ATTACHMENT_BYTES`.
+async fn fetch_attachment(
+    state: &AppState,
+    attachment_id: i64,
+) -> Result<(MessageAttachment, Vec<u8>), AppError> {
+    let meta = storage::messages::attachment(&state.pool, attachment_id).await?;
+    let too_big = || {
+        AppError::Invalid(format!(
+            "{} is larger than the 10 MB Flit hands to a client.",
+            meta.filename
+        ))
+    };
+    // why check twice: the stored size is cheap and saves a pointless
+    // download; the real byte count is the one that counts.
+    if usize::try_from(meta.size).unwrap_or(usize::MAX) > MAX_ATTACHMENT_BYTES {
+        return Err(too_big());
+    }
+    let data = mail::attachments::fetch_attachment(state, &meta).await?;
+    if data.len() > MAX_ATTACHMENT_BYTES {
+        return Err(too_big());
+    }
+    Ok((meta, data))
 }
 
 fn views(headers: Vec<MessageHeader>) -> Vec<MessageView> {
@@ -367,6 +461,7 @@ mod tests {
         assert_eq!(
             tool_names(&tools_for(McpAccess::Read)),
             [
+                "get_attachment",
                 "get_message",
                 "get_thread",
                 "list_accounts",
@@ -375,6 +470,59 @@ mod tests {
                 "search_messages",
             ]
         );
+    }
+
+    fn attachment(content_type: &str) -> MessageAttachment {
+        MessageAttachment {
+            id: 9,
+            message_id: 3,
+            part_index: 0,
+            filename: "file".to_string(),
+            content_type: content_type.to_string(),
+            size: 4,
+        }
+    }
+
+    #[test]
+    fn a_text_attachment_comes_back_as_text() {
+        let csv = attachment_content(&attachment("text/csv; charset=utf-8"), b"a,b\n".to_vec());
+        assert_eq!(csv.as_text().map(|t| t.text.as_str()), Some("a,b\n"));
+
+        let json = attachment_content(&attachment("application/json"), b"{}".to_vec());
+        assert_eq!(json.as_text().map(|t| t.text.as_str()), Some("{}"));
+    }
+
+    #[test]
+    fn an_image_attachment_comes_back_as_an_image() {
+        let png = attachment_content(&attachment("image/PNG"), vec![0x89, b'P', b'N', b'G']);
+        let image = png.as_image().expect("an image block");
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(image.data, "iVBORw==");
+    }
+
+    #[test]
+    fn anything_else_comes_back_as_a_typed_blob() {
+        let pdf = attachment_content(&attachment("application/pdf"), b"%PDF".to_vec());
+        let Some(rmcp::model::EmbeddedResource {
+            resource:
+                rmcp::model::ResourceContents::BlobResourceContents {
+                    uri,
+                    mime_type,
+                    blob,
+                    ..
+                },
+            ..
+        }) = pdf.as_resource()
+        else {
+            panic!("a blob resource: {pdf:?}");
+        };
+        assert_eq!(uri, "flit://attachment/9");
+        assert_eq!(mime_type.as_deref(), Some("application/pdf"));
+        assert_eq!(blob, "JVBERg==");
+
+        // A "text" part that is not UTF-8 is not text a model can read.
+        let latin = attachment_content(&attachment("text/plain"), vec![0xe9]);
+        assert!(latin.as_resource().is_some(), "{latin:?}");
     }
 
     #[test]
