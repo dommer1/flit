@@ -238,6 +238,32 @@ pub fn split_plain_quote(text: &str) -> Option<SavedQuote> {
     })
 }
 
+/// The outgoing plain-text body: the typed text with the quote riding below
+/// its attribution as "> " lines — what `composePlainBody` in
+/// src/lib/draft.ts writes for the compose window.
+pub fn compose_plain_body(text: &str, quote: Option<&crate::models::DraftQuote>) -> String {
+    let Some(quote) = quote else {
+        return text.to_string();
+    };
+    let quoted: Vec<String> = quote
+        .text
+        .split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                ">".to_string()
+            } else {
+                format!("> {line}")
+            }
+        })
+        .collect();
+    format!(
+        "{}\n\n{}\n{}\n",
+        text.trim_end(),
+        quote.attribution,
+        quoted.join("\n")
+    )
+}
+
 /// Rebuild the composed HTML body from (sanitized) parts — the exact shape
 /// `composeHtmlBody` in src/lib/draft.ts writes, so the compose window's
 /// splitComposedHtml finds the marker again on reopen.
@@ -286,6 +312,23 @@ async fn load_attachment(
 mod tests {
     use super::*;
     use mail_parser::{MessageParser, MimeHeaders};
+
+    #[test]
+    fn a_plain_body_rides_the_quote_below_the_attribution_as_quoted_lines() {
+        let quote = crate::models::DraftQuote {
+            attribution: "On July 17, 2026, OpenAI <dev@openai.com> wrote:".to_string(),
+            html: "<p>Build Week is open.</p>".to_string(),
+            text: "Build Week is open.\n\nSubmissions close July 21.".to_string(),
+        };
+
+        assert_eq!(
+            compose_plain_body("Thanks!", Some(&quote)),
+            "Thanks!\n\n\
+             On July 17, 2026, OpenAI <dev@openai.com> wrote:\n\
+             > Build Week is open.\n>\n> Submissions close July 21.\n"
+        );
+        assert_eq!(compose_plain_body("Thanks!", None), "Thanks!");
+    }
 
     #[test]
     fn split_saved_quote_round_trips_the_compose_format() {
