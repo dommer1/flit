@@ -10,6 +10,7 @@ pub mod quote;
 pub mod recipients;
 pub mod remote;
 pub mod sanitize;
+pub mod send;
 pub mod smtp;
 pub mod sync;
 pub mod trackers;

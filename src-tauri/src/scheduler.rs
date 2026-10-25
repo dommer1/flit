@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::MissedTickBehavior;
 
 use crate::state::AppState;
-use crate::{clock, commands, storage};
+use crate::{clock, mail, storage};
 
 /// How often due messages are looked for. Scheduling is minute-grained
 /// (datetime-local has no seconds), so a finer tick would buy nothing.
@@ -57,7 +57,7 @@ async fn tick(app: &AppHandle) {
         return;
     }
     for message in &due {
-        commands::deliver_scheduled(app, message.outgoing()).await;
+        mail::send::deliver_scheduled(app, message.outgoing()).await;
     }
     let _ = app.emit("scheduled-changed", ());
 }
