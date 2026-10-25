@@ -4,8 +4,9 @@ use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::error::AppError;
 use crate::models::{
-    Appearance, DateFormat, DateTimeFormat, NotificationSettings, RemoteImagePolicy,
-    ShortcutAction, ShortcutBinding, SwipeAction, SwipeActions, ThreadOrder, TimeFormat,
+    Appearance, DateFormat, DateTimeFormat, McpAccess, McpSettings, NotificationSettings,
+    RemoteImagePolicy, ShortcutAction, ShortcutBinding, SwipeAction, SwipeActions, ThreadOrder,
+    TimeFormat,
 };
 
 const REMOTE_IMAGES_KEY: &str = "remote_images";
@@ -26,6 +27,14 @@ const LLM_MODEL_KEY: &str = "llm_model";
 const LLM_SUMMARY_LANGUAGE_KEY: &str = "llm_summary_language";
 const LLM_TRANSLATE_LANGUAGE_KEY: &str = "llm_translate_language";
 const MAINTENANCE_REV_KEY: &str = "maintenance_rev";
+const MCP_ENABLED_KEY: &str = "mcp_enabled";
+const MCP_ACCESS_KEY: &str = "mcp_access";
+const MCP_PORT_KEY: &str = "mcp_port";
+
+/// Where the MCP server listens unless the user picks another port. Fixed,
+/// so a client's config keeps working across launches; below 49152, where
+/// macOS hands out ports for outgoing connections and could take it first.
+pub const DEFAULT_MCP_PORT: u16 = 4729;
 
 async fn value(pool: &SqlitePool, key: &str) -> Result<Option<String>, AppError> {
     Ok(
@@ -213,6 +222,37 @@ pub async fn set_llm_translate_enabled(pool: &SqlitePool, enabled: bool) -> Resu
         if enabled { "true" } else { "false" },
     )
     .await
+}
+
+/// The MCP server's settings; anything missing or corrupt falls back to
+/// off, read-only, the default port.
+pub async fn mcp_settings(pool: &SqlitePool) -> Result<McpSettings, AppError> {
+    Ok(McpSettings {
+        enabled: value(pool, MCP_ENABLED_KEY).await?.as_deref() == Some("true"),
+        access: value(pool, MCP_ACCESS_KEY)
+            .await?
+            .as_deref()
+            .map(McpAccess::parse)
+            .unwrap_or_default(),
+        port: value(pool, MCP_PORT_KEY)
+            .await?
+            .and_then(|port| port.parse().ok())
+            .unwrap_or(DEFAULT_MCP_PORT),
+    })
+}
+
+/// why the port floor: below 1024 only root may listen on macOS, so such
+/// a port could never work — refuse it here rather than fail at bind.
+pub async fn set_mcp_settings(pool: &SqlitePool, settings: &McpSettings) -> Result<(), AppError> {
+    if settings.port < 1024 {
+        return Err(AppError::Invalid(
+            "Pick a port from 1024 to 65535.".to_string(),
+        ));
+    }
+    let enabled = if settings.enabled { "true" } else { "false" };
+    upsert(pool, MCP_ENABLED_KEY, enabled).await?;
+    upsert(pool, MCP_ACCESS_KEY, settings.access.as_str()).await?;
+    upsert(pool, MCP_PORT_KEY, &settings.port.to_string()).await
 }
 
 /// The stored remote-image policy, falling back to the default (Ask) when
@@ -529,6 +569,65 @@ pub async fn reset_shortcuts(pool: &SqlitePool) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::storage::test_pool;
+
+    #[tokio::test]
+    async fn the_mcp_server_is_off_and_read_only_until_set_otherwise() {
+        let pool = test_pool().await;
+
+        // Off by default: this switch hands mail to software outside Flit.
+        assert_eq!(
+            mcp_settings(&pool).await.unwrap(),
+            McpSettings {
+                enabled: false,
+                access: McpAccess::Read,
+                port: DEFAULT_MCP_PORT,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_settings_round_trip() {
+        let pool = test_pool().await;
+        let wanted = McpSettings {
+            enabled: true,
+            access: McpAccess::Full,
+            port: 51234,
+        };
+
+        set_mcp_settings(&pool, &wanted).await.unwrap();
+
+        assert_eq!(mcp_settings(&pool).await.unwrap(), wanted);
+    }
+
+    #[tokio::test]
+    async fn corrupt_mcp_values_fall_back_to_the_safe_defaults() {
+        let pool = test_pool().await;
+        for (key, value) in [("mcp_access", "everything"), ("mcp_port", "eighty")] {
+            sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
+                .bind(key)
+                .bind(value)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let settings = mcp_settings(&pool).await.unwrap();
+        assert_eq!(settings.access, McpAccess::Read);
+        assert_eq!(settings.port, DEFAULT_MCP_PORT);
+    }
+
+    #[tokio::test]
+    async fn a_privileged_mcp_port_is_refused() {
+        let pool = test_pool().await;
+        let low = McpSettings {
+            enabled: true,
+            access: McpAccess::Read,
+            port: 80,
+        };
+
+        assert!(set_mcp_settings(&pool, &low).await.is_err());
+        assert_eq!(mcp_settings(&pool).await.unwrap().port, DEFAULT_MCP_PORT);
+    }
 
     #[tokio::test]
     async fn avatar_lookup_is_off_until_switched_on() {

@@ -446,6 +446,52 @@ impl ThreadOrder {
     }
 }
 
+/// How much an MCP client may do. Each level includes the ones before it,
+/// hence the derived order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum McpAccess {
+    /// Accounts, folders, messages, threads, search, attachments.
+    #[default]
+    Read,
+    /// Also: read flags, archive, trash, move, save drafts.
+    Organize,
+    /// Also: send, reply and forward — through the undo queue.
+    Full,
+}
+
+impl McpAccess {
+    /// The wire/storage form — matches the serde `camelCase` names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            McpAccess::Read => "read",
+            McpAccess::Organize => "organize",
+            McpAccess::Full => "full",
+        }
+    }
+
+    /// why: unknown strings fall back to the least access — a corrupt row
+    /// must never hand a client more than the user picked.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "organize" => McpAccess::Organize,
+            "full" => McpAccess::Full,
+            _ => McpAccess::Read,
+        }
+    }
+}
+
+/// Settings → Experimental → MCP server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpSettings {
+    /// Whether Flit listens for MCP clients at all.
+    pub enabled: bool,
+    pub access: McpAccess,
+    /// The 127.0.0.1 port clients connect to.
+    pub port: u16,
+}
+
 /// The app's colour scheme. `System` follows macOS; the other two pin it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
