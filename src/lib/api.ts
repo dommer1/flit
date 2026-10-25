@@ -23,6 +23,9 @@ import type {
   DateTimeFormat,
   DraftKind,
   Mailbox,
+  McpSettings,
+  McpSetupKind,
+  McpStatus,
   MessageAttachment,
   MessageBody,
   MessageHeader,
@@ -596,6 +599,30 @@ export function setLlmSummaryEnabled(enabled: boolean): Promise<void> {
 
 /** State of the on-device summaries: the switch, the picked model, and
  *  every catalog model with its download state. */
+export function getMcpSettings(): Promise<McpSettings> {
+  return invoke<McpSettings>("get_mcp_settings");
+}
+
+/** Store the MCP settings and restart the server under them. */
+export function setMcpSettings(settings: McpSettings): Promise<McpStatus> {
+  return invoke<McpStatus>("set_mcp_settings", { settings });
+}
+
+export function mcpStatus(): Promise<McpStatus> {
+  return invoke<McpStatus>("mcp_status");
+}
+
+/** Put what a client needs to connect on the clipboard. The backend does
+ * the copying, so the token never reaches this window. */
+export function copyMcpSetup(kind: McpSetupKind): Promise<void> {
+  return invoke("copy_mcp_setup", { kind });
+}
+
+/** Replace the token; every connected client is cut off. */
+export function regenerateMcpToken(): Promise<McpStatus> {
+  return invoke<McpStatus>("regenerate_mcp_token");
+}
+
 export function llmStatus(): Promise<LlmStatus> {
   return invoke<LlmStatus>("llm_status");
 }

@@ -20,7 +20,7 @@ use tauri::{AppHandle, Manager};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::AppError;
-use crate::models::McpStatus;
+use crate::models::{McpSettings, McpSetupKind, McpStatus};
 use crate::state::AppState;
 use crate::{auth, storage};
 
@@ -88,6 +88,75 @@ pub async fn restart(app: &AppHandle) -> McpStatus {
     };
     state.mcp.set_status(status.clone());
     status
+}
+
+/// Store new settings and restart the server under them.
+pub async fn apply_settings(
+    app: &AppHandle,
+    settings: &McpSettings,
+) -> Result<McpStatus, AppError> {
+    let state = app.state::<AppState>();
+    storage::settings::set_mcp_settings(&state.pool, settings).await?;
+    Ok(restart(app).await)
+}
+
+/// A new token, then a restart: every client still holding the old token
+/// loses its session and is refused from then on.
+pub async fn regenerate_token(app: &AppHandle) -> Result<McpStatus, AppError> {
+    auth::regenerate_mcp_token().await?;
+    Ok(restart(app).await)
+}
+
+/// Put what a client needs to connect on the clipboard.
+///
+/// why the backend copies: the token then never enters the settings
+/// webview at all — the window only says which text it wants.
+pub async fn copy_setup(app: &AppHandle, kind: McpSetupKind) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
+    let port = storage::settings::mcp_settings(&state.pool).await?.port;
+    let token = auth::mcp_token().await?;
+    copy_to_clipboard(&setup_text(kind, port, &token)).await
+}
+
+fn setup_text(kind: McpSetupKind, port: u16, token: &str) -> String {
+    let url = format!("http://127.0.0.1:{port}{PATH}");
+    match kind {
+        McpSetupKind::Token => token.to_string(),
+        McpSetupKind::ClaudeCode => format!(
+            "claude mcp add --transport http flit {url} --header \"Authorization: Bearer {token}\""
+        ),
+        McpSetupKind::Json => {
+            let config = serde_json::json!({
+                "mcpServers": {
+                    "flit": {
+                        "type": "http",
+                        "url": url,
+                        "headers": { "Authorization": format!("Bearer {token}") },
+                    }
+                }
+            });
+            serde_json::to_string_pretty(&config).unwrap_or_default()
+        }
+    }
+}
+
+/// macOS's own `pbcopy`: the pasteboard without pulling in a clipboard
+/// plugin for one button.
+async fn copy_to_clipboard(text: &str) -> Result<(), AppError> {
+    use tokio::io::AsyncWriteExt;
+    let mut child = tokio::process::Command::new("/usr/bin/pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes()).await?;
+    }
+    let status = child.wait().await?;
+    if !status.success() {
+        return Err(AppError::Invalid(
+            "Could not copy to the clipboard.".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Listen per the stored settings; None when the switch is off.
@@ -267,6 +336,32 @@ mod tests {
 
         assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
         stop.cancel();
+    }
+
+    #[test]
+    fn the_setup_texts_carry_the_url_and_the_token() {
+        let url = "http://127.0.0.1:4729/mcp";
+        assert_eq!(setup_text(McpSetupKind::Token, 4729, "abc"), "abc");
+        assert_eq!(
+            setup_text(McpSetupKind::ClaudeCode, 4729, "abc"),
+            format!(
+                "claude mcp add --transport http flit {url} --header \"Authorization: Bearer abc\""
+            )
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&setup_text(McpSetupKind::Json, 4729, "abc")).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "mcpServers": {
+                    "flit": {
+                        "type": "http",
+                        "url": url,
+                        "headers": { "Authorization": "Bearer abc" },
+                    }
+                }
+            })
+        );
     }
 
     #[test]

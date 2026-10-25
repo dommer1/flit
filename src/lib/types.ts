@@ -91,6 +91,29 @@ export interface OutgoingMessage {
   quote?: DraftQuote | null;
 }
 
+/** How much an MCP client may do; each level includes the ones before it.
+ * Mirrors McpAccess in models.rs. */
+export type McpAccess = "read" | "organize" | "full";
+
+/** Settings → Experimental → MCP server. Mirrors McpSettings. */
+export interface McpSettings {
+  enabled: boolean;
+  access: McpAccess;
+  /** The 127.0.0.1 port clients connect to. */
+  port: number;
+}
+
+/** The MCP server right now. Mirrors McpStatus. */
+export interface McpStatus {
+  running: boolean;
+  port: number | null;
+  /** Why it is not running although switched on. */
+  error: string | null;
+}
+
+/** What copy_mcp_setup puts on the clipboard. Mirrors McpSetupKind. */
+export type McpSetupKind = "token" | "claude-code" | "json";
+
 /** The three ways a message can spawn a compose draft. Mirrors DraftKind in
  * models.rs. */
 export type DraftKind = "reply" | "reply-all" | "forward";

@@ -1333,6 +1333,43 @@ pub async fn set_llm_translate_enabled(
 }
 
 #[tauri::command]
+pub async fn get_mcp_settings(
+    state: State<'_, AppState>,
+) -> Result<crate::models::McpSettings, AppError> {
+    storage::settings::mcp_settings(&state.pool).await
+}
+
+/// Store the MCP settings and restart the server under them.
+#[tauri::command]
+pub async fn set_mcp_settings(
+    app: AppHandle,
+    settings: crate::models::McpSettings,
+) -> Result<crate::models::McpStatus, AppError> {
+    crate::mcp::apply_settings(&app, &settings).await
+}
+
+#[tauri::command]
+pub fn mcp_status(state: State<'_, AppState>) -> crate::models::McpStatus {
+    state.mcp.status()
+}
+
+/// Copy what a client needs to connect — the token never reaches the
+/// window.
+#[tauri::command]
+pub async fn copy_mcp_setup(
+    app: AppHandle,
+    kind: crate::models::McpSetupKind,
+) -> Result<(), AppError> {
+    crate::mcp::copy_setup(&app, kind).await
+}
+
+/// Replace the token, cutting off every connected client.
+#[tauri::command]
+pub async fn regenerate_mcp_token(app: AppHandle) -> Result<crate::models::McpStatus, AppError> {
+    crate::mcp::regenerate_token(&app).await
+}
+
+#[tauri::command]
 pub async fn llm_status(app: AppHandle, state: State<'_, AppState>) -> Result<LlmStatus, AppError> {
     llm::status(&app, &state.pool).await
 }

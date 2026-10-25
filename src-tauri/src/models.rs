@@ -492,6 +492,18 @@ pub struct McpSettings {
     pub port: u16,
 }
 
+/// What Settings → Experimental copies for connecting an MCP client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpSetupKind {
+    /// The bearer token alone.
+    Token,
+    /// A `claude mcp add` command for Claude Code.
+    ClaudeCode,
+    /// An `mcpServers` JSON entry, the shape most clients' config files take.
+    Json,
+}
+
 /// What Settings shows about the MCP server right now.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

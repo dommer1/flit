@@ -234,6 +234,11 @@ pub fn run() {
             commands::set_llm_translate_language,
             commands::get_llm_translate_enabled,
             commands::set_llm_translate_enabled,
+            commands::get_mcp_settings,
+            commands::set_mcp_settings,
+            commands::mcp_status,
+            commands::copy_mcp_setup,
+            commands::regenerate_mcp_token,
             commands::download_llm_model,
             commands::cancel_llm_download,
             commands::remove_llm_model,
@@ -384,6 +389,13 @@ mod tests {
             "delete_account",
         ] {
             assert!(!compose.contains(command), "compose may {command}");
+        }
+        // The MCP server's switch and token belong to Settings alone — the
+        // windows that hold mail-derived HTML must not reach them.
+        for window in ["main", "compose"] {
+            for command in ["set_mcp_settings", "copy_mcp_setup", "regenerate_mcp_token"] {
+                assert!(!granted[window].contains(command), "{window} may {command}");
+            }
         }
         let settings = &granted["settings"];
         for command in [
