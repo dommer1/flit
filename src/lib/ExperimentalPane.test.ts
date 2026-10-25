@@ -32,6 +32,13 @@ vi.mock("./api", () => ({
     changedListener = callback;
     return () => {};
   }),
+  // The MCP box below has its own tests (McpSettings.test.ts).
+  getMcpSettings: vi.fn(async () => ({
+    enabled: false,
+    access: "read",
+    port: 4729,
+  })),
+  mcpStatus: vi.fn(async () => ({ running: false, port: null, error: null })),
 }));
 
 import * as api from "./api";

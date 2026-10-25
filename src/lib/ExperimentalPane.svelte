@@ -19,6 +19,7 @@
   } from "./api";
   import { formatFileSize } from "./format";
   import { LANGUAGES } from "./languages";
+  import McpSettings from "./McpSettings.svelte";
   import type { LlmStatus } from "./types";
 
   let enabled = $state(false);
@@ -286,6 +287,8 @@
   {#if error}
     <p class="error" role="alert">{error}</p>
   {/if}
+
+  <McpSettings />
 </section>
 
 <style>
