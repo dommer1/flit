@@ -216,6 +216,46 @@ pub async fn delete_password(account_id: i64) -> Result<(), AppError> {
     .await?
 }
 
+/// Keychain user name of the MCP server's bearer token.
+const MCP_TOKEN_USER: &str = "mcp-token";
+
+/// The MCP server's bearer token, created on first use. It is a secret like
+/// any password: Keychain only, never logged, never in the DB.
+pub async fn mcp_token() -> Result<String, AppError> {
+    tokio::task::spawn_blocking(|| -> Result<String, AppError> {
+        let entry = keyring::Entry::new(SERVICE, MCP_TOKEN_USER)?;
+        match entry.get_password() {
+            Ok(token) => Ok(token),
+            Err(err) if is_missing_credential(&err) => {
+                let token = new_mcp_token()?;
+                entry.set_password(&token)?;
+                Ok(token)
+            }
+            Err(err) => Err(err.into()),
+        }
+    })
+    .await?
+}
+
+/// Replace the MCP token — every client still holding the old one is cut
+/// off at its next request.
+pub async fn regenerate_mcp_token() -> Result<String, AppError> {
+    tokio::task::spawn_blocking(|| -> Result<String, AppError> {
+        let token = new_mcp_token()?;
+        keyring::Entry::new(SERVICE, MCP_TOKEN_USER)?.set_password(&token)?;
+        Ok(token)
+    })
+    .await?
+}
+
+/// 32 bytes from the OS random source, as hex: 256 bits, far past guessing.
+fn new_mcp_token() -> Result<String, AppError> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|err| AppError::Io(std::io::Error::other(err.to_string())))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 // why: only the pure parts are unit-tested. The real Keychain can't run in CI
 // (it would prompt and mutate the developer's keychain), and keyring's v1
 // facade pins the platform store on first use, so its mock store can't be
@@ -223,6 +263,14 @@ pub async fn delete_password(account_id: i64) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_mcp_token_is_256_random_bits_in_hex() {
+        let token = new_mcp_token().unwrap();
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()), "{token}");
+        assert_ne!(token, new_mcp_token().unwrap());
+    }
 
     #[test]
     fn the_keychain_store_is_ready_once_initialised() {

@@ -109,6 +109,9 @@ rmcp = { version = "3.7", default-features = false, features = [
 ] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 schemars = "1"
+# why: the MCP bearer token comes straight from the OS random source
+# (already in the tree through rand_core and ahash).
+getrandom = "0.3"
 
 # why: Quick Look on Space, as in Finder — the system preview panel, opened
 # inside Flit (src/quick_look.rs). The objc2 crates are already in the tree
