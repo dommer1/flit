@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod attachments;
 pub mod avatars;
+pub mod body;
 pub mod css;
 pub mod draft;
 pub mod drafts;
