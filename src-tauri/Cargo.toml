@@ -97,6 +97,18 @@ psl = "2"
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-opener = "2.5.4"
 oauth2 = { version = "5", default-features = false }
+# why: the experimental MCP server (src/mcp/). rmcp is the official Rust SDK
+# for the Model Context Protocol (Apache-2.0); its streamable-HTTP transport
+# is a tower service, which axum (MIT, hyper + tower already in the tree)
+# serves on 127.0.0.1 only. schemars derives the tools' JSON input schemas —
+# the major version rmcp's own derives expect.
+rmcp = { version = "3.7", default-features = false, features = [
+    "server",
+    "macros",
+    "transport-streamable-http-server",
+] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+schemars = "1"
 
 # why: Quick Look on Space, as in Finder — the system preview panel, opened
 # inside Flit (src/quick_look.rs). The objc2 crates are already in the tree
