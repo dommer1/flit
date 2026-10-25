@@ -3,6 +3,7 @@ pub mod attachments;
 pub mod avatars;
 pub mod css;
 pub mod draft;
+pub mod drafts;
 pub mod imap;
 pub mod parse;
 pub mod quote;
