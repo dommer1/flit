@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod attachments;
 pub mod avatars;
 pub mod css;
