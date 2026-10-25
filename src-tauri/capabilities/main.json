@@ -24,7 +24,6 @@
     "allow-discard-draft",
     "allow-get-date-time-format",
     "allow-get-message-body",
-    "allow-get-message-quote",
     "allow-get-shortcuts",
     "allow-get-swipe-actions",
     "allow-get-thread-order",

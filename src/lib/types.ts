@@ -95,16 +95,6 @@ export interface OutgoingMessage {
  * models.rs. */
 export type DraftKind = "reply" | "reply-all" | "forward";
 
-/** get_message_quote result — the original rendered for quoting in a
- * reply. Mirrors MessageQuote in models.rs. */
-export interface MessageQuote {
-  /** Sanitized HTML fragment (cid images inlined, remote refs unresolved,
-   * text mail upconverted to blockquotes). Empty = nothing quotable. */
-  html: string;
-  /** Cleaned plain text — source of the outgoing "> " fallback lines. */
-  text: string;
-}
-
 /** A compose draft's quote of the original: quote material plus the
  * attribution line built for it. Mirrors DraftQuote in models.rs. */
 export interface DraftQuote {

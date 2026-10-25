@@ -7,9 +7,9 @@ use crate::clock::now_epoch;
 use crate::error::AppError;
 use crate::models::{
     Account, Alias, Appearance, AuthKind, DateTimeFormat, LlmStatus, Mailbox, MessageBody,
-    MessageHeader, MessageQuote, MessagesChanged, NewAccount, NotificationSettings,
-    OutgoingMessage, RemoteImagePolicy, SearchResults, ShortcutAction, ShortcutBinding, Signature,
-    SwipeActions, ThreadOrder, TranslatedBody, TranslationPartial,
+    MessageHeader, MessagesChanged, NewAccount, NotificationSettings, OutgoingMessage,
+    RemoteImagePolicy, SearchResults, ShortcutAction, ShortcutBinding, Signature, SwipeActions,
+    ThreadOrder, TranslatedBody, TranslationPartial,
 };
 use crate::state::AppState;
 use crate::timing;
@@ -899,16 +899,6 @@ pub async fn get_message_body(
     load_remote: Option<bool>,
 ) -> Result<MessageBody, AppError> {
     mail::body::get_message_body(&app, &state, message_id, load_remote).await
-}
-
-/// Quote material for a reply to this message.
-#[tauri::command]
-pub async fn get_message_quote(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    message_id: i64,
-) -> Result<MessageQuote, AppError> {
-    mail::body::get_message_quote(&app, &state, message_id).await
 }
 
 /// The compose draft for replying to, replying all to, or forwarding one

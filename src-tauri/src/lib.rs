@@ -187,7 +187,6 @@ pub fn run() {
             commands::archive_thread,
             commands::move_thread,
             commands::get_message_body,
-            commands::get_message_quote,
             commands::reply_draft,
             commands::thread_bodies,
             commands::inspect_attachments,
