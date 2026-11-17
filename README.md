@@ -73,7 +73,8 @@ treats these as rules, not preferences:
   (off by default, its own switch)
 - Experimental: an MCP server, so an AI app you connect (Claude Code, Cursor
   and other MCP clients) can read your mail and attachments, organize it and,
-  if you allow it, send — through the outbox, with Undo (off by default;
+  if you allow it, send — through the outbox, with Undo; a message with files
+  from your Mac attached is sent only after you confirm it (off by default;
   127.0.0.1 only, behind a token kept in the Keychain)
 - Light and dark mode
 
@@ -128,7 +129,8 @@ experimental **MCP server** (Settings → Experimental). Flit contacts nobody
 for it — it listens on 127.0.0.1 and answers apps that hold its token. But
 whatever a connected AI app reads goes to that app, and usually on to its
 maker's cloud model. Pick the access level to match: read, read and
-organize, or full (which may send without asking you first).
+organize, or full (which may send text without asking you first, but never
+a file from your Mac without your yes).
 
 ## Development
 
