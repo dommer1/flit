@@ -278,8 +278,9 @@ struct ForwardParams {
     /// A note above the forwarded message, plain text; may be empty.
     #[serde(default)]
     body: String,
-    /// Absolute paths of local files to attach. A message with attachments
-    /// is sent only after the user says yes to it in Flit.
+    /// Absolute paths of local files to attach, beside the original's own
+    /// attachments, which always go along. A message with attachments is
+    /// sent only after the user says yes to it in Flit.
     #[serde(default)]
     attachments: Vec<String>,
 }
@@ -370,9 +371,11 @@ async fn local_attachments(paths: &[String]) -> Result<Vec<AttachmentRef>, AppEr
         .collect())
 }
 
-/// What the confirmation dialog says: the whole envelope, and every file by
-/// its full path — the path is what tells the user which file it really is.
-fn confirmation_text(from: &str, message: &OutgoingMessage) -> String {
+/// What the confirmation dialog says: the whole envelope, and every file.
+/// A local file goes by its full path — the path is what tells the user
+/// which file it really is. A `forwarded` one, the original message's own,
+/// goes by the name the user saw on that message: its path is a temp file.
+fn confirmation_text(from: &str, message: &OutgoingMessage, forwarded: &[AttachmentRef]) -> String {
     let mut lines = vec![
         "An AI app connected to Flit wants to send this message with attachments.".to_string(),
         String::new(),
@@ -386,9 +389,20 @@ fn confirmation_text(from: &str, message: &OutgoingMessage) -> String {
         lines.push(format!("Bcc: {}", message.bcc));
     }
     lines.push(format!("Subject: {}", message.subject));
-    lines.push(String::new());
-    lines.push("Attachments:".to_string());
-    lines.extend(message.attachments.iter().map(|a| format!("• {}", a.path)));
+    let (originals, local): (Vec<&AttachmentRef>, Vec<&AttachmentRef>) = message
+        .attachments
+        .iter()
+        .partition(|a| forwarded.iter().any(|f| f.path == a.path));
+    if !originals.is_empty() {
+        lines.push(String::new());
+        lines.push("From the forwarded message:".to_string());
+        lines.extend(originals.iter().map(|a| format!("• {}", a.name)));
+    }
+    if !local.is_empty() {
+        lines.push(String::new());
+        lines.push("Files from this Mac:".to_string());
+        lines.extend(local.iter().map(|a| format!("• {}", a.path)));
+    }
     lines.join("\n")
 }
 
@@ -653,7 +667,7 @@ impl FlitMcp {
             async {
                 let mut message = message;
                 message.attachments = local_attachments(&p.attachments).await?;
-                self.queue(message).await
+                self.queue(message, &[]).await
             }
             .await,
         )
@@ -681,7 +695,7 @@ impl FlitMcp {
                 // as a draft, which would park the quote a second time.
                 message.quote = None;
                 message.attachments = local_attachments(&p.attachments).await?;
-                self.queue(message).await
+                self.queue(message, &[]).await
             }
             .await,
         )
@@ -689,8 +703,9 @@ impl FlitMcp {
 
     #[tool(
         description = "Forward a message with a note above it. Plain text; the original's \
-                       own attachments are not carried over, but local files can be attached \
-                       as with send_message. Goes through Flit's outbox like send_message."
+                       attachments always go along (a message whose attachments exceed 25 MB \
+                       cannot be forwarded), and local files can be added as with \
+                       send_message. Goes through Flit's outbox like send_message."
     )]
     async fn forward(
         &self,
@@ -699,10 +714,13 @@ impl FlitMcp {
         answer(
             async {
                 let mut message = self.draft(p.message_id, DraftKind::Forward).await?;
+                let forwarded = message.attachments.clone();
                 message.to = p.to;
                 message.body = forward_body(&p.body, &message.body);
-                message.attachments = local_attachments(&p.attachments).await?;
-                self.queue(message).await
+                message
+                    .attachments
+                    .extend(local_attachments(&p.attachments).await?);
+                self.queue(message, &forwarded).await
             }
             .await,
         )
@@ -724,9 +742,15 @@ impl FlitMcp {
         .await
     }
 
-    async fn queue(&self, message: OutgoingMessage) -> Result<Queued, AppError> {
+    /// Send through the outbox, once the user agreed when anything is
+    /// attached. `forwarded`: the original's attachments a forward carries.
+    async fn queue(
+        &self,
+        message: OutgoingMessage,
+        forwarded: &[AttachmentRef],
+    ) -> Result<Queued, AppError> {
         if !message.attachments.is_empty() {
-            self.confirm(&message).await?;
+            self.confirm(&message, forwarded).await?;
         }
         let state = self.app.state::<AppState>();
         mail::send::queue_send(&self.app, &state, message).await?;
@@ -735,14 +759,18 @@ impl FlitMcp {
 
     /// Ask the user before a client's message carries files off the Mac.
     /// Refused unless they press Send.
-    async fn confirm(&self, message: &OutgoingMessage) -> Result<(), AppError> {
+    async fn confirm(
+        &self,
+        message: &OutgoingMessage,
+        forwarded: &[AttachmentRef],
+    ) -> Result<(), AppError> {
         let state = self.app.state::<AppState>();
         // The address it would really leave from, alias included.
         let (_, from) = storage::aliases::sender(&state.pool, message).await?;
         let mut dialog = self
             .app
             .dialog()
-            .message(confirmation_text(&from, message))
+            .message(confirmation_text(&from, message, forwarded))
             .title("Send with attachments?")
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
@@ -1065,7 +1093,7 @@ mod tests {
             ..Default::default()
         };
 
-        let text = confirmation_text("me@example.com", &message);
+        let text = confirmation_text("me@example.com", &message, &[]);
 
         for expected in [
             "From: me@example.com",
@@ -1078,6 +1106,38 @@ mod tests {
             assert!(text.contains(expected), "missing {expected:?} in {text}");
         }
         assert!(!text.contains("Bcc:"), "{text}");
+    }
+
+    #[test]
+    fn the_confirmation_names_forwarded_files_apart_from_local_ones() {
+        let original = crate::models::AttachmentRef {
+            path: "/var/folders/xy/T/flit-forward-7-1-0-0/report.pdf".to_string(),
+            name: "report.pdf".to_string(),
+        };
+        let local = crate::models::AttachmentRef {
+            path: "/Users/me/Desktop/notes.txt".to_string(),
+            name: "notes.txt".to_string(),
+        };
+        let message = OutgoingMessage {
+            to: "ann@example.com".to_string(),
+            subject: "Fwd: Report".to_string(),
+            attachments: vec![original.clone(), local],
+            ..Default::default()
+        };
+
+        let text = confirmation_text("me@example.com", &message, &[original]);
+
+        // The original's files by the name the user saw on the message —
+        // their temp path would say nothing; local files by full path.
+        assert!(
+            text.contains("From the forwarded message:\n• report.pdf"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Files from this Mac:\n• /Users/me/Desktop/notes.txt"),
+            "{text}"
+        );
+        assert!(!text.contains("flit-forward"), "{text}");
     }
 
     #[test]
