@@ -15,10 +15,13 @@ use crate::models::{Alias, DraftKind, DraftQuote, MessageHeader, MessageQuote, O
 use crate::state::AppState;
 use crate::{mail, storage};
 
-/// The compose draft for answering or forwarding one message.
+/// The compose draft for answering or forwarding one message. A forward
+/// carries the original's attachments as temp files.
 ///
 /// why a failed body load still yields a draft: the quote is a courtesy —
-/// offline, say, the user can still write the reply, just without it.
+/// offline, say, the user can still write the reply, just without it. The
+/// attachments of a forward are not: when they cannot be had, there is no
+/// forward and the error says why.
 pub async fn draft_for(
     app: &AppHandle,
     state: &AppState,
@@ -36,21 +39,24 @@ pub async fn draft_for(
     if kind == DraftKind::Forward {
         // The text the viewer shows: the message's own words, its quoted
         // history left out.
-        let text = match mail::body::load_body(app, state, message_id).await {
-            Ok(loaded) => loaded
-                .text
-                .map(|text| mail::quote::split_text_quote(&text).0),
-            Err(err) => {
-                eprintln!("forwarding message {message_id} without its text: {err}");
-                None
-            }
-        };
-        return Ok(forward_draft(
-            &message,
-            text.as_deref(),
-            date_label,
-            &aliases,
-        ));
+        let loaded = mail::body::load_body(app, state, message_id)
+            .await
+            .map(|loaded| {
+                loaded
+                    .text
+                    .map(|text| mail::quote::split_text_quote(&text).0)
+            });
+        // why listed after the load: loading a body is what records its
+        // attachments in the cache.
+        let attachments = storage::messages::attachments(&state.pool, message_id).await?;
+        let text = forward_text(
+            message_id,
+            loaded,
+            message.has_attachments && attachments.is_empty(),
+        )?;
+        let mut draft = forward_draft(&message, text.as_deref(), date_label, &aliases);
+        draft.attachments = mail::attachments::for_forward(state, message_id, &attachments).await?;
+        return Ok(draft);
     }
     let quote = match mail::body::get_message_quote(app, state, message_id).await {
         Ok(quote) => Some(quote),
@@ -183,6 +189,26 @@ pub fn forward_draft(
         subject: forward_subject(&message.subject),
         body: format!("{}\n", body.trim_end()),
         ..Default::default()
+    }
+}
+
+/// The text a forward carries, or why there can be no forward. A body that
+/// would not load (offline, say) is left out — the user can still write —
+/// unless that load was the only way to learn which files the message
+/// carries (`attachments_unknown`): a forward that quietly drops them is
+/// worse than none.
+fn forward_text(
+    message_id: i64,
+    loaded: Result<Option<String>, AppError>,
+    attachments_unknown: bool,
+) -> Result<Option<String>, AppError> {
+    match loaded {
+        Ok(text) => Ok(text),
+        Err(err) if attachments_unknown => Err(err),
+        Err(err) => {
+            eprintln!("forwarding message {message_id} without its text: {err}");
+            Ok(None)
+        }
     }
 }
 
@@ -710,6 +736,27 @@ mod tests {
 
         assert!(body.contains("---------- Forwarded message ----------"));
         assert!(body.ends_with("To: Me <me@example.com>\n"), "{body:?}");
+    }
+
+    #[test]
+    fn a_forward_carries_the_text_that_loaded() {
+        let text = forward_text(7, Ok(Some("Hello".to_string())), false).unwrap();
+        assert_eq!(text.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn a_forward_opens_without_text_that_would_not_load() {
+        let offline = Err(AppError::Imap("connect: offline".to_string()));
+        assert_eq!(forward_text(7, offline, false).unwrap(), None);
+    }
+
+    #[test]
+    fn a_forward_fails_when_the_failed_load_hid_which_files_it_carries() {
+        // A never-opened message lists no attachments until its body loads:
+        // forwarding it without them would quietly drop the files.
+        let offline = Err(AppError::Imap("connect: offline".to_string()));
+        let err = forward_text(7, offline, true).unwrap_err();
+        assert_eq!(err.to_string(), "imap error: connect: offline");
     }
 
     #[test]
