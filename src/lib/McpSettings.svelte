@@ -26,7 +26,7 @@
       value: "full",
       label: "Full — also send",
       explain:
-        "Also send, reply and forward. Text goes without asking you first, waiting a few seconds in the outbox where Undo stops it; a message with files from this Mac waits until you confirm it.",
+        "Also send, reply and forward. Text goes without asking you first, waiting a few seconds in the outbox where Undo stops it; a message with attachments — files from this Mac, or a forwarded message's own — waits until you confirm it.",
     },
   ];
 

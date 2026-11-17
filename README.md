@@ -73,8 +73,9 @@ treats these as rules, not preferences:
   (off by default, its own switch)
 - Experimental: an MCP server, so an AI app you connect (Claude Code, Cursor
   and other MCP clients) can read your mail and attachments, organize it and,
-  if you allow it, send — through the outbox, with Undo; a message with files
-  from your Mac attached is sent only after you confirm it (off by default;
+  if you allow it, send — through the outbox, with Undo; a message with
+  attachments (files from your Mac, or a forwarded message's own) is sent
+  only after you confirm it (off by default;
   127.0.0.1 only, behind a token kept in the Keychain)
 - Light and dark mode
 

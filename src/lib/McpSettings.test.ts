@@ -77,7 +77,7 @@ it("stores the access level a client gets", async () => {
 
   expect(api.setMcpSettings).toHaveBeenCalledWith({ ...ON, access: "full" });
   expect(
-    await screen.findByText(/without asking.*files from this Mac waits until you confirm/),
+    await screen.findByText(/without asking.*with attachments.*waits until you confirm/),
   ).toBeInTheDocument();
 });
 
