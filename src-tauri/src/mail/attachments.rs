@@ -6,6 +6,8 @@
 //! fetched from the server on demand — they never touch the local DB.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::AppError;
 use crate::models::{AttachmentInfo, AttachmentRef, MessageAttachment};
@@ -189,6 +191,71 @@ pub fn attachment_bytes(raw: &[u8], meta: &MessageAttachment) -> Result<Vec<u8>,
     })
 }
 
+/// A received message's attachments as files a forward can carry: the
+/// message is downloaded once, every part taken out of it and written to
+/// temp files of this forward's own. Nothing is downloaded when there is
+/// nothing to forward, or more than a message can carry.
+pub async fn for_forward(
+    state: &AppState,
+    message_id: i64,
+    attachments: &[MessageAttachment],
+) -> Result<Vec<AttachmentRef>, AppError> {
+    if attachments.is_empty() {
+        return Ok(Vec::new());
+    }
+    ensure_forwardable(attachments)?;
+    let loc = storage::messages::location(&state.pool, message_id).await?;
+    let raw = fetch_raw_message(state, &loc).await?;
+    let parts = forward_parts(&raw, attachments)?;
+    stash(&forward_label(message_id), parts).await
+}
+
+/// Refuse a forward whose attachments alone exceed the send limit — the
+/// send would fail anyway, only later, after the user wrote the message.
+/// The sizes are the decoded ones the limit counts at send time.
+fn ensure_forwardable(attachments: &[MessageAttachment]) -> Result<(), AppError> {
+    let total: i64 = attachments.iter().map(|a| a.size.max(0)).sum();
+    mail::smtp::ensure_attachment_budget(usize::try_from(total).unwrap_or(usize::MAX)).map_err(
+        |_| {
+            AppError::Invalid(format!(
+                "Can't forward this message: its attachments total {:.1} MB, \
+                 over the 25 MB a message can carry.",
+                total as f64 / (1024.0 * 1024.0)
+            ))
+        },
+    )
+}
+
+/// Every listed attachment taken out of one raw message, under its cached
+/// (already safe) filename.
+fn forward_parts(
+    raw: &[u8],
+    attachments: &[MessageAttachment],
+) -> Result<Vec<mail::parse::DraftAttachment>, AppError> {
+    attachments
+        .iter()
+        .map(|meta| {
+            Ok(mail::parse::DraftAttachment {
+                name: meta.filename.clone(),
+                data: attachment_bytes(raw, meta)?,
+            })
+        })
+        .collect()
+}
+
+/// Temp folder label for one forward. why unique per call: forwarding the
+/// same message again must not rewrite files an earlier forward, still in
+/// its undo window, is about to read.
+fn forward_label(message_id: i64) -> String {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("flit-forward-{message_id}-{nanos}-{seq}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,6 +321,83 @@ mod tests {
         for r in &refs {
             let _ = tokio::fs::remove_dir_all(Path::new(&r.path).parent().unwrap()).await;
         }
+    }
+
+    fn meta(part_index: i64, filename: &str, size: i64) -> MessageAttachment {
+        MessageAttachment {
+            id: part_index + 1,
+            message_id: 7,
+            part_index,
+            filename: filename.to_string(),
+            content_type: "application/octet-stream".to_string(),
+            size,
+        }
+    }
+
+    const RAW_TWO_FILES: &[u8] = b"From: a@example.com\r\n\
+To: b@example.com\r\n\
+Subject: Files\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"b1\"\r\n\
+\r\n\
+--b1\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+See attached.\r\n\
+--b1\r\n\
+Content-Type: application/pdf; name=\"report.pdf\"\r\n\
+Content-Disposition: attachment; filename=\"report.pdf\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+JVBERi1mYWtl\r\n\
+--b1\r\n\
+Content-Type: text/csv; name=\"data.csv\"\r\n\
+Content-Disposition: attachment; filename=\"data.csv\"\r\n\
+\r\n\
+a,b\r\n\
+--b1--\r\n";
+
+    #[test]
+    fn a_forward_takes_every_attachment_out_of_one_raw_message() {
+        let metas = [meta(0, "report.pdf", 9), meta(1, "data.csv", 3)];
+
+        let parts = forward_parts(RAW_TWO_FILES, &metas).unwrap();
+
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].name, "report.pdf");
+        assert_eq!(parts[0].data, b"%PDF-fake");
+        assert_eq!(parts[1].name, "data.csv");
+        assert_eq!(parts[1].data, b"a,b");
+    }
+
+    #[test]
+    fn a_forward_fails_when_an_attachment_is_gone_from_the_message() {
+        let err = forward_parts(RAW_TWO_FILES, &[meta(5, "lost.zip", 10)]).unwrap_err();
+
+        assert!(err.to_string().contains("lost.zip"), "{err}");
+    }
+
+    #[test]
+    fn a_forward_over_the_send_limit_is_refused_before_any_download() {
+        const MB: i64 = 1024 * 1024;
+        assert!(ensure_forwardable(&[meta(0, "a.zip", 20 * MB), meta(1, "b.zip", 5 * MB)]).is_ok());
+
+        let err = ensure_forwardable(&[meta(0, "a.zip", 20 * MB), meta(1, "b.zip", 11 * MB)])
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Can't forward this message: its attachments total 31.0 MB, \
+             over the 25 MB a message can carry."
+        );
+    }
+
+    #[test]
+    fn every_forward_stashes_into_folders_of_its_own() {
+        // A second forward of the same message must never overwrite the
+        // files a first one, still waiting in the outbox, is about to send.
+        assert_ne!(forward_label(7), forward_label(7));
+        assert!(forward_label(7).starts_with("flit-forward-7-"));
     }
 
     #[tokio::test]
