@@ -1,13 +1,14 @@
 //! Attachment files on disk: metadata for files dropped on the compose
 //! window (only stat calls — the bytes are read when the MIME message is
-//! built, mail::smtp), and the copies Quick Look shows of received
-//! attachments that were never saved. Received attachments' bytes are
+//! built, mail::smtp), the copies Quick Look shows of received attachments
+//! that were never saved, and the temp files that carry a reopened draft's
+//! attachments into a compose window. Received attachments' bytes are
 //! fetched from the server on demand — they never touch the local DB.
 
 use std::path::{Path, PathBuf};
 
 use crate::error::AppError;
-use crate::models::{AttachmentInfo, MessageAttachment};
+use crate::models::{AttachmentInfo, AttachmentRef, MessageAttachment};
 use crate::state::AppState;
 use crate::{mail, storage};
 
@@ -73,6 +74,29 @@ pub async fn inspect(paths: Vec<String>) -> Result<Vec<AttachmentInfo>, AppError
         });
     }
     Ok(infos)
+}
+
+/// Write attachment bytes into temp files — a folder per part, named
+/// `{label}-{index}` — so the compose window can treat them exactly like
+/// freshly dropped files (only paths travel through the app). The names
+/// must already be safe filenames (parse_draft, safe_filename), so the files
+/// always land inside the temp directory.
+pub async fn stash(
+    label: &str,
+    parts: Vec<mail::parse::DraftAttachment>,
+) -> Result<Vec<AttachmentRef>, AppError> {
+    let mut refs = Vec::with_capacity(parts.len());
+    for (index, part) in parts.into_iter().enumerate() {
+        let dir = std::env::temp_dir().join(format!("{label}-{index}"));
+        tokio::fs::create_dir_all(&dir).await?;
+        let path = dir.join(&part.name);
+        tokio::fs::write(&path, &part.data).await?;
+        refs.push(AttachmentRef {
+            path: path.to_string_lossy().into_owned(),
+            name: part.name,
+        });
+    }
+    Ok(refs)
 }
 
 /// Sources above this size get no thumbnail — decoding a huge image for a
@@ -207,6 +231,29 @@ mod tests {
 
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].name, "kept.txt");
+    }
+
+    #[tokio::test]
+    async fn stashed_parts_get_a_folder_each_so_alike_names_never_collide() {
+        let part = |data: &[u8]| mail::parse::DraftAttachment {
+            name: "scan.pdf".to_string(),
+            data: data.to_vec(),
+        };
+        let label = format!("flit-stash-test-{}", std::process::id());
+
+        let refs = stash(&label, vec![part(b"first"), part(b"second")])
+            .await
+            .unwrap();
+
+        assert_eq!(refs.len(), 2);
+        assert_ne!(refs[0].path, refs[1].path);
+        assert_eq!(refs[0].name, "scan.pdf");
+        assert_eq!(refs[1].name, "scan.pdf");
+        assert_eq!(tokio::fs::read(&refs[0].path).await.unwrap(), b"first");
+        assert_eq!(tokio::fs::read(&refs[1].path).await.unwrap(), b"second");
+        for r in &refs {
+            let _ = tokio::fs::remove_dir_all(Path::new(&r.path).parent().unwrap()).await;
+        }
     }
 
     #[tokio::test]

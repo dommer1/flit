@@ -1214,7 +1214,8 @@ pub async fn open_draft(
         Some(addr) => storage::aliases::find_by_email(&state.pool, loc.account_id, addr).await?,
         None => None,
     };
-    let attachments = stash_draft_attachments(message_id, parsed.attachments).await?;
+    let attachments =
+        mail::attachments::stash(&format!("flit-draft-{message_id}"), parsed.attachments).await?;
     let (body, body_html, quote) = park_draft_quote(parsed.body, parsed.body_html.as_deref());
     open_compose_window(
         &app,
@@ -1235,28 +1236,6 @@ pub async fn open_draft(
         },
     )
     .await
-}
-
-/// Write a reopened draft's attachment bytes into per-message temp files,
-/// so the compose window can treat them exactly like freshly dropped files
-/// (only paths travel through the app). Names were sanitized by parse_draft,
-/// so the files always land inside the temp directory.
-async fn stash_draft_attachments(
-    message_id: i64,
-    parts: Vec<mail::parse::DraftAttachment>,
-) -> Result<Vec<crate::models::AttachmentRef>, AppError> {
-    let mut refs = Vec::with_capacity(parts.len());
-    for (index, part) in parts.into_iter().enumerate() {
-        let dir = std::env::temp_dir().join(format!("flit-draft-{message_id}-{index}"));
-        tokio::fs::create_dir_all(&dir).await?;
-        let path = dir.join(&part.name);
-        tokio::fs::write(&path, &part.data).await?;
-        refs.push(crate::models::AttachmentRef {
-            path: path.to_string_lossy().into_owned(),
-            name: part.name,
-        });
-    }
-    Ok(refs)
 }
 
 /// Open a native compose window seeded with `draft`. Every call opens its
