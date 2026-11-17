@@ -267,6 +267,7 @@ vi.mock("./lib/api", () => ({
     attachments: [],
   })),
   replyDraft: vi.fn(async () => backendDraft),
+  showError: vi.fn(async () => undefined),
   syncAccount: vi.fn(async () => undefined),
   refreshAccount: vi.fn(async () => undefined),
   setMessageRead: vi.fn(async () => undefined),
@@ -583,6 +584,22 @@ it("asks the backend for a forward draft", async () => {
 
   await waitFor(() => expect(api.openCompose).toHaveBeenCalledWith(backendDraft));
   expect(api.replyDraft).toHaveBeenCalledWith(1, "forward", expect.any(String));
+});
+
+it("says why a forward could not open instead of doing nothing", async () => {
+  const reason =
+    "Can't forward this message: its attachments total 31.0 MB, over the 25 MB a message can carry.";
+  vi.mocked(api.replyDraft).mockRejectedValueOnce(reason);
+  render(App);
+  await fireEvent.click(await screen.findByText("Weekend plans"));
+  await screen.findByText("body text");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+
+  await waitFor(() =>
+    expect(api.showError).toHaveBeenCalledWith("Couldn't Forward", reason),
+  );
+  expect(api.openCompose).not.toHaveBeenCalled();
 });
 
 it("starts a sync for every account on launch", async () => {

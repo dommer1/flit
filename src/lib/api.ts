@@ -7,7 +7,7 @@ import {
   type SubmenuOptions,
 } from "@tauri-apps/api/menu";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 import type {
   Account,
   AuthKind,
@@ -156,6 +156,12 @@ export function threadBodies(
   messageId: number,
 ): Promise<Record<number, MessageBody>> {
   return invoke<Record<number, MessageBody>>("thread_bodies", { messageId });
+}
+
+/** Native alert for a failure the user has to hear about: the main window
+ * has no other place to say it. */
+export async function showError(title: string, text: string): Promise<void> {
+  await message(text, { title, kind: "error" });
 }
 
 /** The compose draft for replying to, replying all to, or forwarding one

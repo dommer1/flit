@@ -42,6 +42,7 @@
     setMessagesRead,
     refreshAccount,
     replyDraft,
+    showError,
     syncAccount,
     undoSend,
     viewStatus,
@@ -403,7 +404,15 @@
   function openReplyDraft(kind: DraftKind, message: MessageHeader) {
     void replyDraft(message.id, kind, formatFullDate(message.date))
       .then((draft) => openCompose(draft))
-      .catch((err: unknown) => console.error(`failed to open ${kind}:`, err));
+      .catch((err: unknown) => {
+        console.error(`failed to open ${kind}:`, err);
+        // why an alert: a forward can fail for reasons the user must hear —
+        // its attachments are over the send limit, or could not be fetched.
+        void showError(
+          kind === "forward" ? "Couldn't Forward" : "Couldn't Reply",
+          String(err),
+        );
+      });
   }
 
   function handleSwipeReply(id: number) {
