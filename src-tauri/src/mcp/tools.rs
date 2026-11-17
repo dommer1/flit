@@ -14,9 +14,12 @@ use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::error::AppError;
-use crate::models::{DraftKind, McpAccess, MessageAttachment, MessageHeader, OutgoingMessage};
+use crate::models::{
+    AttachmentRef, DraftKind, McpAccess, MessageAttachment, MessageHeader, OutgoingMessage,
+};
 use crate::state::AppState;
 use crate::{mail, storage};
 
@@ -244,6 +247,10 @@ struct SendParams {
     subject: String,
     /// Plain text.
     body: String,
+    /// Absolute paths of local files to attach. A message with attachments
+    /// is sent only after the user says yes to it in Flit.
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -256,6 +263,10 @@ struct ReplyParams {
     /// sender.
     #[serde(default)]
     reply_all: bool,
+    /// Absolute paths of local files to attach. A message with attachments
+    /// is sent only after the user says yes to it in Flit.
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -267,6 +278,10 @@ struct ForwardParams {
     /// A note above the forwarded message, plain text; may be empty.
     #[serde(default)]
     body: String,
+    /// Absolute paths of local files to attach. A message with attachments
+    /// is sent only after the user says yes to it in Flit.
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 /// What a send reports back: queued, not yet gone.
@@ -323,6 +338,58 @@ fn date_label(date: &str) -> String {
 /// already starts with the blank lines that set it apart.
 fn forward_body(note: &str, block: &str) -> String {
     format!("{}{block}", note.trim_end())
+}
+
+/// The local files a client asked to attach: absolute paths of files that
+/// exist, as the outgoing message carries them.
+async fn local_attachments(paths: &[String]) -> Result<Vec<AttachmentRef>, AppError> {
+    // why absolute only: a relative path would resolve against Flit's own
+    // working directory, which the client knows nothing about.
+    if let Some(relative) = paths
+        .iter()
+        .find(|p| !std::path::Path::new(p).is_absolute())
+    {
+        return Err(AppError::Invalid(format!(
+            "Attach files by absolute path, not {relative}."
+        )));
+    }
+    let files = mail::attachments::inspect(paths.to_vec()).await?;
+    // inspect leaves folders out quietly (the compose window's drop rule);
+    // a client should hear that one of its paths was not a file.
+    if let Some(folder) = paths.iter().find(|p| !files.iter().any(|f| &f.path == *p)) {
+        return Err(AppError::Invalid(format!(
+            "{folder} is a folder, not a file."
+        )));
+    }
+    Ok(files
+        .into_iter()
+        .map(|f| AttachmentRef {
+            path: f.path,
+            name: f.name,
+        })
+        .collect())
+}
+
+/// What the confirmation dialog says: the whole envelope, and every file by
+/// its full path — the path is what tells the user which file it really is.
+fn confirmation_text(from: &str, message: &OutgoingMessage) -> String {
+    let mut lines = vec![
+        "An AI app connected to Flit wants to send this message with attachments.".to_string(),
+        String::new(),
+        format!("From: {from}"),
+        format!("To: {}", message.to),
+    ];
+    if !message.cc.trim().is_empty() {
+        lines.push(format!("Cc: {}", message.cc));
+    }
+    if !message.bcc.trim().is_empty() {
+        lines.push(format!("Bcc: {}", message.bcc));
+    }
+    lines.push(format!("Subject: {}", message.subject));
+    lines.push(String::new());
+    lines.push("Attachments:".to_string());
+    lines.extend(message.attachments.iter().map(|a| format!("• {}", a.path)));
+    lines.join("\n")
 }
 
 /// The number of messages a list call returns.
@@ -564,8 +631,10 @@ impl FlitMcp {
 #[tool_router(router = send_tools)]
 impl FlitMcp {
     #[tool(
-        description = "Send a new plain-text message. It goes through Flit's outbox: the \
-                          user sees it leave and can Undo it for a few seconds."
+        description = "Send a new plain-text message, optionally with local files attached. \
+                       It goes through Flit's outbox: the user sees it leave and can Undo it \
+                       for a few seconds. With attachments it waits until the user confirms \
+                       it in Flit; if they decline, nothing is sent."
     )]
     async fn send_message(
         &self,
@@ -580,7 +649,14 @@ impl FlitMcp {
             body: p.body,
             ..Default::default()
         };
-        answer(self.queue(message).await)
+        answer(
+            async {
+                let mut message = message;
+                message.attachments = local_attachments(&p.attachments).await?;
+                self.queue(message).await
+            }
+            .await,
+        )
     }
 
     #[tool(
@@ -604,6 +680,7 @@ impl FlitMcp {
                 // why drop the quote once merged: a send that fails reopens
                 // as a draft, which would park the quote a second time.
                 message.quote = None;
+                message.attachments = local_attachments(&p.attachments).await?;
                 self.queue(message).await
             }
             .await,
@@ -612,8 +689,8 @@ impl FlitMcp {
 
     #[tool(
         description = "Forward a message with a note above it. Plain text; the original's \
-                          attachments are not attached. Goes through Flit's outbox like \
-                          send_message."
+                       own attachments are not carried over, but local files can be attached \
+                       as with send_message. Goes through Flit's outbox like send_message."
     )]
     async fn forward(
         &self,
@@ -624,6 +701,7 @@ impl FlitMcp {
                 let mut message = self.draft(p.message_id, DraftKind::Forward).await?;
                 message.to = p.to;
                 message.body = forward_body(&p.body, &message.body);
+                message.attachments = local_attachments(&p.attachments).await?;
                 self.queue(message).await
             }
             .await,
@@ -647,9 +725,54 @@ impl FlitMcp {
     }
 
     async fn queue(&self, message: OutgoingMessage) -> Result<Queued, AppError> {
+        if !message.attachments.is_empty() {
+            self.confirm(&message).await?;
+        }
         let state = self.app.state::<AppState>();
         mail::send::queue_send(&self.app, &state, message).await?;
         Ok(QUEUED)
+    }
+
+    /// Ask the user before a client's message carries files off the Mac.
+    /// Refused unless they press Send.
+    async fn confirm(&self, message: &OutgoingMessage) -> Result<(), AppError> {
+        let state = self.app.state::<AppState>();
+        // The address it would really leave from, alias included.
+        let (_, from) = storage::aliases::sender(&state.pool, message).await?;
+        let mut dialog = self
+            .app
+            .dialog()
+            .message(confirmation_text(&from, message))
+            .title("Send with attachments?")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Send".to_string(),
+                "Don't Send".to_string(),
+            ));
+        // why the main window, brought forward: the request can come while
+        // the user is in another app, and a question nobody sees would just
+        // hang the client.
+        if let Some(window) = self.app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+            dialog = dialog.parent(&window);
+        }
+        // why a oneshot: the dialog answers through a callback on another
+        // thread; the channel turns that into something this task can await
+        // without blocking an executor thread.
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        dialog.show(move |send| {
+            let _ = answer.send(send);
+        });
+        // A dialog torn down without an answer counts as Don't Send.
+        if answered.await.unwrap_or(false) {
+            Ok(())
+        } else {
+            Err(AppError::Invalid(
+                "The user chose not to send this message.".to_string(),
+            ))
+        }
     }
 
     async fn full_message(&self, message_id: i64) -> Result<FullMessage, AppError> {
@@ -891,6 +1014,85 @@ mod tests {
             assert!(full.contains(&tool.to_string()), "full may not {tool}");
         }
         assert!(full.contains(&"trash".to_string()));
+    }
+
+    #[tokio::test]
+    async fn attachments_are_absolute_paths_of_existing_files() {
+        let dir = std::env::temp_dir().join(format!("flit-mcp-attach-{}", std::process::id()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let file = dir.join("faktura.pdf");
+        tokio::fs::write(&file, b"%PDF").await.unwrap();
+        let file = file.to_string_lossy().into_owned();
+
+        let attached = local_attachments(std::slice::from_ref(&file))
+            .await
+            .unwrap();
+        assert_eq!(attached.len(), 1);
+        assert_eq!(attached[0].path, file);
+        assert_eq!(attached[0].name, "faktura.pdf");
+
+        // Relative to what? Flit's own working directory is no answer.
+        assert!(local_attachments(&["faktura.pdf".to_string()])
+            .await
+            .is_err());
+        let folder = dir.to_string_lossy().into_owned();
+        let err = local_attachments(&[folder]).await.unwrap_err();
+        assert!(err.to_string().contains("folder"), "{err}");
+        let missing = dir.join("nie.pdf").to_string_lossy().into_owned();
+        assert!(local_attachments(&[missing]).await.is_err());
+        assert!(local_attachments(&[]).await.unwrap().is_empty());
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[test]
+    fn the_confirmation_names_sender_recipients_and_every_file() {
+        let message = OutgoingMessage {
+            account_id: 1,
+            to: "Ann <ann@example.com>".to_string(),
+            cc: "bob@example.com".to_string(),
+            subject: "Faktúra".to_string(),
+            attachments: vec![
+                crate::models::AttachmentRef {
+                    path: "/Users/me/Desktop/faktura.pdf".to_string(),
+                    name: "faktura.pdf".to_string(),
+                },
+                crate::models::AttachmentRef {
+                    path: "/Users/me/.ssh/id_ed25519".to_string(),
+                    name: "id_ed25519".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let text = confirmation_text("me@example.com", &message);
+
+        for expected in [
+            "From: me@example.com",
+            "To: Ann <ann@example.com>",
+            "Cc: bob@example.com",
+            "Subject: Faktúra",
+            "/Users/me/Desktop/faktura.pdf",
+            "/Users/me/.ssh/id_ed25519",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in {text}");
+        }
+        assert!(!text.contains("Bcc:"), "{text}");
+    }
+
+    #[test]
+    fn every_sending_tool_takes_attachments() {
+        let tools = tools_for(McpAccess::Full);
+        for name in ["send_message", "reply", "forward"] {
+            let tool = tools.get(name).expect(name);
+            assert!(
+                tool.input_schema
+                    .get("properties")
+                    .and_then(|p| p.get("attachments"))
+                    .is_some(),
+                "{name} takes no attachments"
+            );
+        }
     }
 
     #[test]
