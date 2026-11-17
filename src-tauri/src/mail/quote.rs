@@ -148,15 +148,41 @@ pub fn fold_html_quote(html: String) -> String {
 /// which belongs to the quote the way the text path already treats it.
 fn html_quote_start(html: &str) -> Option<usize> {
     let blockquote = html.find("<blockquote");
-    // ">&gt;" = an opening tag closing right before a quote marker
-    // (`<p>&gt; …`, `<br>&gt; …`); back up to that element's "<".
-    let quote_para = html.find(">&gt;").and_then(|gt| html[..gt].rfind('<'));
+    let quote_para = quote_line_start(html);
     let at = match (blockquote, quote_para) {
         (Some(a), Some(b)) => Some(a.min(b)),
         (a, b) => a.or(b),
     }?;
     let start = attribution_start(&html[..at]).unwrap_or(at);
     Some(wrapper_start(html, start, at).unwrap_or(start))
+}
+
+/// The "<" of the tag that opens the first line beginning with the "&gt;"
+/// quote marker: `<p>&gt; …`, `<div>&gt; …`, `<pre>&gt; …`, `<br>&gt; …`.
+/// why only these: after a closing tag or an inline element the "&gt;" is
+/// mid-line text — the end of a linked "Name <address>" (`</a>&gt;`) or a
+/// breadcrumb arrow (`<em>&gt;</em>`). Folding there cut inside the line,
+/// once even inside the link, where the ••• opened a mailto when clicked.
+fn quote_line_start(html: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(offset) = html[from..].find(">&gt;") {
+        let gt = from + offset;
+        if let Some(lt) = html[..gt].rfind('<') {
+            // A closing tag starts with '/', so its name comes out empty.
+            let name: String = html[lt + 1..gt]
+                .chars()
+                .take_while(char::is_ascii_alphanumeric)
+                .collect();
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "p" | "div" | "pre" | "br"
+            ) {
+                return Some(lt);
+            }
+        }
+        from = gt + 1;
+    }
+    None
 }
 
 /// Start of the attribution element sitting directly above the quote (only
@@ -608,6 +634,37 @@ mod tests {
 
         assert!(folded.starts_with("<p>Moja odpoveď.</p><details"));
         assert!(folded.contains("<p>&gt; citovaný riadok</p></details>"));
+    }
+
+    #[test]
+    fn an_address_closing_bracket_is_not_a_quote_marker() {
+        // A forwarded header: "Name <address>" with the address linked, so
+        // the closing "&gt;" follows the link's `</a>`. Folding there put the
+        // ••• inside the link, and clicking it opened the mailto instead.
+        let html = "<p>Own text</p>\
+                    <p>Od: Lea &lt;<a href=\"mailto:lea@example.com\">lea@example.com</a>&gt;</p>\
+                    <blockquote><p>q</p></blockquote>"
+            .to_string();
+
+        let folded = fold_html_quote(html);
+
+        assert!(folded.contains("</a>&gt;</p><details class=\"flit-quote\">"));
+        assert!(folded.ends_with("</blockquote></details>"));
+    }
+
+    #[test]
+    fn a_marker_inside_a_line_is_not_a_quote_marker() {
+        // Breadcrumbs ("Admin <em>&gt;</em> Apps") and link arrows are text,
+        // not a quoted line.
+        let breadcrumb =
+            "<p>Open Admin <em>&gt;</em> Apps <a href=\"https://x\">&gt;&gt;Code</a></p>"
+                .to_string();
+        assert_eq!(fold_html_quote(breadcrumb.clone()), breadcrumb);
+
+        // A line break still starts a quoted line.
+        let quoted = "<div>Own text<br>&gt; citovaný riadok</div>".to_string();
+        assert!(fold_html_quote(quoted)
+            .starts_with("<div>Own text<details class=\"flit-quote\"><summary title=\"Show quoted text\">•••</summary><br>&gt; citovaný"));
     }
 
     #[test]
