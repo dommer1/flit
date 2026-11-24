@@ -98,20 +98,18 @@ pub async fn move_to_trash(
     state: &AppState,
     message_id: i64,
 ) -> Result<(), AppError> {
-    move_to_special_folder(app, state, message_id, &["trash"], "trash").await
+    move_to_special_folder(app, state, message_id, SpecialFolder::Trash).await
 }
 
-/// Archive one message: move it to the account's Archive folder, then drop it
-/// from the local cache. Same server-confirmed path as trashing.
-///
-/// why the "all" fallback: Gmail has no \Archive folder — archiving means
-/// removing the Inbox label, which over IMAP is a move into "All Mail" (\All).
+/// Archive one message: move it to the account's Archive folder (Gmail: All
+/// Mail), then drop it from the local cache. Same server-confirmed path as
+/// trashing.
 pub async fn archive_message(
     app: &AppHandle,
     state: &AppState,
     message_id: i64,
 ) -> Result<(), AppError> {
-    move_to_special_folder(app, state, message_id, &["archive", "all"], "archive").await
+    move_to_special_folder(app, state, message_id, SpecialFolder::Archive).await
 }
 
 /// Move one message to a user-chosen folder of its account, then drop it
@@ -274,8 +272,7 @@ async fn move_batches_to_special_folder(
     state: &AppState,
     message_ids: &[i64],
     threads: bool,
-    roles: &[&str],
-    label: &str,
+    folder: SpecialFolder,
 ) -> Result<(), AppError> {
     let batches = locate_batches(state, message_ids, threads).await?;
     // why the destinations are resolved first: same as move_messages — an
@@ -283,7 +280,7 @@ async fn move_batches_to_special_folder(
     // whatever batches happened to finish before it was noticed.
     let mut dests = Vec::with_capacity(batches.len());
     for batch in &batches {
-        dests.push(special_folder_dest(state, batch.account_id, roles, label).await?);
+        dests.push(special_folder_dest(state, batch.account_id, folder).await?);
     }
     let outcomes = futures::future::join_all(batches.iter().zip(&dests).map(|(batch, dest)| {
         move_rows_to_mailbox(
@@ -306,7 +303,7 @@ pub async fn trash_messages(
     message_ids: &[i64],
     threads: bool,
 ) -> Result<(), AppError> {
-    move_batches_to_special_folder(app, state, message_ids, threads, &["trash"], "trash").await
+    move_batches_to_special_folder(app, state, message_ids, threads, SpecialFolder::Trash).await
 }
 
 /// Archive a whole selection — each account's own Archive (Gmail: All Mail).
@@ -316,15 +313,7 @@ pub async fn archive_messages(
     message_ids: &[i64],
     threads: bool,
 ) -> Result<(), AppError> {
-    move_batches_to_special_folder(
-        app,
-        state,
-        message_ids,
-        threads,
-        &["archive", "all"],
-        "archive",
-    )
-    .await
+    move_batches_to_special_folder(app, state, message_ids, threads, SpecialFolder::Archive).await
 }
 
 /// Trash a whole conversation as shown in its folder — every thread member
@@ -335,7 +324,7 @@ pub async fn trash_thread(
     state: &AppState,
     message_id: i64,
 ) -> Result<(), AppError> {
-    move_thread_to_special_folder(app, state, message_id, &["trash"], "trash").await
+    move_thread_to_special_folder(app, state, message_id, SpecialFolder::Trash).await
 }
 
 /// Archive a whole conversation as shown in its folder (Gmail: All Mail).
@@ -344,7 +333,7 @@ pub async fn archive_thread(
     state: &AppState,
     message_id: i64,
 ) -> Result<(), AppError> {
-    move_thread_to_special_folder(app, state, message_id, &["archive", "all"], "archive").await
+    move_thread_to_special_folder(app, state, message_id, SpecialFolder::Archive).await
 }
 
 /// Move a whole conversation (as shown in the anchor's folder) to a
@@ -370,11 +359,10 @@ async fn move_to_special_folder(
     app: &AppHandle,
     state: &AppState,
     message_id: i64,
-    roles: &[&str],
-    label: &str,
+    folder: SpecialFolder,
 ) -> Result<(), AppError> {
     let loc = storage::messages::location(&state.pool, message_id).await?;
-    let dest = special_folder_dest(state, loc.account_id, roles, label).await?;
+    let dest = special_folder_dest(state, loc.account_id, folder).await?;
     let rows = vec![(message_id, loc.uid)];
     move_rows_to_mailbox(app, state, loc.account_id, &loc.mailbox, &rows, &dest).await
 }
@@ -386,29 +374,59 @@ async fn move_thread_to_special_folder(
     app: &AppHandle,
     state: &AppState,
     message_id: i64,
-    roles: &[&str],
-    label: &str,
+    folder: SpecialFolder,
 ) -> Result<(), AppError> {
     let loc = storage::messages::location(&state.pool, message_id).await?;
-    let dest = special_folder_dest(state, loc.account_id, roles, label).await?;
+    let dest = special_folder_dest(state, loc.account_id, folder).await?;
     let rows = storage::messages::thread_rows_in_mailbox(&state.pool, message_id).await?;
     move_rows_to_mailbox(app, state, loc.account_id, &loc.mailbox, &rows, &dest).await
+}
+
+/// A folder the app moves mail into on the user's behalf, wherever the
+/// account keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpecialFolder {
+    Trash,
+    Archive,
+}
+
+impl SpecialFolder {
+    /// Special-use roles that stand for this folder, in order of preference.
+    ///
+    /// why the "all" fallback: Gmail has no \Archive folder — archiving means
+    /// removing the Inbox label, which over IMAP is a move into "All Mail" (\All).
+    fn roles(self) -> &'static [&'static str] {
+        match self {
+            SpecialFolder::Trash => &["trash"],
+            SpecialFolder::Archive => &["archive", "all"],
+        }
+    }
+
+    /// How the folder is named in an error.
+    fn label(self) -> &'static str {
+        match self {
+            SpecialFolder::Trash => "trash",
+            SpecialFolder::Archive => "archive",
+        }
+    }
 }
 
 /// The account's folder name for the first matching special-use role.
 async fn special_folder_dest(
     state: &AppState,
     account_id: i64,
-    roles: &[&str],
-    label: &str,
+    folder: SpecialFolder,
 ) -> Result<String, AppError> {
-    for role in roles {
+    for role in folder.roles() {
         if let Some(name) = storage::mailboxes::name_for_role(&state.pool, account_id, role).await?
         {
             return Ok(name);
         }
     }
-    Err(AppError::Imap(format!("no {label} folder discovered yet")))
+    Err(AppError::Imap(format!(
+        "no {} folder discovered yet",
+        folder.label()
+    )))
 }
 
 /// The one server-confirmed move path: select the source folder, UID MOVE
