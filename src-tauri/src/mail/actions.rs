@@ -411,7 +411,8 @@ impl SpecialFolder {
     }
 }
 
-/// The account's folder name for the first matching special-use role.
+/// The account's folder name for the first matching special-use role. An
+/// account with no archive folder at all gets one made on the server.
 async fn special_folder_dest(
     state: &AppState,
     account_id: i64,
@@ -423,9 +424,66 @@ async fn special_folder_dest(
             return Ok(name);
         }
     }
+    if folder == SpecialFolder::Archive {
+        return create_archive_folder(state, account_id).await;
+    }
     Err(AppError::Imap(format!(
         "no {} folder discovered yet",
         folder.label()
+    )))
+}
+
+/// What an archive folder Flit makes is called — the name the discovery
+/// fallback already reads as the archive role on servers without
+/// SPECIAL-USE, so the next sync keeps recognising it.
+const NEW_ARCHIVE: &str = "Archive";
+
+/// Make the account an Archive folder on the server, mirror the server's
+/// folder list into the cache, and return the archive folder's name.
+///
+/// why create rather than refuse: a fresh mailbox on a plain IMAP host often
+/// comes with Inbox, Drafts, Sent, Spam and Trash only — no Archive until
+/// some client makes one. Apple Mail and Thunderbird make it on the first
+/// archive; refusing instead left the action doing nothing at all.
+async fn create_archive_folder(state: &AppState, account_id: i64) -> Result<String, AppError> {
+    let account = storage::accounts::get(&state.pool, account_id).await?;
+    let credential = state.credential(&account).await?;
+    let mut session = mail::imap::connect(
+        &account.imap_host,
+        account.imap_port,
+        &account.username,
+        &credential,
+    )
+    .await?;
+    let created = mail::imap::create_mailbox(&mut session, NEW_ARCHIVE).await;
+    let listed = mail::imap::list_mailboxes(&mut session).await;
+    let _ = session.logout().await;
+    let listed = listed?;
+    // why record the list now rather than leave it to the next sync: the
+    // move that follows and the sidebar both read folders from the cache,
+    // and the sync that would bring the new one in may be minutes away.
+    storage::mailboxes::replace(&state.pool, account_id, &listed).await?;
+    archive_after_create(created, &listed)
+}
+
+/// The archive folder a fresh LIST shows after Flit asked to CREATE one.
+///
+/// why the LIST decides, not CREATE's answer: CREATE fails with "already
+/// exists" when a second archive raced this one, or the folder was made in
+/// webmail since the last sync — and then there is a folder to archive into
+/// all the same. Only when the list has none does CREATE's error stand.
+fn archive_after_create(
+    created: Result<(), AppError>,
+    listed: &[storage::mailboxes::DiscoveredMailbox],
+) -> Result<String, AppError> {
+    for role in SpecialFolder::Archive.roles() {
+        if let Some(folder) = listed.iter().find(|m| m.role.as_deref() == Some(*role)) {
+            return Ok(folder.name.clone());
+        }
+    }
+    created?;
+    Err(AppError::Imap(format!(
+        "created {NEW_ARCHIVE}, but the server does not list it"
     )))
 }
 
@@ -545,6 +603,54 @@ mod tests {
 
     fn imap_err(text: &str) -> Result<(), AppError> {
         Err(AppError::Imap(text.to_string()))
+    }
+
+    fn listed(name: &str, role: Option<&str>) -> storage::mailboxes::DiscoveredMailbox {
+        storage::mailboxes::DiscoveredMailbox {
+            name: name.to_string(),
+            role: role.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_created_archive_is_the_folder_the_server_now_lists() {
+        let folders = [
+            listed("INBOX", Some("inbox")),
+            listed("Archive", Some("archive")),
+        ];
+        assert_eq!(archive_after_create(Ok(()), &folders).unwrap(), "Archive");
+    }
+
+    #[test]
+    fn an_archive_that_already_existed_is_used_despite_the_create_error() {
+        // A second archive raced this one, or the folder was made in webmail
+        // since the last sync: CREATE says "already exists", the folder is
+        // there all the same.
+        let folders = [
+            listed("INBOX", Some("inbox")),
+            listed("Archive", Some("archive")),
+        ];
+        assert_eq!(
+            archive_after_create(imap_err("NO [ALREADYEXISTS] Mailbox exists"), &folders).unwrap(),
+            "Archive"
+        );
+    }
+
+    #[test]
+    fn a_refused_create_reports_the_servers_reason() {
+        let folders = [listed("INBOX", Some("inbox"))];
+        assert_eq!(
+            archive_after_create(imap_err("NO Permission denied"), &folders)
+                .unwrap_err()
+                .to_string(),
+            AppError::Imap("NO Permission denied".to_string()).to_string()
+        );
+    }
+
+    #[test]
+    fn a_create_the_server_does_not_list_still_fails() {
+        let folders = [listed("INBOX", Some("inbox"))];
+        assert!(archive_after_create(Ok(()), &folders).is_err());
     }
 
     #[test]

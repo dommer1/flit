@@ -161,6 +161,12 @@ pub async fn fetch_headers_by_uid(
     Ok(fetches.iter().filter_map(raw_header).collect())
 }
 
+/// Create a folder on the server. The name goes out as given, so a
+/// non-ASCII one must already be in IMAP's modified UTF-7.
+pub async fn create_mailbox(session: &mut ImapSession, name: &str) -> Result<(), AppError> {
+    session.create(name).await.map_err(imap_err)
+}
+
 /// All selectable folders on the server, with their special-use roles.
 pub async fn list_mailboxes(session: &mut ImapSession) -> Result<Vec<DiscoveredMailbox>, AppError> {
     let _t = timing::start("imap::list_mailboxes");
